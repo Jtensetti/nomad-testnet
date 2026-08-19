@@ -23,10 +23,10 @@ type Secrets struct {
 }
 
 type VerifiedSecrets struct {
-	Operator       Operator
-	Identity       ed25519.PrivateKey
-	OutboundKeys   map[uint16][32]byte
-	InboundKeys    map[uint16][32]byte
+	Operator     Operator
+	Identity     ed25519.PrivateKey
+	OutboundKeys map[uint16][32]byte
+	InboundKeys  map[uint16][32]byte
 }
 
 func LoadSecrets(path string, verified Verified) (VerifiedSecrets, error) {

@@ -24,11 +24,11 @@ import (
 const MaximumPartialBytes = 4 << 20
 
 type Fetcher struct {
-	Topology topology.Verified
-	StreamID string
+	Topology  topology.Verified
+	StreamID  string
 	OutputDir string
-	Interval time.Duration
-	Client *http.Client
+	Interval  time.Duration
+	Client    *http.Client
 }
 
 func New(network topology.Verified, streamID, outputDirectory string, interval time.Duration) (*Fetcher, error) {
@@ -46,7 +46,7 @@ func New(network topology.Verified, streamID, outputDirectory string, interval t
 	transport.MaxConnsPerHost = 1
 	client := &http.Client{
 		Transport: transport,
-		Timeout: interval * 3 / 4,
+		Timeout:   interval * 3 / 4,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("partial endpoint redirects are forbidden")
 		},
@@ -81,10 +81,10 @@ func (fetcher *Fetcher) PollOnce(ctx context.Context) error {
 		return errors.New("partial fetcher is not initialized")
 	}
 	type result struct {
-		operator uint16
-		encoded []byte
+		operator  uint16
+		encoded   []byte
 		available bool
-		err error
+		err       error
 	}
 	results := make(chan result, len(fetcher.Topology.Document.Operators))
 	for _, operator := range fetcher.Topology.Document.Operators {

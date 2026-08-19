@@ -59,15 +59,15 @@ type DKGTranscriptFile struct {
 }
 
 type ReceiptFile struct {
-	CommitteeID string `json:"committee_id"`
-	Epoch       uint64 `json:"epoch"`
-	BatchID     string `json:"batch_id"`
-	Round       uint32 `json:"round"`
-	MixerPublic string `json:"mixer_public"`
-	InputDigest string `json:"input_digest"`
+	CommitteeID  string `json:"committee_id"`
+	Epoch        uint64 `json:"epoch"`
+	BatchID      string `json:"batch_id"`
+	Round        uint32 `json:"round"`
+	MixerPublic  string `json:"mixer_public"`
+	InputDigest  string `json:"input_digest"`
 	OutputDigest string `json:"output_digest"`
-	ProofDigest string `json:"proof_digest"`
-	Signature  string `json:"signature"`
+	ProofDigest  string `json:"proof_digest"`
+	Signature    string `json:"signature"`
 }
 
 type MixRoundFile struct {
@@ -98,14 +98,14 @@ type Descriptor struct {
 }
 
 type VerifiedDescriptor struct {
-	Descriptor  Descriptor
-	Stream      hop.StreamID
-	Generation  rlnc.GenerationID
-	Root        [32]byte
-	Publisher   ed25519.PublicKey
-	Signature   []byte
-	Committee   mix.ThresholdCommittee
-	Transcript  mix.DKGTranscript
+	Descriptor Descriptor
+	Stream     hop.StreamID
+	Generation rlnc.GenerationID
+	Root       [32]byte
+	Publisher  ed25519.PublicKey
+	Signature  []byte
+	Committee  mix.ThresholdCommittee
+	Transcript mix.DKGTranscript
 }
 
 func LoadDescriptor(path string, authority ed25519.PublicKey, network topology.Verified) (VerifiedDescriptor, error) {

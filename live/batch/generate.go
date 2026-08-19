@@ -200,7 +200,7 @@ func Generate(
 		SymbolSize: uint16(encoder.SymbolSize()), OriginalSize: uint32(encoder.OriginalSize()),
 		ContentHash: hex.EncodeToString(root[:]), PublisherKey: base64.StdEncoding.EncodeToString(publisher),
 		ObjectSignature: base64.StdEncoding.EncodeToString(objectSignature),
-		Committee: committeeToFile(committee), DKGTranscript: transcriptToFile(transcript), MixRounds: rounds,
+		Committee:       committeeToFile(committee), DKGTranscript: transcriptToFile(transcript), MixRounds: rounds,
 	}
 	descriptor, err = SignDescriptor(descriptor, authority)
 	if err != nil {

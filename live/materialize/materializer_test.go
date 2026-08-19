@@ -29,8 +29,8 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 	document := topology.Document{
 		Version: topology.Version, NetworkID: "materializer-test", Epoch: 1,
 		NotBefore: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
-		NotAfter: time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
-		Traffic: topology.TrafficClass{CellSize: topology.CellSize, CellIntervalMillis: 10, MaxLatenessMillis: 40, QueueCapacity: 64},
+		NotAfter:  time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		Traffic:   topology.TrafficClass{CellSize: topology.CellSize, CellIntervalMillis: 10, MaxLatenessMillis: 40, QueueCapacity: 64},
 		Operators: make([]topology.Operator, 3),
 	}
 	for index := range document.Operators {
@@ -43,7 +43,7 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 		document.Operators[index] = topology.Operator{
 			ID: id, Index: uint16(index), Endpoint: []string{"127.0.0.1:4201", "127.0.0.1:4202", "127.0.0.1:4203"}[index],
 			PartialEndpoint: []string{"http://127.0.0.1:4301", "http://127.0.0.1:4302", "http://127.0.0.1:4303"}[index],
-			IdentityKey: base64.StdEncoding.EncodeToString(publicKey), PeerPlan: []uint16{uint16((index + 1) % 3)},
+			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey), PeerPlan: []uint16{uint16((index + 1) % 3)},
 		}
 	}
 	signedTopology, err := topology.Sign(document, authorityPrivate, identities)

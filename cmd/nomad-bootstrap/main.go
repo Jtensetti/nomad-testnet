@@ -75,7 +75,7 @@ func run() error {
 	document := topology.Document{
 		Version: topology.Version, NetworkID: *networkID, Epoch: 1,
 		NotBefore: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
-		NotAfter: time.Now().UTC().Add(*validFor).Format(time.RFC3339),
+		NotAfter:  time.Now().UTC().Add(*validFor).Format(time.RFC3339),
 		Traffic: topology.TrafficClass{
 			CellSize: topology.CellSize, CellIntervalMillis: uint32(*cellInterval),
 			MaxLatenessMillis: uint32(*cellInterval * 4), QueueCapacity: 256,
@@ -91,8 +91,8 @@ func run() error {
 		document.Operators[index] = topology.Operator{
 			ID: id, Index: uint16(index), Endpoint: endpoints[index],
 			PartialEndpoint: partialEndpoints[index],
-			IdentityKey: base64.StdEncoding.EncodeToString(publicKey),
-			PeerPlan: []uint16{uint16((index + 1) % len(operatorIDs))},
+			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey),
+			PeerPlan:        []uint16{uint16((index + 1) % len(operatorIDs))},
 		}
 	}
 	signedTopology, err := topology.Sign(document, authorityPrivate, identities)
@@ -127,9 +127,9 @@ func run() error {
 	}
 	partialPlan, err := fetchplan.Sign(fetchplan.Plan{
 		Version: fetchplan.Version, NetworkID: verifiedTopology.Document.NetworkID,
-		TopologyEpoch: verifiedTopology.Document.Epoch,
+		TopologyEpoch:  verifiedTopology.Document.Epoch,
 		TopologyDigest: fmt.Sprintf("%x", verifiedTopology.Digest),
-		StreamID: generated.Descriptor.StreamID,
+		StreamID:       generated.Descriptor.StreamID,
 	}, authorityPrivate)
 	if err != nil {
 		return err
@@ -174,11 +174,11 @@ func run() error {
 		}
 	}
 	summary := struct {
-		NetworkID  string   `json:"network_id"`
-		Operators  []string `json:"operators"`
-		StreamID   string   `json:"stream_id"`
-		BatchSize  uint16   `json:"batch_size"`
-		Threshold  uint32   `json:"threshold"`
+		NetworkID string   `json:"network_id"`
+		Operators []string `json:"operators"`
+		StreamID  string   `json:"stream_id"`
+		BatchSize uint16   `json:"batch_size"`
+		Threshold uint32   `json:"threshold"`
 	}{*networkID, operatorIDs, generated.Descriptor.StreamID, generated.Descriptor.BatchSize, generated.Descriptor.Committee.Threshold}
 	return json.NewEncoder(os.Stdout).Encode(summary)
 }
@@ -189,7 +189,7 @@ func buildSecrets(network topology.Verified, identities map[string]ed25519.Priva
 		files[index] = topology.Secrets{
 			Version: topology.SecretVersion, OperatorID: operator.ID,
 			IdentityPrivate: base64.StdEncoding.EncodeToString(identities[operator.ID]),
-			OutboundKeys: make(map[string]string), InboundKeys: make(map[string]string),
+			OutboundKeys:    make(map[string]string), InboundKeys: make(map[string]string),
 		}
 	}
 	for _, sender := range network.Document.Operators {

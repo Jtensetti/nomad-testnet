@@ -45,13 +45,13 @@ type Operator struct {
 }
 
 type Document struct {
-	Version    string       `json:"version"`
-	NetworkID  string       `json:"network_id"`
-	Epoch      uint64       `json:"epoch"`
-	NotBefore  string       `json:"not_before"`
-	NotAfter   string       `json:"not_after"`
-	Traffic    TrafficClass `json:"traffic"`
-	Operators  []Operator   `json:"operators"`
+	Version   string       `json:"version"`
+	NetworkID string       `json:"network_id"`
+	Epoch     uint64       `json:"epoch"`
+	NotBefore string       `json:"not_before"`
+	NotAfter  string       `json:"not_after"`
+	Traffic   TrafficClass `json:"traffic"`
+	Operators []Operator   `json:"operators"`
 }
 
 type Signed struct {

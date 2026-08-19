@@ -21,11 +21,11 @@ import (
 )
 
 type Service struct {
-	Cache      *rawcache.Store
-	Descriptor batch.VerifiedDescriptor
-	Secret     mix.MemberSecret
-	OutputDir  string
-	Interval   time.Duration
+	Cache         *rawcache.Store
+	Descriptor    batch.VerifiedDescriptor
+	Secret        mix.MemberSecret
+	OutputDir     string
+	Interval      time.Duration
 	ListenAddress string
 }
 

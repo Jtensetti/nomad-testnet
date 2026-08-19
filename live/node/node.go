@@ -33,40 +33,40 @@ type Config struct {
 }
 
 type Stats struct {
-	StartedAt       time.Time `json:"started_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	OperatorID      string    `json:"operator_id"`
+	StartedAt      time.Time `json:"started_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	OperatorID     string    `json:"operator_id"`
 	TopologyDigest string    `json:"topology_digest"`
-	Sent            uint64    `json:"sent"`
-	Received        uint64    `json:"received"`
-	Stored          uint64    `json:"stored"`
-	Relayed         uint64    `json:"relayed"`
-	CoverSent       uint64    `json:"cover_sent"`
-	WrongSize       uint64    `json:"wrong_size"`
-	UnknownPeer     uint64    `json:"unknown_peer"`
-	AuthRejected    uint64    `json:"auth_rejected"`
-	ReplayRejected  uint64    `json:"replay_rejected"`
-	Duplicate       uint64    `json:"duplicate"`
-	QueueDropped    uint64    `json:"queue_dropped"`
-	CacheRejected   uint64    `json:"cache_rejected"`
+	Sent           uint64    `json:"sent"`
+	Received       uint64    `json:"received"`
+	Stored         uint64    `json:"stored"`
+	Relayed        uint64    `json:"relayed"`
+	CoverSent      uint64    `json:"cover_sent"`
+	WrongSize      uint64    `json:"wrong_size"`
+	UnknownPeer    uint64    `json:"unknown_peer"`
+	AuthRejected   uint64    `json:"auth_rejected"`
+	ReplayRejected uint64    `json:"replay_rejected"`
+	Duplicate      uint64    `json:"duplicate"`
+	QueueDropped   uint64    `json:"queue_dropped"`
+	CacheRejected  uint64    `json:"cache_rejected"`
 }
 
 type counters struct {
-	sent, received, stored, relayed, coverSent             atomic.Uint64
-	wrongSize, unknownPeer, authRejected, replayRejected   atomic.Uint64
-	duplicate, queueDropped, cacheRejected                 atomic.Uint64
+	sent, received, stored, relayed, coverSent           atomic.Uint64
+	wrongSize, unknownPeer, authRejected, replayRejected atomic.Uint64
+	duplicate, queueDropped, cacheRejected               atomic.Uint64
 }
 
 type Node struct {
-	config       Config
-	conn         *net.UDPConn
-	queue        *fabric.QueueSource
-	cover        *fabric.CoverSource
-	sink         *authenticatedSink
-	incoming     map[string]incomingPeer
-	replay       map[uint16]*hop.ReplayWindow
-	stats        counters
-	startedAt    time.Time
+	config    Config
+	conn      *net.UDPConn
+	queue     *fabric.QueueSource
+	cover     *fabric.CoverSource
+	sink      *authenticatedSink
+	incoming  map[string]incomingPeer
+	replay    map[uint16]*hop.ReplayWindow
+	stats     counters
+	startedAt time.Time
 }
 
 type outgoingPeer struct {
@@ -226,7 +226,7 @@ func (node *Node) Snapshot() Stats {
 	return Stats{
 		StartedAt: node.startedAt, UpdatedAt: time.Now().UTC(), OperatorID: node.config.Secrets.Operator.ID,
 		TopologyDigest: fmt.Sprintf("%x", node.config.Topology.Digest),
-		Sent: node.stats.sent.Load(), Received: node.stats.received.Load(), Stored: node.stats.stored.Load(),
+		Sent:           node.stats.sent.Load(), Received: node.stats.received.Load(), Stored: node.stats.stored.Load(),
 		Relayed: node.stats.relayed.Load(), CoverSent: node.stats.coverSent.Load(),
 		WrongSize: node.stats.wrongSize.Load(), UnknownPeer: node.stats.unknownPeer.Load(),
 		AuthRejected: node.stats.authRejected.Load(), ReplayRejected: node.stats.replayRejected.Load(),

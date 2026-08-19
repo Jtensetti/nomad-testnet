@@ -17,8 +17,8 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 	document := Document{
 		Version: Version, NetworkID: "testnet", Epoch: 3,
 		NotBefore: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
-		NotAfter: time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
-		Traffic: TrafficClass{CellSize: CellSize, CellIntervalMillis: 10, MaxLatenessMillis: 40, QueueCapacity: 64},
+		NotAfter:  time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		Traffic:   TrafficClass{CellSize: CellSize, CellIntervalMillis: 10, MaxLatenessMillis: 40, QueueCapacity: 64},
 		Operators: make([]Operator, 3),
 	}
 	for index := range document.Operators {
@@ -31,7 +31,7 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 		document.Operators[index] = Operator{
 			ID: id, Index: uint16(index), Endpoint: "127.0.0.1:" + string(rune('1'+index)) + "200",
 			PartialEndpoint: "http://127.0.0.1:" + string(rune('1'+index)) + "300",
-			IdentityKey: base64.StdEncoding.EncodeToString(publicKey), PeerPlan: []uint16{uint16((index + 1) % 3)},
+			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey), PeerPlan: []uint16{uint16((index + 1) % 3)},
 		}
 	}
 	signed, err := Sign(document, authorityPrivate, identities)
@@ -56,8 +56,8 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 	secrets := Secrets{
 		Version: SecretVersion, OperatorID: "operator-a",
 		IdentityPrivate: base64.StdEncoding.EncodeToString(identities["operator-a"]),
-		OutboundKeys: map[string]string{"operator-b": key},
-		InboundKeys: map[string]string{"operator-c": key},
+		OutboundKeys:    map[string]string{"operator-b": key},
+		InboundKeys:     map[string]string{"operator-c": key},
 	}
 	secretBytes, err := EncodeSecrets(secrets)
 	if err != nil {

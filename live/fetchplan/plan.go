@@ -18,16 +18,16 @@ import (
 )
 
 const (
-	Version = "nomad-partial-fetch-plan-v1"
+	Version          = "nomad-partial-fetch-plan-v1"
 	MaximumFileBytes = 16 << 10
 )
 
 type Plan struct {
-	Version string `json:"version"`
-	NetworkID string `json:"network_id"`
-	TopologyEpoch uint64 `json:"topology_epoch"`
-	TopologyDigest string `json:"topology_digest"`
-	StreamID string `json:"stream_id"`
+	Version            string `json:"version"`
+	NetworkID          string `json:"network_id"`
+	TopologyEpoch      uint64 `json:"topology_epoch"`
+	TopologyDigest     string `json:"topology_digest"`
+	StreamID           string `json:"stream_id"`
 	AuthoritySignature string `json:"authority_signature"`
 }
 

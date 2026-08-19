@@ -57,10 +57,10 @@ func transcriptToFile(transcript mix.DKGTranscript) DKGTranscriptFile {
 		identities[index] = base64.StdEncoding.EncodeToString(identity[:])
 	}
 	return DKGTranscriptFile{
-		SessionID: hex.EncodeToString(transcript.SessionID[:]),
-		Digest: hex.EncodeToString(transcript.Digest[:]),
+		SessionID:  hex.EncodeToString(transcript.SessionID[:]),
+		Digest:     hex.EncodeToString(transcript.Digest[:]),
 		Identities: identities,
-		Qualified: append([]uint32(nil), transcript.Qualified...),
+		Qualified:  append([]uint32(nil), transcript.Qualified...),
 	}
 }
 
@@ -78,7 +78,7 @@ func (file DKGTranscriptFile) toMix(memberCount int) (mix.DKGTranscript, error) 
 	}
 	transcript := mix.DKGTranscript{
 		Identities: make([]mix.SharePublicKey, len(file.Identities)),
-		Qualified: append([]uint32(nil), file.Qualified...),
+		Qualified:  append([]uint32(nil), file.Qualified...),
 	}
 	copy(transcript.SessionID[:], session)
 	copy(transcript.Digest[:], digest)
@@ -104,15 +104,15 @@ func (file DKGTranscriptFile) toMix(memberCount int) (mix.DKGTranscript, error) 
 
 func receiptToFile(receipt mix.RoundReceipt) ReceiptFile {
 	return ReceiptFile{
-		CommitteeID: hex.EncodeToString(receipt.Context.CommitteeID[:]),
-		Epoch: receipt.Context.Epoch,
-		BatchID: hex.EncodeToString(receipt.Context.BatchID[:]),
-		Round: receipt.Context.Round,
-		MixerPublic: base64.StdEncoding.EncodeToString(receipt.MixerPublic[:]),
-		InputDigest: hex.EncodeToString(receipt.InputDigest[:]),
+		CommitteeID:  hex.EncodeToString(receipt.Context.CommitteeID[:]),
+		Epoch:        receipt.Context.Epoch,
+		BatchID:      hex.EncodeToString(receipt.Context.BatchID[:]),
+		Round:        receipt.Context.Round,
+		MixerPublic:  base64.StdEncoding.EncodeToString(receipt.MixerPublic[:]),
+		InputDigest:  hex.EncodeToString(receipt.InputDigest[:]),
 		OutputDigest: hex.EncodeToString(receipt.OutputDigest[:]),
-		ProofDigest: hex.EncodeToString(receipt.ProofDigest[:]),
-		Signature: base64.StdEncoding.EncodeToString(receipt.Signature[:]),
+		ProofDigest:  hex.EncodeToString(receipt.ProofDigest[:]),
+		Signature:    base64.StdEncoding.EncodeToString(receipt.Signature[:]),
 	}
 }
 

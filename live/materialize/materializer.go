@@ -38,7 +38,7 @@ func (materializer Materializer) Run(ctx context.Context) error {
 	if materializer.Cache == nil || materializer.PartialsDir == "" || materializer.OutputDir == "" || materializer.Interval <= 0 {
 		return errors.New("materializer requires cache, partials, output and fixed interval")
 	}
-	if err := os.MkdirAll(materializer.OutputDir, 0o700); err != nil {
+	if err := ensureOutputDirectory(materializer.OutputDir); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(materializer.Interval)
@@ -56,6 +56,12 @@ func (materializer Materializer) Run(ctx context.Context) error {
 }
 
 func (materializer Materializer) ProcessOnce() (bool, error) {
+	if materializer.Cache == nil || materializer.PartialsDir == "" || materializer.OutputDir == "" {
+		return false, errors.New("materializer requires cache, partials and output")
+	}
+	if err := ensureOutputDirectory(materializer.OutputDir); err != nil {
+		return false, err
+	}
 	outputPath := filepath.Join(materializer.OutputDir, hex.EncodeToString(materializer.Descriptor.Root[:])+".nomadobject")
 	if existing, err := os.ReadFile(outputPath); err == nil {
 		if err := verifyOutput(existing, materializer.Descriptor); err != nil {
@@ -108,9 +114,9 @@ func (materializer Materializer) ProcessOnce() (bool, error) {
 	}
 	envelope := batch.SignedEnvelope{
 		Version: batch.EnvelopeVersion, Payload: base64.StdEncoding.EncodeToString(recovered),
-		ContentHash: hex.EncodeToString(materializer.Descriptor.Root[:]),
+		ContentHash:  hex.EncodeToString(materializer.Descriptor.Root[:]),
 		PublisherKey: base64.StdEncoding.EncodeToString(materializer.Descriptor.Publisher),
-		Signature: base64.StdEncoding.EncodeToString(materializer.Descriptor.Signature),
+		Signature:    base64.StdEncoding.EncodeToString(materializer.Descriptor.Signature),
 	}
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
@@ -123,6 +129,20 @@ func (materializer Materializer) ProcessOnce() (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func ensureOutputDirectory(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("materializer output must be a real directory")
+	}
+	return nil
 }
 
 func (materializer Materializer) loadPartials(encrypted *mix.Batch) ([]*mix.PartialDecryption, error) {
