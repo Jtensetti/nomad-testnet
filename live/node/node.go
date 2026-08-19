@@ -65,7 +65,7 @@ type Node struct {
 	sink      *authenticatedSink
 	incoming  map[string]incomingPeer
 	replay    map[uint16]*hop.ReplayWindow
-	stats     counters
+	stats     *counters
 	startedAt time.Time
 }
 
@@ -183,10 +183,8 @@ func New(config Config) (*Node, error) {
 	cover := &fabric.CoverSource{Work: queue, Filler: coverSource{}}
 	node := &Node{
 		config: config, conn: conn, queue: queue, cover: cover, sink: sink,
-		incoming: incoming, replay: replay, stats: *stats, startedAt: time.Now().UTC(),
+		incoming: incoming, replay: replay, stats: stats, startedAt: time.Now().UTC(),
 	}
-	// Keep one shared counter object between sink and receiver.
-	node.sink.stats = &node.stats
 	if config.Seed != nil {
 		if err := node.seed(*config.Seed); err != nil {
 			return fail(err)
