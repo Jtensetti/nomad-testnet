@@ -39,6 +39,8 @@ for service in operator-a operator-b operator-c share-a share-b share-c partial-
     docker inspect -f '{{json .HostConfig.CapDrop}}' "$container_id" | grep -Fq '"ALL"'
     docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$container_id" | grep -Fq 'no-new-privileges:true'
     test "$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$container_id")" = 128
+done
+for service in operator-a operator-b operator-c; do
     docker compose -p "$project_name" -f "$compose_file" exec -T "$service" \
         grep -Fq '"version": "nomad-operator-secrets-v2"' /operator/node-secrets.json
     docker compose -p "$project_name" -f "$compose_file" exec -T "$service" \
