@@ -30,10 +30,13 @@ type Service struct {
 }
 
 func (service Service) Run(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("context is required")
+	}
 	if service.Cache == nil || service.OutputDir == "" || service.Interval <= 0 || service.ListenAddress == "" {
 		return errors.New("share service requires cache, output directory, fixed interval and listen address")
 	}
-	if err := os.MkdirAll(service.OutputDir, 0o700); err != nil {
+	if err := ensureOutputDirectory(service.OutputDir); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(service.Interval)
@@ -96,6 +99,12 @@ func (service Service) handler() http.Handler {
 }
 
 func (service Service) ProcessOnce() (bool, error) {
+	if service.Cache == nil || service.OutputDir == "" {
+		return false, errors.New("share service requires cache and output directory")
+	}
+	if err := ensureOutputDirectory(service.OutputDir); err != nil {
+		return false, err
+	}
 	payloads, complete, err := service.Cache.Load(service.Descriptor.Stream)
 	if err != nil || !complete {
 		return false, err
@@ -140,6 +149,20 @@ func (service Service) ProcessOnce() (bool, error) {
 		return false, err
 	}
 	return writeOrCompare(path, encoded)
+}
+
+func ensureOutputDirectory(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("share output must be a real directory")
+	}
+	return nil
 }
 
 func writeOrCompare(path string, encoded []byte) (bool, error) {

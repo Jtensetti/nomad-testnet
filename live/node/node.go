@@ -140,7 +140,9 @@ func New(config Config) (*Node, error) {
 	if err != nil {
 		return fail(err)
 	}
-	self := config.Secrets.Operator
+	// Routing always comes from the signed topology, never from the copy carried
+	// alongside local secrets.
+	self := config.Topology.Document.Operators[config.Secrets.Operator.Index]
 	outgoing := make([]outgoingPeer, 0, len(self.PeerPlan))
 	peerOffset := make(map[uint16]uint16)
 	plan := make([]uint16, len(self.PeerPlan))
@@ -148,19 +150,27 @@ func New(config Config) (*Node, error) {
 		offset, exists := peerOffset[peerIndex]
 		if !exists {
 			peer, _ := config.Topology.Operator(peerIndex)
+			key, exists := config.Secrets.OutboundKeys[peerIndex]
+			if !exists || key == ([32]byte{}) {
+				return fail(fmt.Errorf("missing outbound key for signed peer %s", peer.ID))
+			}
 			address, err := net.ResolveUDPAddr("udp", peer.Endpoint)
 			if err != nil {
 				return fail(fmt.Errorf("resolve peer %s: %w", peer.ID, err))
 			}
 			offset = uint16(len(outgoing))
 			peerOffset[peerIndex] = offset
-			outgoing = append(outgoing, outgoingPeer{operator: peer, address: address, key: config.Secrets.OutboundKeys[peerIndex]})
+			outgoing = append(outgoing, outgoingPeer{operator: peer, address: address, key: key})
 		}
 		plan[index] = offset
 	}
+	if len(config.Secrets.OutboundKeys) != len(outgoing) {
+		return fail(errors.New("outbound key set differs from signed peer plan"))
+	}
 	incoming := make(map[string]incomingPeer)
 	replay := make(map[uint16]*hop.ReplayWindow)
-	for _, peer := range config.Topology.IncomingPeers(self.Index) {
+	incomingPeers := config.Topology.IncomingPeers(self.Index)
+	for _, peer := range incomingPeers {
 		address, err := net.ResolveUDPAddr("udp", peer.Endpoint)
 		if err != nil {
 			return fail(fmt.Errorf("resolve incoming peer %s: %w", peer.ID, err))
@@ -169,8 +179,15 @@ func New(config Config) (*Node, error) {
 		if _, exists := incoming[key]; exists {
 			return fail(errors.New("two incoming peers resolve to the same source endpoint"))
 		}
-		incoming[key] = incomingPeer{operator: peer, key: config.Secrets.InboundKeys[peer.Index]}
+		peerKey, exists := config.Secrets.InboundKeys[peer.Index]
+		if !exists || peerKey == ([32]byte{}) {
+			return fail(fmt.Errorf("missing inbound key for signed peer %s", peer.ID))
+		}
+		incoming[key] = incomingPeer{operator: peer, key: peerKey}
 		replay[peer.Index] = &hop.ReplayWindow{}
+	}
+	if len(config.Secrets.InboundKeys) != len(incomingPeers) {
+		return fail(errors.New("inbound key set differs from signed peer plan"))
 	}
 	stats := &counters{}
 	sink := &authenticatedSink{

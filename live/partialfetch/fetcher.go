@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -58,7 +59,10 @@ func (fetcher *Fetcher) Run(ctx context.Context) error {
 	if fetcher == nil || fetcher.Client == nil {
 		return errors.New("partial fetcher is not initialized")
 	}
-	if err := os.MkdirAll(fetcher.OutputDir, 0o700); err != nil {
+	if ctx == nil {
+		return errors.New("context is required")
+	}
+	if err := ensureOutputDirectory(fetcher.OutputDir); err != nil {
 		return err
 	}
 	next := time.Now()
@@ -79,6 +83,12 @@ func (fetcher *Fetcher) Run(ctx context.Context) error {
 func (fetcher *Fetcher) PollOnce(ctx context.Context) error {
 	if fetcher == nil || fetcher.Client == nil {
 		return errors.New("partial fetcher is not initialized")
+	}
+	if ctx == nil {
+		return errors.New("context is required")
+	}
+	if err := ensureOutputDirectory(fetcher.OutputDir); err != nil {
+		return err
 	}
 	type result struct {
 		operator  uint16
@@ -134,6 +144,11 @@ func (fetcher *Fetcher) fetch(ctx context.Context, operator topology.Operator) (
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
 		return nil, false, errors.New("partial endpoint returned an invalid status or length")
 	}
+	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/vnd.nomad.partial+json" {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		return nil, false, errors.New("partial endpoint returned an invalid media type")
+	}
 	encoded, err := io.ReadAll(io.LimitReader(response.Body, MaximumPartialBytes+1))
 	if err != nil || len(encoded) == 0 || len(encoded) > MaximumPartialBytes {
 		return nil, false, errors.New("partial endpoint body is invalid")
@@ -172,7 +187,29 @@ func writeOrCompare(path string, encoded []byte) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temporaryPath, path)
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	dir, err := os.Open(directory)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
+func ensureOutputDirectory(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("partial fetch output must be a real directory")
+	}
+	return nil
 }
 
 func waitUntil(ctx context.Context, deadline time.Time) error {

@@ -35,6 +35,9 @@ type Materializer struct {
 }
 
 func (materializer Materializer) Run(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("context is required")
+	}
 	if materializer.Cache == nil || materializer.PartialsDir == "" || materializer.OutputDir == "" || materializer.Interval <= 0 {
 		return errors.New("materializer requires cache, partials, output and fixed interval")
 	}
