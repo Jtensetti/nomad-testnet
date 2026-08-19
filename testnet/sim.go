@@ -85,7 +85,7 @@ func (d *packetDecoder) Add(fragment []byte) error {
 	return err
 }
 
-func (d *packetDecoder) Ready() bool              { return d.decoder.Ready() }
+func (d *packetDecoder) Ready() bool { return d.decoder.Ready() }
 func (d *packetDecoder) Decode() ([]byte, error) { return d.decoder.Decode() }
 
 type privateActivity struct {
