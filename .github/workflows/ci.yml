@@ -13,16 +13,12 @@ jobs:
         with: {go-version: '1.25.x'}
       - name: Verify pinned component snapshots
         run: sha256sum --check --quiet COMPONENTS.sha256
-      - name: Format working copy and verify module graph
+      - name: Verify generated formatting and module graph
         run: |
-          gofmt -w cmd live testnet
+          unformatted="$(gofmt -l cmd live testnet)"
+          test -z "$unformatted" || { printf 'unformatted Go files:\n%s\n' "$unformatted"; exit 1; }
           go mod tidy
-      - name: Export formatted source checkpoint
-        run: tar --exclude=.git -czf /tmp/formatted-source.tgz .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: formatted-source
-          path: /tmp/formatted-source.tgz
+          git diff --exit-code -- go.mod go.sum
       - name: Enforce Selection Firewall dependency direction
         run: |
           network_deps="$(go list -deps \

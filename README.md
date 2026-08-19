@@ -22,8 +22,10 @@ Docker Compose supplies the reproducible single-administrator deployment:
 The script builds the locked-down image, bootstraps a signed epoch, starts three
 UDP nodes, three threshold-share servers, one public-cadence partial fetcher and
 one networkless materializer. It waits for the exact verified browser object,
-checks every process, records packet/process evidence, and rejects a capture
-whose cells are not 1200 bytes or whose cadence/topology is wrong.
+checks every process and container boundary, records packet/process/health
+evidence from the dedicated fabric bridge, and rejects a capture whose cells
+are not 1200 bytes or whose cadence/topology is wrong. Bootstrap and the
+materializer run with Docker networking disabled.
 
 To feed a locally installed Nomad Browser directly, set its existing object
 cache as the materializer destination before starting Compose:

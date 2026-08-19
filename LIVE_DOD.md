@@ -22,10 +22,10 @@ independent review remain separate production gates.
 | LIVE-06 | Relay queues and stream counts are publicly bounded; cover cells are not cached; cache pressure cannot change the emission schedule. | Queue/cache tests and dependency inspection. | PENDING CI |
 | LIVE-07 | Raw cache coordinates are immutable, atomically written and committed by a 128-bit stream digest over the complete ordered ciphertext batch. | Cache idempotence/equivocation tests. | PENDING CI |
 | LIVE-08 | The UDP node import graph contains no semantic selection or reconstruction package. The materializer directly imports no socket or network-control package. | CI `go list` gate. | PENDING CI |
-| LIVE-09 | Three or more operators run with distinct identities, endpoints, caches, sequence state and threshold shares. | Eight-process Compose topology. | PENDING CI |
+| LIVE-09 | Three or more operators run with distinct identities, endpoints, caches, sequence state and threshold shares. | Eight long-running processes plus networkless one-shot bootstrap in Compose. | PENDING CI |
 | LIVE-10 | Partial proofs move through a separate fixed-cadence public fetcher. The offline materializer never contacts an operator. | Compose topology and dependency gate. | PENDING CI |
 | LIVE-11 | A 2-of-3 threshold decrypt requires unique, proof-valid shares bound to committee, epoch and batch; no aggregate secret is reconstructed. | Kyber threshold tests and live pipeline test. | PENDING CI |
-| LIVE-12 | Every operator performs one contextual, signed Kyber Neff shuffle and the materializer verifies the full chained transcript. | Descriptor transcript tests. | PENDING CI |
+| LIVE-12 | The fixture descriptor contains one contextual, identity-signed Kyber Neff shuffle for every operator, and the materializer verifies the full chained transcript. | Descriptor transcript and end-to-end tests. | PENDING CI |
 | LIVE-13 | Acceptance requires exact RLNC dimensions, SHA-256 commitment and Ed25519 signature over `nomad-object-v1 || SHA256(payload)`. | End-to-end materializer test. | PENDING CI |
 | LIVE-14 | Output is an immutable `.nomadobject` already trusted by the current Nomad Browser demo trust anchor. | Compose fixture and output digest. | PENDING CI |
 | LIVE-15 | Race tests, vet, module tidiness, snapshot checks, container isolation and pcap verification pass on one commit. | GitHub Actions run. | PENDING CI |
@@ -44,6 +44,8 @@ administrator:
   NAT, loss, reordering, clock faults and regional outages exercised;
 - DKG messages run between isolated operator processes instead of the current
   authenticated in-memory ceremony used by bootstrap;
+- each shuffle round is executed under the corresponding operator's separate
+  administration; the fixture bootstrap currently holds all demo identities;
 - third-party cryptographic, systems, browser and traffic-analysis review is
   closed with no unresolved critical or high findings;
 - publication airlock, Sybil/admission policy, forward-secure epoch rotation,

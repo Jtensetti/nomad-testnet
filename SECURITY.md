@@ -13,6 +13,9 @@ verified object cache -> Nomad Browser local search
 There is no node, fetcher, share-server or materializer API for a query, basin,
 selected document or browser action. The UDP node and public partial fetcher
 are separate executables from reconstruction. CI checks their dependency graph.
+The reference deployment also starts bootstrap and materializer with
+`network_mode: none`; the materializer crosses the boundary only through
+read-only raw/partial volumes and its verified-object output volume.
 
 ## Transport authentication
 
