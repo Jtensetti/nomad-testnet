@@ -237,12 +237,12 @@ func (p *scheduledPhaser) Start() {
 			timer := time.NewTimer(time.Until(when))
 			select {
 			case <-p.ctx.Done():
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
 				return
 			case <-timer.C:
 			}
