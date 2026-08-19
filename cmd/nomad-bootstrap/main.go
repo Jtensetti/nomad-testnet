@@ -154,7 +154,7 @@ func run() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	generated, err := batch.Generate(ctx, envelope, verifiedTopology, authorityPrivate, identities, dkgKeys)
+	generated, err := batch.GenerateInMemoryFixture(ctx, envelope, verifiedTopology, authorityPrivate, identities, dkgKeys)
 	if err != nil {
 		return err
 	}

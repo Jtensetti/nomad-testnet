@@ -66,3 +66,38 @@ rejects any reintroduction of serialized `inbound_keys` or `outbound_keys`.
 This proves software-level private-key separation and ceremony agreement. It
 does not prove that three independent legal administrators performed the
 ceremony or operated the measured containers.
+
+## Distributed DKG and certified live path
+
+Integration commit: `d8b108875415af62b9f3a8eaccf098867110d233`
+
+GitHub Actions run: <https://github.com/Jtensetti/nomad-testnet/actions/runs/32300901150>
+
+The run passed module/format checks, the expanded Selection Firewall graph,
+the full race suite, the offline topology ceremony, vet and the live Compose
+gate. The immutable artifacts are:
+
+- `operator-ceremony-evidence`, artifact ID `9383031459`, archive digest
+  `sha256:047777767fe5e72aea243734a89295afb4815678831ac6079c0b5e754a2a3c61`;
+- `live-fabric-evidence`, artifact ID `9383118243`, archive digest
+  `sha256:d69e1faed838162d395a144ea5b07efc90659750072c64cb5483aa6bcae0a031`.
+
+Three separately keyed `nomad-dkg` processes completed the signed public phase
+schedule over TLS. Each persisted an append-only transcript, produced a
+different private threshold-share hash, and emitted the exact same public
+all-operator-certified DKG certificate. Descriptor v2 embedded that certificate
+unchanged; the share services used the corresponding distributed shares and the
+networkless materializer reconstructed the expected browser object.
+
+The post-DKG wire capture recorded 103, 102 and 102 exact 1200-byte UDP cells
+from the three signed sources. Mean intervals were 50.001 ms, 50.006 ms and
+50.003 ms; observed extrema were 48.183 ms and 52.400 ms. The verified object
+remained
+`1f5863a9defd07015bcf20956b50369adc6ad62c8464e9da114a56c42a1d343c.nomadobject`
+with envelope SHA-256
+`e3d49edcf2c3840e1be80db008116367f2e35c2ff5d582d63ee7ddd68fe8b965`.
+
+This closes the single-host software integration gap for distributed DKG. It
+does not establish independent administration, five-operator production key
+custody, WAN behavior, forward-secure rotation or independent cryptographic
+review.

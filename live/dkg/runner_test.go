@@ -142,6 +142,23 @@ func TestThreeOperatorDistributedDKG(t *testing.T) {
 			t.Fatal("completed DKG state directory was reusable")
 		}
 	}
+	expectedManifestDigest, err := committee.ManifestDigest(results[0].Certificate.Manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	splitManifest := results[0].Certificate.Manifest
+	splitManifest.NetworkID = "split-view"
+	splitAttestation, err := committee.CreateAttestation(splitManifest, network.Document.Operators[0], private["operator-a"].Identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	splitVote, err := encodeResultVote(splitManifest, splitAttestation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeResultVote(splitVote, network.Document.Operators[0], expectedManifestDigest); err == nil {
+		t.Fatal("operator result vote for a split-view DKG manifest was accepted")
+	}
 }
 
 func TestStoreRejectsSignedEquivocation(t *testing.T) {
@@ -172,6 +189,59 @@ func TestStoreRejectsSignedEquivocation(t *testing.T) {
 	}
 	if _, _, _, err := store.Accept(secondBytes); !errors.Is(err, ErrEquivocation) {
 		t.Fatalf("expected equivocation, got %v", err)
+	}
+}
+
+func TestBoardRejectsMessagesBeforeSignedCeremonyStart(t *testing.T) {
+	network, secrets := singleTestContext(t)
+	root := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(root, network)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	board, err := NewBoard(ctx, network, secrets, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer board.Wait()
+	envelope, err := NewEnvelope(network, secrets.Operator, secrets.Identity, ResultPhase, []byte(`{"vote":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := EncodeEnvelope(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := board.deliver(encoded); err == nil {
+		t.Fatal("board accepted a DKG message before the signed ceremony start")
+	}
+}
+
+func TestBoardRefusesIncompleteResultQuorum(t *testing.T) {
+	network, secrets := singleTestContext(t)
+	network.Document.DKG.StartAt = time.Now().UTC().Add(-5 * time.Second).Format(time.RFC3339)
+	root := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(root, network)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	board, err := NewBoard(ctx, network, secrets, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer board.Wait()
+	if _, err := board.WaitForResults(ctx); err == nil {
+		t.Fatal("incomplete all-operator DKG result quorum was accepted")
 	}
 }
 

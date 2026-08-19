@@ -30,10 +30,14 @@ independent review remain separate production gates.
 | LIVE-14 | Output is an immutable `.nomadobject` already trusted by the current Nomad Browser demo trust anchor. | Compose fixture and output digest. | MET |
 | LIVE-15 | Race tests, vet, module tidiness, snapshot checks, container isolation and pcap verification pass on one commit. | GitHub Actions run. | MET |
 | LIVE-16 | Operators can generate credentials independently, exchange only self-signed public enrollments, attest one common draft offline and verify their own derived live configuration without disclosing private keys to the topology authority. | `nomad-operator`, `nomad-topology` and ceremony CLI/unit e2e. | MET |
+| LIVE-17 | Every operator runs the official Kyber Pedersen DKG state machine with a dedicated topology-bound identity over signed, bounded, canonical all-to-all messages and a public phase schedule; replay, equivocation, missed deadlines, partial QUAL and interrupted-session reuse fail closed. | Three-process DKG race tests, schedule/equivocation/restart negatives and TLS Compose ceremony. | MET |
+| LIVE-18 | Epoch activation requires one Ed25519 attestation from every configured operator over one identical public committee and transcript; each private share is verified against its certified public polynomial share without reconstructing an aggregate secret. | Certificate agreement/tamper tests and distinct-share evidence. | MET |
+| LIVE-19 | Descriptor v2 embeds the distributed DKG certificate, and the live share services plus networkless materializer use those exact per-operator shares through the fixed-cadence fabric-to-cache path. | Compose certificate/descriptor equality, partial-proof, reconstruction and object-verification evidence. | MET |
 
-All LIVE gates are `MET`. The release job is dependency-gated on both CI jobs,
-so it can tag only the same commit that produced unit and live packet evidence.
-The measured baseline is recorded in `RELEASE_EVIDENCE.md`.
+All 19 LIVE gates are `MET`. The release job is dependency-gated on both CI
+jobs, so it can tag only the same commit that produced unit and live
+packet/process evidence. The measured baselines are recorded in
+`RELEASE_EVIDENCE.md`.
 
 ## External production gates
 
@@ -44,8 +48,6 @@ administrator:
   credentials, networks and incident processes;
 - signed production endpoints are reachable over a measured WAN profile, with
   NAT, loss, reordering, clock faults and regional outages exercised;
-- DKG messages run between isolated operator processes instead of the current
-  authenticated in-memory ceremony used by bootstrap;
 - each shuffle round is executed under the corresponding operator's separate
   administration; the fixture bootstrap currently holds all demo identities;
 - third-party cryptographic, systems, browser and traffic-analysis review is

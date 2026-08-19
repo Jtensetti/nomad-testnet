@@ -85,7 +85,7 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 		ContentHash: hex.EncodeToString(root[:]), PublisherKey: base64.StdEncoding.EncodeToString(publisherPublic),
 		Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(publisherPrivate, reconstruct.SigningMessage(root))),
 	}
-	generated, err := batch.Generate(context.Background(), envelope, network, authorityPrivate, identities, dkgIdentities)
+	generated, err := batch.GenerateInMemoryFixture(context.Background(), envelope, network, authorityPrivate, identities, dkgIdentities)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +107,12 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 	cache, err := rawcache.Open(filepath.Join(t.TempDir(), "raw"), 8)
 	if err != nil {
 		t.Fatal(err)
+	}
+	invalidShare := generated.Shares[0]
+	invalidShare.Secret = base64.StdEncoding.EncodeToString(make([]byte, len(mix.PrivateShare{})))
+	invalidShareBytes, _ := batch.EncodeShare(invalidShare)
+	if _, err := batch.VerifyShare(invalidShareBytes, descriptor, network); err == nil {
+		t.Fatal("private threshold scalar not matching the certified public share was accepted")
 	}
 	for ordinal, payload := range generated.Bundle.Cells {
 		decoded, err := base64.StdEncoding.Strict().DecodeString(payload)

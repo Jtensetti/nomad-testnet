@@ -71,10 +71,11 @@ func VerifyEnvelope(envelope SignedEnvelope) ([]byte, [32]byte, ed25519.PublicKe
 	return payload, root, ed25519.PublicKey(publisher), signature, nil
 }
 
-// Generate builds the publication fixture. It uses the authenticated in-memory
-// DKG harness and then one established Kyber Neff shuffle per operator. This is
-// not the anonymous publication airlock and is kept out of every reader path.
-func Generate(
+// GenerateInMemoryFixture builds a convenience publication fixture with an
+// in-memory DKG. The live Compose path replaces its output with
+// GenerateCertified after the networked ceremony. This helper is not the
+// anonymous publication airlock and is kept out of every reader path.
+func GenerateInMemoryFixture(
 	ctx context.Context,
 	envelope SignedEnvelope,
 	network topology.Verified,

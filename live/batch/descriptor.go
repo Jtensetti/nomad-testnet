@@ -39,26 +39,6 @@ type SignedEnvelope struct {
 	Signature    string `json:"signature"`
 }
 
-type MemberFile struct {
-	Index uint32 `json:"index"`
-	Share string `json:"share"`
-}
-
-type CommitteeFile struct {
-	ID        string       `json:"id"`
-	Epoch     uint64       `json:"epoch"`
-	Threshold uint32       `json:"threshold"`
-	PublicKey string       `json:"public_key"`
-	Members   []MemberFile `json:"members"`
-}
-
-type DKGTranscriptFile struct {
-	SessionID  string   `json:"session_id"`
-	Digest     string   `json:"digest"`
-	Identities []string `json:"identities"`
-	Qualified  []uint32 `json:"qualified"`
-}
-
 type ReceiptFile struct {
 	CommitteeID  string `json:"committee_id"`
 	Epoch        uint64 `json:"epoch"`

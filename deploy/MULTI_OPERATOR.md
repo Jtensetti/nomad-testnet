@@ -109,6 +109,13 @@ idempotent; a different message from the same sender and phase is recorded as
 equivocation and aborts the ceremony. Compare the reported certificate digest
 out of band. No coordinator ever receives a threshold secret.
 
+`nomad-fixture-publisher` exists only to connect this ceremony to the repository's
+deterministic acceptance object. It reads all mixer identities on one
+network-disabled test process and therefore is neither the production shuffle
+administration model nor an anonymous publication airlock. Real deployment must
+replace that fixture stage with separately administered shuffle rounds and the
+future publication protocol before making an anonymity claim.
+
 ## Network prerequisites
 
 The signed topology must name stable UDP endpoints for port 4200 and stable

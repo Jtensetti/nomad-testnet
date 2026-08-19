@@ -169,4 +169,10 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 	if err := ValidateDraft(invalidDKG); err == nil {
 		t.Fatal("identity-point DKG public key was accepted")
 	}
+	insecureDKG := document
+	insecureDKG.Operators = append([]Operator(nil), document.Operators...)
+	insecureDKG.Operators[0].DKGEndpoint = "http://operator-a:4400"
+	if err := ValidateDraft(insecureDKG); err == nil {
+		t.Fatal("non-loopback plaintext DKG endpoint was accepted")
+	}
 }

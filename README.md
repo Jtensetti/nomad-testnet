@@ -4,7 +4,9 @@ Nomad's reader-side reference deployment. It runs three separately keyed
 operator processes, emits authenticated 1200-byte UDP cells on a signed fixed
 cadence, stores only valid encrypted work, obtains public threshold partials on
 an independent fixed schedule, and materializes a signed object for Nomad
-Browser without any query-triggered network action.
+Browser without any query-triggered network action. The epoch committee is
+created by three networked Kyber Pedersen DKG processes; the live descriptor is
+accepted only with the resulting all-operator activation certificate.
 
 This repository now contains two harnesses:
 
@@ -12,10 +14,11 @@ This repository now contains two harnesses:
 - `deploy/compose.yaml` is the live fabric-to-cache deployment and release gate.
 
 It also ships `nomad-operator` and `nomad-topology` for an offline
-multi-administrator topology ceremony. Each operator generates its own Ed25519
-and X25519 secrets, publishes only a self-signed enrollment, signs the same
-complete topology draft and locally derives directed hop keys. The authority
-sees no operator private key and distributes no pairwise MAC secret.
+multi-administrator topology ceremony. Each operator generates separate
+Ed25519, X25519 and DKG secrets, publishes only a self-signed enrollment, signs
+the same complete topology draft and locally derives directed hop keys. The
+authority sees no operator private key and distributes no pairwise MAC or
+threshold secret.
 
 ```bash
 nomad-operator init --id=operator-a --endpoint=host-a:4200 \
@@ -46,9 +49,11 @@ Docker Compose supplies the reproducible single-administrator deployment:
 ./scripts/compose-e2e.sh
 ```
 
-The script builds the locked-down image, bootstraps a signed epoch, starts three
-UDP nodes, three threshold-share servers, one public-cadence partial fetcher and
-one networkless materializer. It waits for the exact verified browser object,
+The script builds the locked-down image, bootstraps a signed epoch, runs three
+TLS DKG processes, compares their certified public result, starts three UDP
+nodes using three distinct distributed shares, three threshold-share servers,
+one public-cadence partial fetcher and one networkless materializer. It waits for
+the exact verified browser object,
 checks every process and container boundary, records packet/process/health
 evidence from the dedicated fabric bridge, and rejects a capture whose cells
 are not 1200 bytes or whose cadence/topology is wrong. Bootstrap and the
@@ -97,11 +102,12 @@ snapshot. Component changes must update both the snapshot and lock entry.
 ## Live security status
 
 **Live testnet software, not yet an audited production anonymity network.** The
-live path uses authenticated Pedersen DKG output, 2-of-3 proved threshold
-decryption and one verified Neff shuffle per operator. Its one-host Compose
-profile demonstrates process, key and cache separation; it cannot prove that
-three organizations independently administer the operators. The exact release
-gate and remaining external production requirements are in `LIVE_DOD.md`.
+live path uses networked authenticated Pedersen DKG output, unanimous committee
+activation, 2-of-3 proved threshold decryption and one verified Neff shuffle per
+operator. Its one-host Compose profile demonstrates process, key and cache
+separation; it cannot prove that three organizations independently administer
+the operators. The exact release gate and remaining external production
+requirements are in `LIVE_DOD.md` and `DKG_DOD.md`.
 
 The lexical hashing embedder is an offline development baseline, not a semantic
 model. A real embedding model must remain local.
