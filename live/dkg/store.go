@@ -30,11 +30,11 @@ type storedMessage struct {
 // resumed because Kyber's ephemeral dealer polynomial is intentionally not
 // serialized; the operator must attest a fresh topology/session instead.
 type Store struct {
-	root     string
-	network  topology.Verified
-	mu       sync.Mutex
-	messages map[messageKey]storedMessage
-	fatal    chan error
+	root      string
+	network   topology.Verified
+	mu        sync.Mutex
+	messages  map[messageKey]storedMessage
+	fatal     chan error
 	fatalOnce sync.Once
 }
 

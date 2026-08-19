@@ -19,12 +19,12 @@ import (
 )
 
 type RunConfig struct {
-	Listen          string
-	StateDirectory  string
-	ShareOutput     string
+	Listen            string
+	StateDirectory    string
+	ShareOutput       string
 	CertificateOutput string
-	TLSCertificate  string
-	TLSPrivateKey   string
+	TLSCertificate    string
+	TLSPrivateKey     string
 }
 
 type RunResult struct {
@@ -237,9 +237,12 @@ func (p *scheduledPhaser) Start() {
 			timer := time.NewTimer(time.Until(when))
 			select {
 			case <-p.ctx.Done():
-				if !timer.Stop() {
-					<-timer.C
-				}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
 				return
 			case <-timer.C:
 			}

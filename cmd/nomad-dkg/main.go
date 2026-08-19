@@ -58,9 +58,9 @@ func run() error {
 		return err
 	}
 	return json.NewEncoder(os.Stdout).Encode(struct {
-		OperatorID       string `json:"operator_id"`
-		CommitteeID      string `json:"committee_id"`
+		OperatorID        string `json:"operator_id"`
+		CommitteeID       string `json:"committee_id"`
 		CertificateDigest string `json:"certificate_digest"`
-		Qualified        int    `json:"qualified"`
+		Qualified         int    `json:"qualified"`
 	}{secrets.Operator.ID, result.Certificate.Manifest.Committee.ID, fmt.Sprintf("%x", result.Verified.Digest), len(result.Verified.Transcript.Qualified)})
 }

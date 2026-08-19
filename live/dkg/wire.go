@@ -29,12 +29,12 @@ const (
 )
 
 type dealWire struct {
-	Version      int        `json:"version"`
-	DealerIndex  uint32     `json:"dealer_index"`
-	Deals        []dealItem `json:"deals"`
-	Public       []string   `json:"public"`
-	SessionID    string     `json:"session_id"`
-	Signature    string     `json:"signature"`
+	Version     int        `json:"version"`
+	DealerIndex uint32     `json:"dealer_index"`
+	Deals       []dealItem `json:"deals"`
+	Public      []string   `json:"public"`
+	SessionID   string     `json:"session_id"`
+	Signature   string     `json:"signature"`
 }
 
 type dealItem struct {

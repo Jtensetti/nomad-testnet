@@ -156,7 +156,7 @@ func nodeTestTopology(t *testing.T) (topology.Verified, map[string]ed25519.Priva
 			CellSize: topology.CellSize, CellIntervalMillis: 10,
 			MaxLatenessMillis: 40, QueueCapacity: 32,
 		},
-		DKG: topology.DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
+		DKG:       topology.DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
 		Operators: make([]topology.Operator, 3),
 	}
 	for index := range document.Operators {

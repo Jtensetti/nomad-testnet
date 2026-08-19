@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	EnvelopeVersion    = "nomad-dkg-envelope-v1"
+	EnvelopeVersion     = "nomad-dkg-envelope-v1"
 	MaximumEnvelopeSize = 512 << 10
 )
 

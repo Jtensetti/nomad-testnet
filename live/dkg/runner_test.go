@@ -56,7 +56,7 @@ func TestThreeOperatorDistributedDKG(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	draft, err := ceremony.BuildDraft(enrollments, ceremony.DraftConfig{
 		NetworkID: "dkg-test", Epoch: 11, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour),
-		Traffic: topology.TrafficClass{CellSize: topology.CellSize, CellIntervalMillis: 50, MaxLatenessMillis: 200, QueueCapacity: 64},
+		Traffic:  topology.TrafficClass{CellSize: topology.CellSize, CellIntervalMillis: 50, MaxLatenessMillis: 200, QueueCapacity: 64},
 		DKGStart: now.Add(3 * time.Second), DKGPhaseDuration: time.Second, DKGThreshold: 2,
 	})
 	if err != nil {

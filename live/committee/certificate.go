@@ -101,7 +101,7 @@ func NewManifest(network topology.Verified, value mix.ThresholdCommittee, transc
 		},
 		Transcript: TranscriptFile{
 			SessionID: base64.StdEncoding.EncodeToString(transcript.SessionID[:]),
-			Digest: hex.EncodeToString(transcript.Digest[:]), Identities: make([]string, len(transcript.Identities)),
+			Digest:    hex.EncodeToString(transcript.Digest[:]), Identities: make([]string, len(transcript.Identities)),
 			Qualified: append([]uint32(nil), transcript.Qualified...),
 		},
 	}

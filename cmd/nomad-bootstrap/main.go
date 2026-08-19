@@ -91,7 +91,7 @@ func run() error {
 			CellSize: topology.CellSize, CellIntervalMillis: uint32(*cellInterval),
 			MaxLatenessMillis: uint32(*cellInterval * 4), QueueCapacity: 256,
 		},
-		DKG: topology.DKGProfile{Threshold: batch.DefaultThreshold, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Add(2 * time.Minute).Format(time.RFC3339), PhaseDurationMillis: 30_000},
+		DKG:       topology.DKGProfile{Threshold: batch.DefaultThreshold, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Add(2 * time.Minute).Format(time.RFC3339), PhaseDurationMillis: 30_000},
 		Operators: make([]topology.Operator, len(operatorIDs)),
 	}
 	for index, id := range operatorIDs {

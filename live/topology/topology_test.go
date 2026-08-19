@@ -27,7 +27,7 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 		NotBefore: now.Add(-time.Hour).Format(time.RFC3339),
 		NotAfter:  now.Add(time.Hour).Format(time.RFC3339),
 		Traffic:   TrafficClass{CellSize: CellSize, CellIntervalMillis: 10, MaxLatenessMillis: 40, QueueCapacity: 64},
-		DKG: DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
+		DKG:       DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
 		Operators: make([]Operator, 3),
 	}
 	for index := range document.Operators {

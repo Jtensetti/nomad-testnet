@@ -47,15 +47,15 @@ type Attestation struct {
 }
 
 type DraftConfig struct {
-	NetworkID string
-	Epoch     uint64
-	NotBefore time.Time
-	NotAfter  time.Time
-	Traffic   topology.TrafficClass
-	DKGStart  time.Time
+	NetworkID        string
+	Epoch            uint64
+	NotBefore        time.Time
+	NotAfter         time.Time
+	Traffic          topology.TrafficClass
+	DKGStart         time.Time
 	DKGPhaseDuration time.Duration
-	DKGThreshold uint32
-	DKGSessionID [32]byte
+	DKGThreshold     uint32
+	DKGSessionID     [32]byte
 }
 
 func NewEnrollment(keys topology.PrivateKeys, endpoint, partialEndpoint, dkgEndpoint string) (Enrollment, error) {
@@ -69,8 +69,8 @@ func NewEnrollment(keys topology.PrivateKeys, endpoint, partialEndpoint, dkgEndp
 	enrollment := Enrollment{
 		Version: EnrollmentVersion, OperatorID: keys.OperatorID,
 		Endpoint: endpoint, PartialEndpoint: partialEndpoint, DKGEndpoint: dkgEndpoint,
-		IdentityKey: base64.StdEncoding.EncodeToString(keys.Identity.Public().(ed25519.PublicKey)),
-		KEXKey:      base64.StdEncoding.EncodeToString(keys.KEX.PublicKey().Bytes()),
+		IdentityKey:    base64.StdEncoding.EncodeToString(keys.Identity.Public().(ed25519.PublicKey)),
+		KEXKey:         base64.StdEncoding.EncodeToString(keys.KEX.PublicKey().Bytes()),
 		DKGIdentityKey: base64.StdEncoding.EncodeToString(dkgPublic[:]),
 	}
 	message, err := enrollmentMessage(enrollment)
@@ -163,10 +163,10 @@ func BuildDraft(enrollments []Enrollment, config DraftConfig) (topology.Document
 		Version: topology.Version, NetworkID: config.NetworkID, Epoch: config.Epoch,
 		NotBefore: config.NotBefore.UTC().Truncate(time.Second).Format(time.RFC3339),
 		NotAfter:  config.NotAfter.UTC().Truncate(time.Second).Format(time.RFC3339),
-		Traffic: config.Traffic,
+		Traffic:   config.Traffic,
 		DKG: topology.DKGProfile{
 			Threshold: threshold, SessionID: base64.StdEncoding.EncodeToString(dkgSessionID[:]),
-			StartAt: dkgStart.UTC().Truncate(time.Second).Format(time.RFC3339),
+			StartAt:             dkgStart.UTC().Truncate(time.Second).Format(time.RFC3339),
 			PhaseDurationMillis: uint32(phaseDuration / time.Millisecond),
 		},
 		Operators: make([]topology.Operator, len(ordered)),

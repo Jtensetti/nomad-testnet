@@ -34,7 +34,7 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 		NotBefore: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
 		NotAfter:  time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 		Traffic:   topology.TrafficClass{CellSize: topology.CellSize, CellIntervalMillis: 10, MaxLatenessMillis: 40, QueueCapacity: 64},
-		DKG: topology.DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
+		DKG:       topology.DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
 		Operators: make([]topology.Operator, 3),
 	}
 	for index := range document.Operators {

@@ -40,17 +40,17 @@ func NewBoard(ctx context.Context, network topology.Verified, secrets topology.V
 		return nil, errors.New("verified operator secrets are required")
 	}
 	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13},
-		ForceAttemptHTTP2: true,
-		MaxIdleConns: len(network.Document.Operators) * 2,
+		Proxy:               nil,
+		DialContext:         (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS13},
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        len(network.Document.Operators) * 2,
 		MaxIdleConnsPerHost: 2,
-		IdleConnTimeout: 30 * time.Second,
+		IdleConnTimeout:     30 * time.Second,
 	}
 	client := &http.Client{
-		Transport: transport,
-		Timeout: 5 * time.Second,
+		Transport:     transport,
+		Timeout:       5 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	capacity := len(network.Document.Operators) * 2
