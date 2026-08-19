@@ -94,5 +94,8 @@ func VerifyShare(encoded []byte, certificate Verified, network topology.Verified
 	secret := mix.MemberSecret{CommitteeID: certificate.Committee.ID, Epoch: file.Epoch, Index: file.Index}
 	copy(secret.Secret[:], secretBytes)
 	copy(secret.Public[:], publicBytes)
+	if err := mix.ValidateMemberSecret(certificate.Committee, secret); err != nil {
+		return mix.MemberSecret{}, fmt.Errorf("invalid private threshold share: %w", err)
+	}
 	return secret, nil
 }

@@ -198,22 +198,49 @@ func memberForIndex(committee ThresholdCommittee, index uint32) (PublicMember, e
 	return member, nil
 }
 
-func CreatePartialDecryption(committee ThresholdCommittee, member MemberSecret, batch *Batch) (*PartialDecryption, error) {
+// ValidateMemberSecret proves that an operator's private scalar is the
+// discrete-log witness for the public share pinned by the certified
+// committee. Callers loading a share from storage must run this before the
+// share is accepted, rather than waiting until the first decryption request.
+func ValidateMemberSecret(committee ThresholdCommittee, member MemberSecret) error {
 	if err := validateThresholdCommittee(committee); err != nil {
+		return err
+	}
+	if member.CommitteeID != committee.ID || member.Epoch != committee.Epoch {
+		return errors.New("member secret belongs to a different committee epoch")
+	}
+	publicMember, err := memberForIndex(committee, member.Index)
+	if err != nil {
+		return err
+	}
+	if publicMember.Share != member.Public {
+		return errors.New("member public share does not match committee registry")
+	}
+	s := newSuite()
+	secret, err := privateShareScalar(s, member.Secret)
+	if err != nil {
+		return fmt.Errorf("decode member secret: %w", err)
+	}
+	publicShare, err := sharePublicPoint(s, member.Public)
+	if err != nil {
+		return fmt.Errorf("decode member public share: %w", err)
+	}
+	if !s.Point().Mul(secret, nil).Equal(publicShare) {
+		return errors.New("member secret does not match its public share")
+	}
+	return nil
+}
+
+func CreatePartialDecryption(committee ThresholdCommittee, member MemberSecret, batch *Batch) (*PartialDecryption, error) {
+	if err := ValidateMemberSecret(committee, member); err != nil {
 		return nil, err
 	}
 	if err := validateBatch(batch); err != nil {
 		return nil, err
 	}
-	if member.CommitteeID != committee.ID || member.Epoch != committee.Epoch {
-		return nil, errors.New("member secret belongs to a different committee epoch")
-	}
 	publicMember, err := memberForIndex(committee, member.Index)
 	if err != nil {
 		return nil, err
-	}
-	if publicMember.Share != member.Public {
-		return nil, errors.New("member public share does not match committee registry")
 	}
 
 	s := newSuite()
@@ -225,10 +252,6 @@ func CreatePartialDecryption(committee ThresholdCommittee, member MemberSecret, 
 	if err != nil {
 		return nil, fmt.Errorf("decode member public share: %w", err)
 	}
-	if !s.Point().Mul(secret, nil).Equal(publicShare) {
-		return nil, errors.New("member secret does not match its public share")
-	}
-
 	batchDigest, err := batch.Digest()
 	if err != nil {
 		return nil, err
