@@ -122,4 +122,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --prerelease \
             --title "Nomad live fabric testnet (${short_sha})" \
-            --notes "Reader-side live testnet with three separately keyed operator processes, fixed-cadence authenticated UDP, threshold partial exchange, networkless materialization, packet evidence and browser-compatible verified output. This is not an audited production anonymity network; see LIVE_DOD.md for external gates."
+            --notes "Reader-side live testnet with an offline operator enrollment/attestation ceremony, locally derived X25519+HKDF hop keys, three separately keyed operator processes, fixed-cadence authenticated UDP, threshold partial exchange, networkless materialization, packet and ceremony evidence, and browser-compatible verified output. This is not an audited production anonymity network; see LIVE_DOD.md for external gates."
