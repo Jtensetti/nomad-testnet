@@ -14,8 +14,8 @@ independent review remain separate production gates.
 
 | ID | Requirement | Required evidence | Status |
 |---|---|---|---|
-| LIVE-01 | A pinned authority signature and every operator attestation bind network ID, epoch, traffic class, endpoints, identity keys and peer plan. | Topology positive/tamper tests. | MET |
-| LIVE-02 | Every node receives only its own Ed25519 identity and directed 256-bit peer MAC keys; secret files with group/other access fail closed. | Secret-validation tests and per-operator volumes. | MET |
+| LIVE-01 | A pinned authority signature and every operator attestation bind the same complete draft: membership, validity, network ID, epoch, traffic class, endpoints, identity/KEX keys and every peer plan. | Independent ceremony and topology tamper tests. | MET |
+| LIVE-02 | Every node receives only its own Ed25519 identity and epoch-scoped X25519 private key. Directed 256-bit hop MAC keys are derived locally with X25519+HKDF and bound to topology, epoch, sender and receiver; secret files with group/other access fail closed. | Cross-operator KDF agreement, mismatch tests and per-operator volumes. | MET |
 | LIVE-03 | Every emitted UDP payload is exactly 1200 bytes at the signed interval, including idle periods; missed deadlines fail rather than catch up. | Scheduler tests and packet capture. | MET |
 | LIVE-04 | The existing 1152-byte mix ciphertext is unchanged; the 48-byte padding region authenticates stream, batch coordinate, sender and persistent sequence with a 128-bit HMAC-SHA-256 tag. | Hop round-trip and tamper tests. | MET |
 | LIVE-05 | Unknown sources, wrong sizes, invalid tags, wrong receivers, duplicate sequences and expired replay-window entries are rejected before cache or relay. | Negative hop/node tests and counters. | MET |
@@ -29,6 +29,7 @@ independent review remain separate production gates.
 | LIVE-13 | Acceptance requires exact RLNC dimensions, SHA-256 commitment and Ed25519 signature over `nomad-object-v1 || SHA256(payload)`. | End-to-end materializer test. | MET |
 | LIVE-14 | Output is an immutable `.nomadobject` already trusted by the current Nomad Browser demo trust anchor. | Compose fixture and output digest. | MET |
 | LIVE-15 | Race tests, vet, module tidiness, snapshot checks, container isolation and pcap verification pass on one commit. | GitHub Actions run. | MET |
+| LIVE-16 | Operators can generate credentials independently, exchange only self-signed public enrollments, attest one common draft offline and verify their own derived live configuration without disclosing private keys to the topology authority. | `nomad-operator`, `nomad-topology` and ceremony CLI/unit e2e. | MET |
 
 All LIVE gates are `MET`. The release job is dependency-gated on both CI jobs,
 so it can tag only the same commit that produced unit and live packet evidence.

@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -160,11 +161,16 @@ func nodeTestTopology(t *testing.T) (topology.Verified, map[string]ed25519.Priva
 		if err != nil {
 			t.Fatal(err)
 		}
+		kexKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
 		identities[id] = privateKey
 		document.Operators[index] = topology.Operator{
 			ID: id, Index: uint16(index), Endpoint: endpoints[index],
 			PartialEndpoint: "http://127.0.0.1:" + []string{"4311", "4312", "4313"}[index],
 			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey),
+			KEXKey:          base64.StdEncoding.EncodeToString(kexKey.PublicKey().Bytes()),
 			PeerPlan:        []uint16{uint16((index + 1) % 3)},
 		}
 	}

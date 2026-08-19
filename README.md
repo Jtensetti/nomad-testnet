@@ -11,6 +11,28 @@ This repository now contains two harnesses:
 - `go run ./cmd/nomad-testnet` is the deterministic protocol integration test.
 - `deploy/compose.yaml` is the live fabric-to-cache deployment and release gate.
 
+It also ships `nomad-operator` and `nomad-topology` for an offline
+multi-administrator topology ceremony. Each operator generates its own Ed25519
+and X25519 secrets, publishes only a self-signed enrollment, signs the same
+complete topology draft and locally derives directed hop keys. The authority
+sees no operator private key and distributes no pairwise MAC secret.
+
+```bash
+nomad-operator init --id=operator-a --endpoint=host-a:4200 \
+  --partial-endpoint=https://host-a:4300 \
+  --secret=node-secrets.json --enrollment=enrollment.json
+
+nomad-topology draft --network-id=nomad-live --epoch=1 \
+  --enrollments=a.json,b.json,c.json --out=topology-draft.json
+
+nomad-operator attest --secret=node-secrets.json \
+  --draft=topology-draft.json --out=operator-a.attestation.json
+```
+
+After collecting exactly one attestation from every member, the authority uses
+`nomad-topology finalize`; every operator runs `nomad-operator verify` before
+starting its node. The complete runbook is in `deploy/MULTI_OPERATOR.md`.
+
 ## Run the live network
 
 Docker Compose supplies the reproducible single-administrator deployment:

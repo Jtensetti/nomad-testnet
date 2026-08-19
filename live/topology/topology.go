@@ -4,6 +4,7 @@ package topology
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -20,7 +21,7 @@ import (
 )
 
 const (
-	Version          = "nomad-live-topology-v1"
+	Version          = "nomad-live-topology-v2"
 	CellSize         = 1200
 	MaximumFileBytes = 1 << 20
 )
@@ -40,6 +41,7 @@ type Operator struct {
 	Endpoint        string   `json:"endpoint"`
 	PartialEndpoint string   `json:"partial_endpoint"`
 	IdentityKey     string   `json:"identity_key"`
+	KEXKey          string   `json:"kex_key"`
 	PeerPlan        []uint16 `json:"peer_plan"`
 	Attestation     string   `json:"attestation"`
 }
@@ -62,6 +64,38 @@ type Signed struct {
 type Verified struct {
 	Document Document
 	Digest   [32]byte
+}
+
+// ValidateDraft validates public topology structure without requiring
+// attestations or an authority signature.
+func ValidateDraft(document Document) error {
+	return validateDocument(cloneDocument(document), time.Time{})
+}
+
+// ValidateAttestations checks that every listed operator signed the same full
+// topology draft. It does not add or verify an authority signature.
+func ValidateAttestations(document Document) error {
+	if err := validateDocument(cloneDocument(document), time.Time{}); err != nil {
+		return err
+	}
+	return verifyAttestations(document)
+}
+
+// DraftDigest identifies the exact public proposal that every operator must
+// inspect and attest. Collection-order-dependent attestations are excluded.
+func DraftDigest(document Document) ([32]byte, error) {
+	draft := cloneDocument(document)
+	for index := range draft.Operators {
+		draft.Operators[index].Attestation = ""
+	}
+	if err := validateDocument(draft, time.Time{}); err != nil {
+		return [32]byte{}, err
+	}
+	canonical, err := canonicalDocument(draft)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(signingMessage("nomad-topology-draft-v2", canonical)), nil
 }
 
 func Load(path string, authority ed25519.PublicKey, now time.Time) (Verified, error) {
@@ -106,57 +140,74 @@ func Verify(encoded []byte, authority ed25519.PublicKey, now time.Time) (Verifie
 	if err != nil {
 		return Verified{}, fmt.Errorf("topology authority signature: %w", err)
 	}
-	if !ed25519.Verify(authority, signingMessage("nomad-topology-authority-v1", canonical), signature) {
+	if !ed25519.Verify(authority, signingMessage("nomad-topology-authority-v2", canonical), signature) {
 		return Verified{}, errors.New("topology authority signature verification failed")
 	}
-	for _, operator := range signed.Document.Operators {
-		publicKey, err := decodeFixed(operator.IdentityKey, ed25519.PublicKeySize)
-		if err != nil {
-			return Verified{}, fmt.Errorf("operator %s identity: %w", operator.ID, err)
-		}
-		attestation, err := decodeFixed(operator.Attestation, ed25519.SignatureSize)
-		if err != nil {
-			return Verified{}, fmt.Errorf("operator %s attestation: %w", operator.ID, err)
-		}
-		message, err := operatorSigningMessage(signed.Document, operator)
-		if err != nil {
-			return Verified{}, err
-		}
-		if !ed25519.Verify(publicKey, message, attestation) {
-			return Verified{}, fmt.Errorf("operator %s attestation verification failed", operator.ID)
-		}
+	if err := verifyAttestations(signed.Document); err != nil {
+		return Verified{}, err
 	}
-	return Verified{Document: signed.Document, Digest: sha256.Sum256(signingMessage("nomad-topology-digest-v1", canonical))}, nil
+	return Verified{Document: signed.Document, Digest: sha256.Sum256(signingMessage("nomad-topology-digest-v2", canonical))}, nil
 }
 
 func Sign(document Document, authority ed25519.PrivateKey, identities map[string]ed25519.PrivateKey) (Signed, error) {
-	if len(authority) != ed25519.PrivateKeySize {
-		return Signed{}, errors.New("topology authority private key is invalid")
-	}
-	copyDocument := document
-	copyDocument.Operators = append([]Operator(nil), document.Operators...)
-	for index := range copyDocument.Operators {
-		operator := &copyDocument.Operators[index]
-		identity := identities[operator.ID]
-		if len(identity) != ed25519.PrivateKeySize {
-			return Signed{}, fmt.Errorf("missing identity private key for %s", operator.ID)
-		}
-		publicKey := identity.Public().(ed25519.PublicKey)
-		if operator.IdentityKey == "" {
-			operator.IdentityKey = base64.StdEncoding.EncodeToString(publicKey)
-		}
-		configured, err := decodeFixed(operator.IdentityKey, ed25519.PublicKeySize)
-		if err != nil || !bytes.Equal(configured, publicKey) {
-			return Signed{}, fmt.Errorf("identity private key does not match operator %s", operator.ID)
-		}
-		operator.Attestation = ""
-		message, err := operatorSigningMessage(copyDocument, *operator)
+	attested := document
+	var err error
+	for _, operator := range document.Operators {
+		attested, err = Attest(attested, operator.ID, identities[operator.ID])
 		if err != nil {
 			return Signed{}, err
 		}
-		operator.Attestation = base64.StdEncoding.EncodeToString(ed25519.Sign(identity, message))
 	}
+	return Finalize(attested, authority)
+}
+
+// Attest signs the complete public topology draft for one operator. All
+// attestations are blanked before signing, so independently produced
+// signatures bind the same membership, endpoints, keys, validity window,
+// traffic class and peer plans without depending on collection order.
+func Attest(document Document, operatorID string, identity ed25519.PrivateKey) (Document, error) {
+	if len(identity) != ed25519.PrivateKeySize {
+		return Document{}, fmt.Errorf("missing identity private key for %s", operatorID)
+	}
+	copyDocument := cloneDocument(document)
 	if err := validateDocument(copyDocument, time.Time{}); err != nil {
+		return Document{}, err
+	}
+	operatorIndex := -1
+	for index := range copyDocument.Operators {
+		if copyDocument.Operators[index].ID == operatorID {
+			operatorIndex = index
+			break
+		}
+	}
+	if operatorIndex < 0 {
+		return Document{}, fmt.Errorf("operator %q is not in topology", operatorID)
+	}
+	operator := &copyDocument.Operators[operatorIndex]
+	configured, err := decodeFixed(operator.IdentityKey, ed25519.PublicKeySize)
+	if err != nil || !bytes.Equal(configured, identity.Public().(ed25519.PublicKey)) {
+		return Document{}, fmt.Errorf("identity private key does not match operator %s", operator.ID)
+	}
+	message, err := operatorSigningMessage(copyDocument, operator.ID)
+	if err != nil {
+		return Document{}, err
+	}
+	operator.Attestation = base64.StdEncoding.EncodeToString(ed25519.Sign(identity, message))
+	return copyDocument, nil
+}
+
+// Finalize verifies every independently produced operator attestation before
+// applying the authority signature. The authority never needs an operator
+// identity or key-agreement private key.
+func Finalize(document Document, authority ed25519.PrivateKey) (Signed, error) {
+	if len(authority) != ed25519.PrivateKeySize {
+		return Signed{}, errors.New("topology authority private key is invalid")
+	}
+	copyDocument := cloneDocument(document)
+	if err := validateDocument(copyDocument, time.Time{}); err != nil {
+		return Signed{}, err
+	}
+	if err := verifyAttestations(copyDocument); err != nil {
 		return Signed{}, err
 	}
 	canonical, err := canonicalDocument(copyDocument)
@@ -165,7 +216,7 @@ func Sign(document Document, authority ed25519.PrivateKey, identities map[string
 	}
 	return Signed{
 		Document:  copyDocument,
-		Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(authority, signingMessage("nomad-topology-authority-v1", canonical))),
+		Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(authority, signingMessage("nomad-topology-authority-v2", canonical))),
 	}, nil
 }
 
@@ -246,7 +297,8 @@ func validateDocument(document Document, now time.Time) error {
 	ids := make(map[string]struct{}, len(document.Operators))
 	endpoints := make(map[string]struct{}, len(document.Operators))
 	partialEndpoints := make(map[string]struct{}, len(document.Operators))
-	keys := make(map[string]struct{}, len(document.Operators))
+	identityKeys := make(map[string]struct{}, len(document.Operators))
+	kexKeys := make(map[string]struct{}, len(document.Operators))
 	for index, operator := range document.Operators {
 		if operator.Index != uint16(index) {
 			return errors.New("operators must have contiguous ordered indexes")
@@ -279,10 +331,21 @@ func validateDocument(document Document, now time.Time) error {
 		if _, err := decodeFixed(operator.IdentityKey, ed25519.PublicKeySize); err != nil {
 			return fmt.Errorf("operator %s has invalid identity key", operator.ID)
 		}
-		if _, exists := keys[operator.IdentityKey]; exists {
+		if _, exists := identityKeys[operator.IdentityKey]; exists {
 			return fmt.Errorf("duplicate operator identity key for %s", operator.ID)
 		}
-		keys[operator.IdentityKey] = struct{}{}
+		identityKeys[operator.IdentityKey] = struct{}{}
+		encodedKEX, err := decodeFixed(operator.KEXKey, 32)
+		if err != nil {
+			return fmt.Errorf("operator %s has invalid key-agreement key", operator.ID)
+		}
+		if _, err := ecdh.X25519().NewPublicKey(encodedKEX); err != nil {
+			return fmt.Errorf("operator %s has invalid key-agreement key", operator.ID)
+		}
+		if _, exists := kexKeys[operator.KEXKey]; exists {
+			return fmt.Errorf("duplicate operator key-agreement key for %s", operator.ID)
+		}
+		kexKeys[operator.KEXKey] = struct{}{}
 		if len(operator.PeerPlan) == 0 || len(operator.PeerPlan) > 256 {
 			return fmt.Errorf("operator %s has invalid peer plan length", operator.ID)
 		}
@@ -296,30 +359,55 @@ func validateDocument(document Document, now time.Time) error {
 }
 
 func canonicalDocument(document Document) ([]byte, error) {
-	copyDocument := document
-	copyDocument.Operators = append([]Operator(nil), document.Operators...)
-	// The order is protocol-significant, but copy all peer plans to prevent a
-	// caller from mutating slices while a signature is being computed.
-	for index := range copyDocument.Operators {
-		copyDocument.Operators[index].PeerPlan = append([]uint16(nil), copyDocument.Operators[index].PeerPlan...)
-	}
-	return json.Marshal(copyDocument)
+	return json.Marshal(cloneDocument(document))
 }
 
-func operatorSigningMessage(document Document, operator Operator) ([]byte, error) {
-	operator.Attestation = ""
+func operatorSigningMessage(document Document, operatorID string) ([]byte, error) {
+	draft := cloneDocument(document)
+	for index := range draft.Operators {
+		draft.Operators[index].Attestation = ""
+	}
 	payload := struct {
-		Version   string       `json:"version"`
-		NetworkID string       `json:"network_id"`
-		Epoch     uint64       `json:"epoch"`
-		Traffic   TrafficClass `json:"traffic"`
-		Operator  Operator     `json:"operator"`
-	}{document.Version, document.NetworkID, document.Epoch, document.Traffic, operator}
+		OperatorID string   `json:"operator_id"`
+		Document   Document `json:"document"`
+	}{operatorID, draft}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
-	return signingMessage("nomad-operator-attestation-v1", encoded), nil
+	return signingMessage("nomad-operator-attestation-v2", encoded), nil
+}
+
+func verifyAttestations(document Document) error {
+	for _, operator := range document.Operators {
+		publicKey, err := decodeFixed(operator.IdentityKey, ed25519.PublicKeySize)
+		if err != nil {
+			return fmt.Errorf("operator %s identity: %w", operator.ID, err)
+		}
+		attestation, err := decodeFixed(operator.Attestation, ed25519.SignatureSize)
+		if err != nil {
+			return fmt.Errorf("operator %s attestation: %w", operator.ID, err)
+		}
+		message, err := operatorSigningMessage(document, operator.ID)
+		if err != nil {
+			return err
+		}
+		if !ed25519.Verify(publicKey, message, attestation) {
+			return fmt.Errorf("operator %s attestation verification failed", operator.ID)
+		}
+	}
+	return nil
+}
+
+func cloneDocument(document Document) Document {
+	copyDocument := document
+	copyDocument.Operators = append([]Operator(nil), document.Operators...)
+	// Operator order is protocol-significant. Copy peer plans to prevent a
+	// caller from mutating a slice while signatures are computed.
+	for index := range copyDocument.Operators {
+		copyDocument.Operators[index].PeerPlan = append([]uint16(nil), copyDocument.Operators[index].PeerPlan...)
+	}
+	return copyDocument
 }
 
 func signingMessage(domain string, payload []byte) []byte {

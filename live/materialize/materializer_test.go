@@ -2,6 +2,7 @@ package materialize
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -39,11 +40,17 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		kexKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
 		identities[id] = privateKey
 		document.Operators[index] = topology.Operator{
 			ID: id, Index: uint16(index), Endpoint: []string{"127.0.0.1:4201", "127.0.0.1:4202", "127.0.0.1:4203"}[index],
 			PartialEndpoint: []string{"http://127.0.0.1:4301", "http://127.0.0.1:4302", "http://127.0.0.1:4303"}[index],
-			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey), PeerPlan: []uint16{uint16((index + 1) % 3)},
+			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey),
+			KEXKey:          base64.StdEncoding.EncodeToString(kexKey.PublicKey().Bytes()),
+			PeerPlan:        []uint16{uint16((index + 1) % 3)},
 		}
 	}
 	signedTopology, err := topology.Sign(document, authorityPrivate, identities)

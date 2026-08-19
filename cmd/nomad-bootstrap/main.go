@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -72,6 +73,7 @@ func run() error {
 		return err
 	}
 	identities := make(map[string]ed25519.PrivateKey, len(operatorIDs))
+	kexKeys := make(map[string]*ecdh.PrivateKey, len(operatorIDs))
 	document := topology.Document{
 		Version: topology.Version, NetworkID: *networkID, Epoch: 1,
 		NotBefore: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
@@ -87,11 +89,17 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		kexKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			return err
+		}
 		identities[id] = privateKey
+		kexKeys[id] = kexKey
 		document.Operators[index] = topology.Operator{
 			ID: id, Index: uint16(index), Endpoint: endpoints[index],
 			PartialEndpoint: partialEndpoints[index],
 			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey),
+			KEXKey:          base64.StdEncoding.EncodeToString(kexKey.PublicKey().Bytes()),
 			PeerPlan:        []uint16{uint16((index + 1) % len(operatorIDs))},
 		}
 	}
@@ -107,7 +115,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	secrets, err := buildSecrets(verifiedTopology, identities)
+	secrets, err := buildSecrets(verifiedTopology, identities, kexKeys)
 	if err != nil {
 		return err
 	}
@@ -183,25 +191,18 @@ func run() error {
 	return json.NewEncoder(os.Stdout).Encode(summary)
 }
 
-func buildSecrets(network topology.Verified, identities map[string]ed25519.PrivateKey) ([]topology.Secrets, error) {
+func buildSecrets(network topology.Verified, identities map[string]ed25519.PrivateKey, kexKeys map[string]*ecdh.PrivateKey) ([]topology.Secrets, error) {
 	files := make([]topology.Secrets, len(network.Document.Operators))
 	for index, operator := range network.Document.Operators {
+		identity := identities[operator.ID]
+		kexKey := kexKeys[operator.ID]
+		if len(identity) != ed25519.PrivateKeySize || kexKey == nil {
+			return nil, fmt.Errorf("missing private material for %s", operator.ID)
+		}
 		files[index] = topology.Secrets{
 			Version: topology.SecretVersion, OperatorID: operator.ID,
-			IdentityPrivate: base64.StdEncoding.EncodeToString(identities[operator.ID]),
-			OutboundKeys:    make(map[string]string), InboundKeys: make(map[string]string),
-		}
-	}
-	for _, sender := range network.Document.Operators {
-		for _, receiverIndex := range sender.PeerPlan {
-			receiver, _ := network.Operator(receiverIndex)
-			key := make([]byte, 32)
-			if _, err := rand.Read(key); err != nil {
-				return nil, err
-			}
-			encoded := base64.StdEncoding.EncodeToString(key)
-			files[sender.Index].OutboundKeys[receiver.ID] = encoded
-			files[receiver.Index].InboundKeys[sender.ID] = encoded
+			IdentityPrivate: base64.StdEncoding.EncodeToString(identity),
+			KEXPrivate:      base64.StdEncoding.EncodeToString(kexKey.Bytes()),
 		}
 	}
 	return files, nil

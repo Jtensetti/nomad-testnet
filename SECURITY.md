@@ -23,7 +23,11 @@ The 1200-byte test profile already reserves 48 bytes after the 1152-byte Kyber
 ciphertext. Live transport uses exactly that region for a versioned header and
 a 128-bit truncated HMAC-SHA-256 tag. The tag binds the signed topology digest,
 network, epoch, receiver, sender, stream, batch coordinate, persistent sequence
-and all ciphertext bytes. Directed 256-bit keys are generated independently.
+and all ciphertext bytes. Each operator holds one epoch-scoped X25519 private
+key. Directed 256-bit keys are derived locally with X25519 and HKDF-SHA-256,
+salted by the signed topology digest and domain-bound to network, epoch, sender
+and receiver. The topology authority never generates or receives these hop
+keys.
 
 The sequence allocator reserves ranges on durable storage before emission. A
 64-cell receive window permits bounded UDP reordering and rejects duplicates.
@@ -33,6 +37,22 @@ HMAC authenticates Nomad datagrams; it does not conceal IP metadata or defeat
 denial of service. Production operators should use stable signed tunnel
 addresses (for example WireGuard) and keep the Nomad hop authentication enabled
 inside the tunnel.
+
+## Offline operator ceremony
+
+`nomad-operator init` creates an Ed25519 identity and X25519 epoch key on the
+operator's own machine, plus a self-signed public enrollment. `nomad-topology
+draft` deterministically orders those enrollments and creates one complete
+proposal. Each operator inspects and signs that exact proposal with
+`nomad-operator attest`; all attestations blank one another before hashing, so
+collection order cannot alter the signed draft. `nomad-topology finalize`
+rejects missing, duplicate, mixed-draft or invalid attestations before the
+authority signs. `nomad-operator verify` then derives only that operator's
+inbound and outbound hop keys and validates them against the final topology.
+
+This removes the topology authority and bootstrap as hop-key distributors. It
+does not turn the current in-memory threshold DKG or fixture shuffle into a
+distributed ceremony.
 
 ## Cache and reconstruction
 

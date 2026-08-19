@@ -5,6 +5,8 @@ COPY . .
 RUN CGO_ENABLED=0 go test ./live/... && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-bootstrap ./cmd/nomad-bootstrap && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-node ./cmd/nomad-node && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-operator ./cmd/nomad-operator && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-topology ./cmd/nomad-topology && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-share ./cmd/nomad-share && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-partial-fetch ./cmd/nomad-partial-fetch && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-materializer ./cmd/nomad-materializer

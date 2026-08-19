@@ -9,13 +9,24 @@ operator on separately administered infrastructure.
 Every operator receives only:
 
 - the authority-signed `topology.json` and authority public key;
-- its own `node-secrets.json`, Ed25519 identity secret and directed hop keys;
+- its own `node-secrets.json`, containing only its Ed25519 identity and
+  epoch-scoped X25519 private key;
 - its own `threshold-share.json` from the epoch DKG;
 - its own raw-cache and sequence-state volumes.
 
 No operator receives another operator's secret volume. The reader/materializer
 receives public configuration, one authenticated raw cache and public partial
 proofs; it never receives a threshold secret share or node identity key.
+
+Before bootstrap or content work, each administrator runs `nomad-operator
+init` locally and sends only the resulting self-signed enrollment to the
+topology coordinator. The coordinator creates one deterministic draft with
+`nomad-topology draft`. Every administrator inspects that complete document and
+returns `nomad-operator attest` output. The coordinator can finalize only with
+one valid, same-draft attestation per listed member. Each node derives its
+directed hop keys locally via X25519+HKDF; the coordinator never handles a
+pairwise MAC key. Run `nomad-operator verify` against the final topology before
+starting either process.
 
 The bootstrap command in this repository is a ceremony harness. For a real
 operator set, run the authenticated DKG as an independently witnessed epoch
