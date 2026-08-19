@@ -5,6 +5,7 @@ COPY . .
 RUN CGO_ENABLED=0 go test ./live/... && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-bootstrap ./cmd/nomad-bootstrap && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-dkg ./cmd/nomad-dkg && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-fixture-publisher ./cmd/nomad-fixture-publisher && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-node ./cmd/nomad-node && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-operator ./cmd/nomad-operator && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-topology ./cmd/nomad-topology && \

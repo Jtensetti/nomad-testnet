@@ -82,6 +82,90 @@ func Generate(
 	identities map[string]ed25519.PrivateKey,
 	dkgIdentities map[string]mix.DKGPrivateIdentity,
 ) (Generated, error) {
+	certificate, certified, memberSecrets, err := runFixtureCommittee(network, identities, dkgIdentities)
+	if err != nil {
+		return Generated{}, err
+	}
+	return generateCertified(ctx, envelope, network, authority, identities, certificate, certified, memberSecrets)
+}
+
+// GenerateCertified builds a publication batch using a distributed DKG
+// certificate already signed by every configured operator. It never accepts
+// or creates a threshold private share.
+func GenerateCertified(
+	ctx context.Context,
+	envelope SignedEnvelope,
+	network topology.Verified,
+	authority ed25519.PrivateKey,
+	identities map[string]ed25519.PrivateKey,
+	certificate committee.Certificate,
+) (Generated, error) {
+	certified, err := committee.Verify(certificate, network)
+	if err != nil {
+		return Generated{}, fmt.Errorf("verify distributed DKG certificate: %w", err)
+	}
+	return generateCertified(ctx, envelope, network, authority, identities, certificate, certified, nil)
+}
+
+func runFixtureCommittee(
+	network topology.Verified,
+	identities map[string]ed25519.PrivateKey,
+	dkgIdentities map[string]mix.DKGPrivateIdentity,
+) (committee.Certificate, committee.Verified, []mix.MemberSecret, error) {
+	committeeID, err := committee.IDForTopology(network)
+	if err != nil {
+		return committee.Certificate{}, committee.Verified{}, nil, err
+	}
+	nonce, err := base64.StdEncoding.Strict().DecodeString(network.Document.DKG.SessionID)
+	if err != nil || len(nonce) != 32 {
+		return committee.Certificate{}, committee.Verified{}, nil, errors.New("invalid topology DKG session")
+	}
+	privateDKG := make([]mix.DKGPrivateIdentity, len(network.Document.Operators))
+	for index, operator := range network.Document.Operators {
+		private, exists := dkgIdentities[operator.ID]
+		if !exists {
+			return committee.Certificate{}, committee.Verified{}, nil, fmt.Errorf("missing DKG identity for %s", operator.ID)
+		}
+		privateDKG[index] = private
+	}
+	publicCommittee, memberSecrets, transcript, err := mix.RunAuthenticatedDKGWithIdentities(
+		committeeID, network.Document.Epoch, privateDKG, network.Document.DKG.Threshold, nonce,
+	)
+	if err != nil {
+		return committee.Certificate{}, committee.Verified{}, nil, fmt.Errorf("authenticated DKG: %w", err)
+	}
+	manifest, err := committee.NewManifest(network, publicCommittee, transcript)
+	if err != nil {
+		return committee.Certificate{}, committee.Verified{}, nil, err
+	}
+	attestations := make([]committee.Attestation, len(network.Document.Operators))
+	for index, operator := range network.Document.Operators {
+		attestations[index], err = committee.CreateAttestation(manifest, operator, identities[operator.ID])
+		if err != nil {
+			return committee.Certificate{}, committee.Verified{}, nil, err
+		}
+	}
+	certificate, err := committee.Assemble(manifest, attestations, network)
+	if err != nil {
+		return committee.Certificate{}, committee.Verified{}, nil, err
+	}
+	certified, err := committee.Verify(certificate, network)
+	if err != nil {
+		return committee.Certificate{}, committee.Verified{}, nil, err
+	}
+	return certificate, certified, memberSecrets, nil
+}
+
+func generateCertified(
+	ctx context.Context,
+	envelope SignedEnvelope,
+	network topology.Verified,
+	authority ed25519.PrivateKey,
+	identities map[string]ed25519.PrivateKey,
+	certificate committee.Certificate,
+	certified committee.Verified,
+	memberSecrets []mix.MemberSecret,
+) (Generated, error) {
 	if ctx == nil {
 		return Generated{}, errors.New("context is required")
 	}
@@ -130,48 +214,7 @@ func Generate(
 		copy(plainCells[index][:], encodedPacket)
 	}
 
-	committeeID, err := committee.IDForTopology(network)
-	if err != nil {
-		return Generated{}, err
-	}
-	nonce, err := base64.StdEncoding.Strict().DecodeString(network.Document.DKG.SessionID)
-	if err != nil || len(nonce) != 32 {
-		return Generated{}, errors.New("invalid topology DKG session")
-	}
-	privateDKG := make([]mix.DKGPrivateIdentity, len(network.Document.Operators))
-	for index, operator := range network.Document.Operators {
-		private, exists := dkgIdentities[operator.ID]
-		if !exists {
-			return Generated{}, fmt.Errorf("missing DKG identity for %s", operator.ID)
-		}
-		privateDKG[index] = private
-	}
-	publicCommittee, memberSecrets, transcript, err := mix.RunAuthenticatedDKGWithIdentities(
-		committeeID, network.Document.Epoch, privateDKG, network.Document.DKG.Threshold, nonce,
-	)
-	if err != nil {
-		return Generated{}, fmt.Errorf("authenticated DKG: %w", err)
-	}
-	manifest, err := committee.NewManifest(network, publicCommittee, transcript)
-	if err != nil {
-		return Generated{}, err
-	}
-	attestations := make([]committee.Attestation, len(network.Document.Operators))
-	for index, operator := range network.Document.Operators {
-		attestations[index], err = committee.CreateAttestation(manifest, operator, identities[operator.ID])
-		if err != nil {
-			return Generated{}, err
-		}
-	}
-	certificate, err := committee.Assemble(manifest, attestations, network)
-	if err != nil {
-		return Generated{}, err
-	}
-	certified, err := committee.Verify(certificate, network)
-	if err != nil {
-		return Generated{}, err
-	}
-	publicCommittee = certified.Committee
+	publicCommittee := certified.Committee
 	current, err := mix.Encrypt(publicCommittee.PublicKey, plainCells)
 	if err != nil {
 		return Generated{}, err
@@ -234,7 +277,7 @@ func Generate(
 		SymbolSize: uint16(encoder.SymbolSize()), OriginalSize: uint32(encoder.OriginalSize()),
 		ContentHash: hex.EncodeToString(root[:]), PublisherKey: base64.StdEncoding.EncodeToString(publisher),
 		ObjectSignature: base64.StdEncoding.EncodeToString(objectSignature),
-		DKGCertificate: certificate, MixRounds: rounds,
+		DKGCertificate:  certificate, MixRounds: rounds,
 	}
 	descriptor, err = SignDescriptor(descriptor, authority)
 	if err != nil {

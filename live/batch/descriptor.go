@@ -79,33 +79,33 @@ type MixRoundFile struct {
 }
 
 type Descriptor struct {
-	Version            string            `json:"version"`
-	NetworkID          string            `json:"network_id"`
-	TopologyEpoch      uint64            `json:"topology_epoch"`
-	TopologyDigest     string            `json:"topology_digest"`
-	StreamID           string            `json:"stream_id"`
-	BatchSize          uint16            `json:"batch_size"`
-	Generation         string            `json:"generation"`
-	K                  uint16            `json:"k"`
-	SymbolSize         uint16            `json:"symbol_size"`
-	OriginalSize       uint32            `json:"original_size"`
-	ContentHash        string            `json:"content_hash"`
-	PublisherKey       string            `json:"publisher_key"`
-	ObjectSignature    string            `json:"object_signature"`
+	Version            string                `json:"version"`
+	NetworkID          string                `json:"network_id"`
+	TopologyEpoch      uint64                `json:"topology_epoch"`
+	TopologyDigest     string                `json:"topology_digest"`
+	StreamID           string                `json:"stream_id"`
+	BatchSize          uint16                `json:"batch_size"`
+	Generation         string                `json:"generation"`
+	K                  uint16                `json:"k"`
+	SymbolSize         uint16                `json:"symbol_size"`
+	OriginalSize       uint32                `json:"original_size"`
+	ContentHash        string                `json:"content_hash"`
+	PublisherKey       string                `json:"publisher_key"`
+	ObjectSignature    string                `json:"object_signature"`
 	DKGCertificate     committee.Certificate `json:"dkg_certificate"`
-	MixRounds          []MixRoundFile    `json:"mix_rounds"`
-	AuthoritySignature string            `json:"authority_signature"`
+	MixRounds          []MixRoundFile        `json:"mix_rounds"`
+	AuthoritySignature string                `json:"authority_signature"`
 }
 
 type VerifiedDescriptor struct {
-	Descriptor Descriptor
-	Stream     hop.StreamID
-	Generation rlnc.GenerationID
-	Root       [32]byte
-	Publisher  ed25519.PublicKey
-	Signature  []byte
-	Committee  mix.ThresholdCommittee
-	Transcript mix.DKGTranscript
+	Descriptor  Descriptor
+	Stream      hop.StreamID
+	Generation  rlnc.GenerationID
+	Root        [32]byte
+	Publisher   ed25519.PublicKey
+	Signature   []byte
+	Committee   mix.ThresholdCommittee
+	Transcript  mix.DKGTranscript
 	Certificate committee.Verified
 }
 
