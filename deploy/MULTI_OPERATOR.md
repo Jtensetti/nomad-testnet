@@ -28,6 +28,58 @@ directed hop keys locally via X25519+HKDF; the coordinator never handles a
 pairwise MAC key. Run `nomad-operator verify` against the final topology before
 starting either process.
 
+Each operator runs locally (example A):
+
+```bash
+install -d -m 0700 /var/lib/nomad/ceremony
+nomad-operator init \
+  --id=operator-a \
+  --endpoint=203.0.113.10:4200 \
+  --partial-endpoint=https://operator-a.example:4300 \
+  --secret=/var/lib/nomad/ceremony/node-secrets.json \
+  --enrollment=/var/lib/nomad/ceremony/enrollment.json
+```
+
+The coordinator collects only the public enrollment files and publishes the
+draft:
+
+```bash
+nomad-topology draft \
+  --network-id=nomad-live \
+  --epoch=1 \
+  --cell-interval-ms=50 \
+  --enrollments=operator-a.json,operator-b.json,operator-c.json \
+  --out=topology-draft.json
+```
+
+After independently comparing the draft digest and reviewing every field, each
+operator returns an attestation:
+
+```bash
+nomad-operator attest \
+  --secret=/var/lib/nomad/ceremony/node-secrets.json \
+  --draft=topology-draft.json \
+  --out=operator-a.attestation.json
+```
+
+The authority key is generated once per authority lifecycle with
+`nomad-topology authority-init`. The coordinator then finalizes the epoch:
+
+```bash
+nomad-topology finalize \
+  --draft=topology-draft.json \
+  --attestations=operator-a.attestation.json,operator-b.attestation.json,operator-c.attestation.json \
+  --authority-private=authority.key \
+  --out=topology.json
+
+nomad-operator verify \
+  --secret=/var/lib/nomad/ceremony/node-secrets.json \
+  --topology=topology.json \
+  --authority-key=authority.pub
+```
+
+Compare the reported topology digest out of band before opening the epoch.
+
 The bootstrap command in this repository is a ceremony harness. For a real
 operator set, run the authenticated DKG as an independently witnessed epoch
 ceremony, deliver each output share over that operator's administrative channel,

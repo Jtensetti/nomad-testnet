@@ -48,8 +48,18 @@ jobs:
             exit 1
           fi
       - run: go test -race ./...
-      - run: ./scripts/ceremony-e2e.sh
+      - name: Run independent operator ceremony
+        env:
+          NOMAD_CEREMONY_EVIDENCE: runtime/evidence/operator-ceremony.json
+        run: ./scripts/ceremony-e2e.sh
       - run: go vet ./...
+      - name: Upload operator ceremony evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operator-ceremony-evidence
+          path: runtime/evidence/operator-ceremony.json
+          if-no-files-found: warn
 
   live-compose:
     needs: unit
@@ -83,7 +93,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: live-fabric-evidence
-          path: evidence
+          path: evidence/fabric
+      - uses: actions/download-artifact@v4
+        with:
+          name: operator-ceremony-evidence
+          path: evidence/ceremony
       - name: Build commit-addressed operator bundle
         env:
           CGO_ENABLED: 0

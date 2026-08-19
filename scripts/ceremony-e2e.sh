@@ -71,4 +71,43 @@ for operator in a b c; do
         >"$ceremony_root/operator-$operator/verify-result.json"
 done
 
+if [ -n "${NOMAD_CEREMONY_EVIDENCE:-}" ]; then
+    evidence_parent=$(dirname -- "$NOMAD_CEREMONY_EVIDENCE")
+    mkdir -p "$evidence_parent"
+    python3 - "$ceremony_root" >"$NOMAD_CEREMONY_EVIDENCE" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+draft = json.loads((root / "public/draft-result.json").read_text())
+finalized = json.loads((root / "public/finalize-result.json").read_text())
+verified = [
+    json.loads((root / f"operator-{operator}/verify-result.json").read_text())
+    for operator in "abc"
+]
+digests = {result["topology_digest"] for result in verified}
+if len(digests) != 1:
+    raise SystemExit("operators derived configuration from different topologies")
+topology_bytes = (root / "public/topology.json").read_bytes()
+evidence = {
+    "version": "nomad-operator-ceremony-evidence-v1",
+    "network_id": finalized["network_id"],
+    "epoch": finalized["epoch"],
+    "draft_digest": draft["draft_digest"],
+    "topology_digest": next(iter(digests)),
+    "topology_sha256": hashlib.sha256(topology_bytes).hexdigest(),
+    "operators": sorted(result["operator_id"] for result in verified),
+    "derived_outgoing_counts": {
+        result["operator_id"]: result["outgoing"] for result in verified
+    },
+    "derived_incoming_counts": {
+        result["operator_id"]: result["incoming"] for result in verified
+    },
+}
+print(json.dumps(evidence, indent=2, sort_keys=True))
+PY
+fi
+
 echo "independent operator topology ceremony passed"

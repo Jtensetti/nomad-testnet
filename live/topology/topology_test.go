@@ -96,8 +96,25 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 	if verifiedA.OutboundKeys[1] != verifiedB.InboundKeys[0] {
 		t.Fatal("operators derived different keys for the same directed hop")
 	}
+	reverseA, err := deriveMACKey(verified, kexKeys["operator-a"], verified.Document.Operators[1], verified.Document.Operators[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	reverseB, err := deriveMACKey(verified, kexKeys["operator-b"], verified.Document.Operators[1], verified.Document.Operators[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reverseA != reverseB || reverseA == verifiedA.OutboundKeys[1] {
+		t.Fatal("directed hop KDF does not agree or does not separate directions")
+	}
 	if bytes.Contains(secretBytesA, []byte("outbound_keys")) || bytes.Contains(secretBytesA, []byte("inbound_keys")) {
 		t.Fatal("serialized operator secrets contain centrally distributed peer keys")
+	}
+	wrongKEX := secretsA
+	wrongKEX.KEXPrivate = secretsB.KEXPrivate
+	wrongKEXBytes, _ := EncodeSecrets(wrongKEX)
+	if _, err := VerifySecrets(wrongKEXBytes, verified); err == nil {
+		t.Fatal("operator secret with a mismatched key-agreement key was accepted")
 	}
 
 	tampered := signed
@@ -110,5 +127,25 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 	attestationTamper.Operators[1].KEXKey = attestationTamper.Operators[2].KEXKey
 	if _, err := Finalize(attestationTamper, authorityPrivate); err == nil {
 		t.Fatal("authority finalized a topology changed after operator attestation")
+	}
+	disconnected := document
+	disconnected.Operators = append([]Operator(nil), document.Operators...)
+	disconnected.Operators[0].PeerPlan = []uint16{1}
+	disconnected.Operators[1].PeerPlan = []uint16{0}
+	disconnected.Operators[2].PeerPlan = []uint16{0}
+	if err := ValidateDraft(disconnected); err == nil {
+		t.Fatal("non-strongly-connected topology draft was accepted")
+	}
+	duplicatePeer := document
+	duplicatePeer.Operators = append([]Operator(nil), document.Operators...)
+	duplicatePeer.Operators[0].PeerPlan = []uint16{1, 1}
+	if err := ValidateDraft(duplicatePeer); err == nil {
+		t.Fatal("duplicate peer slot was accepted")
+	}
+	lowOrderKEX := document
+	lowOrderKEX.Operators = append([]Operator(nil), document.Operators...)
+	lowOrderKEX.Operators[0].KEXKey = base64.StdEncoding.EncodeToString(make([]byte, 32))
+	if err := ValidateDraft(lowOrderKEX); err == nil {
+		t.Fatal("non-contributory X25519 public key was accepted")
 	}
 }

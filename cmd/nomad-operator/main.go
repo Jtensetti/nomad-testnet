@@ -76,6 +76,7 @@ func initialize(arguments []string) error {
 		return err
 	}
 	if err := writeNew(*enrollmentPath, enrollmentBytes, 0o644); err != nil {
+		_ = os.Remove(*secretPath)
 		return err
 	}
 	return json.NewEncoder(os.Stdout).Encode(struct {
@@ -148,10 +149,11 @@ func verify(arguments []string) error {
 		return err
 	}
 	return json.NewEncoder(os.Stdout).Encode(struct {
-		OperatorID string `json:"operator_id"`
-		Outgoing   int    `json:"outgoing"`
-		Incoming   int    `json:"incoming"`
-	}{secrets.Operator.ID, len(secrets.OutboundKeys), len(secrets.InboundKeys)})
+		OperatorID     string `json:"operator_id"`
+		TopologyDigest string `json:"topology_digest"`
+		Outgoing       int    `json:"outgoing"`
+		Incoming       int    `json:"incoming"`
+	}{secrets.Operator.ID, fmt.Sprintf("%x", network.Digest), len(secrets.OutboundKeys), len(secrets.InboundKeys)})
 }
 
 func readBoundedRegular(path string) ([]byte, error) {

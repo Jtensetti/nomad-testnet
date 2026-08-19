@@ -299,6 +299,12 @@ func validateDocument(document Document, now time.Time) error {
 	partialEndpoints := make(map[string]struct{}, len(document.Operators))
 	identityKeys := make(map[string]struct{}, len(document.Operators))
 	kexKeys := make(map[string]struct{}, len(document.Operators))
+	probeBytes := make([]byte, 32)
+	probeBytes[0] = 1
+	probePrivate, err := ecdh.X25519().NewPrivateKey(probeBytes)
+	if err != nil {
+		return errors.New("initialize key-agreement validation")
+	}
 	for index, operator := range document.Operators {
 		if operator.Index != uint16(index) {
 			return errors.New("operators must have contiguous ordered indexes")
@@ -339,19 +345,59 @@ func validateDocument(document Document, now time.Time) error {
 		if err != nil {
 			return fmt.Errorf("operator %s has invalid key-agreement key", operator.ID)
 		}
-		if _, err := ecdh.X25519().NewPublicKey(encodedKEX); err != nil {
+		publicKEX, err := ecdh.X25519().NewPublicKey(encodedKEX)
+		if err != nil {
 			return fmt.Errorf("operator %s has invalid key-agreement key", operator.ID)
+		}
+		if _, err := probePrivate.ECDH(publicKEX); err != nil {
+			return fmt.Errorf("operator %s has a non-contributory key-agreement key", operator.ID)
 		}
 		if _, exists := kexKeys[operator.KEXKey]; exists {
 			return fmt.Errorf("duplicate operator key-agreement key for %s", operator.ID)
 		}
 		kexKeys[operator.KEXKey] = struct{}{}
-		if len(operator.PeerPlan) == 0 || len(operator.PeerPlan) > 256 {
+		if len(operator.PeerPlan) == 0 || len(operator.PeerPlan) >= len(document.Operators) {
 			return fmt.Errorf("operator %s has invalid peer plan length", operator.ID)
 		}
+		peerSlots := make(map[uint16]struct{}, len(operator.PeerPlan))
 		for _, peer := range operator.PeerPlan {
 			if int(peer) >= len(document.Operators) || peer == operator.Index {
 				return fmt.Errorf("operator %s has invalid peer slot %d", operator.ID, peer)
+			}
+			if _, exists := peerSlots[peer]; exists {
+				return fmt.Errorf("operator %s has duplicate peer slot %d", operator.ID, peer)
+			}
+			peerSlots[peer] = struct{}{}
+		}
+	}
+	return validateStrongConnectivity(document)
+}
+
+func validateStrongConnectivity(document Document) error {
+	forward := make([][]uint16, len(document.Operators))
+	reverse := make([][]uint16, len(document.Operators))
+	for _, operator := range document.Operators {
+		forward[operator.Index] = append([]uint16(nil), operator.PeerPlan...)
+		for _, peer := range operator.PeerPlan {
+			reverse[peer] = append(reverse[peer], operator.Index)
+		}
+	}
+	for _, graph := range [][][]uint16{forward, reverse} {
+		seen := make([]bool, len(document.Operators))
+		stack := []uint16{0}
+		for len(stack) > 0 {
+			last := len(stack) - 1
+			current := stack[last]
+			stack = stack[:last]
+			if seen[current] {
+				continue
+			}
+			seen[current] = true
+			stack = append(stack, graph[current]...)
+		}
+		for _, reachable := range seen {
+			if !reachable {
+				return errors.New("operator peer plan must be strongly connected")
 			}
 		}
 	}
