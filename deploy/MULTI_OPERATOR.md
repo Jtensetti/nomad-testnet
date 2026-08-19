@@ -10,7 +10,7 @@ Every operator receives only:
 
 - the authority-signed `topology.json` and authority public key;
 - its own `node-secrets.json`, containing only its Ed25519 identity and
-  epoch-scoped X25519 private key;
+  epoch-scoped X25519 and dedicated DKG private keys;
 - its own `threshold-share.json` from the epoch DKG;
 - its own raw-cache and sequence-state volumes.
 
@@ -36,6 +36,7 @@ nomad-operator init \
   --id=operator-a \
   --endpoint=203.0.113.10:4200 \
   --partial-endpoint=https://operator-a.example:4300 \
+  --dkg-endpoint=https://operator-a.example:4400 \
   --secret=/var/lib/nomad/ceremony/node-secrets.json \
   --enrollment=/var/lib/nomad/ceremony/enrollment.json
 ```
@@ -48,6 +49,9 @@ nomad-topology draft \
   --network-id=nomad-live \
   --epoch=1 \
   --cell-interval-ms=50 \
+  --dkg-start-delay=10m \
+  --dkg-phase-duration=2m \
+  --dkg-threshold=2 \
   --enrollments=operator-a.json,operator-b.json,operator-c.json \
   --out=topology-draft.json
 ```
@@ -80,11 +84,30 @@ nomad-operator verify \
 
 Compare the reported topology digest out of band before opening the epoch.
 
-The bootstrap command in this repository is a ceremony harness. For a real
-operator set, run the authenticated DKG as an independently witnessed epoch
-ceremony, deliver each output share over that operator's administrative channel,
-and erase the ceremony host. Do not copy the Compose bootstrap volume layout to
-production.
+Before the signed DKG start time, every administrator starts exactly one local
+ceremony process. The state directory must be empty and private; an interrupted
+session is deliberately non-resumable and requires a newly attested topology
+with a fresh session ID:
+
+```bash
+install -d -m 0700 /var/lib/nomad/dkg /run/nomad
+nomad-dkg \
+  --topology=/etc/nomad/topology.json \
+  --authority-key=/etc/nomad/authority.pub \
+  --secrets=/var/lib/nomad/ceremony/node-secrets.json \
+  --listen=:4400 \
+  --state=/var/lib/nomad/dkg \
+  --share-out=/run/nomad/threshold-share.json \
+  --certificate-out=/etc/nomad/dkg-certificate.json \
+  --tls-certificate=/etc/nomad/tls/dkg.crt \
+  --tls-private-key=/etc/nomad/tls/dkg.key
+```
+
+All configured members must land in QUAL and every member must sign the same
+manifest before any certificate activates. Identical message retries are
+idempotent; a different message from the same sender and phase is recorded as
+equivocation and aborts the ceremony. Compare the reported certificate digest
+out of band. No coordinator ever receives a threshold secret.
 
 ## Network prerequisites
 

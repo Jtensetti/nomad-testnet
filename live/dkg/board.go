@@ -170,6 +170,18 @@ func (b *Board) Handler() http.Handler {
 }
 
 func (b *Board) deliver(encoded []byte) error {
+	preview, _, err := DecodeEnvelope(encoded, b.network)
+	if err != nil {
+		return err
+	}
+	phaseStart, phaseEnd, err := b.phaseWindow(preview.Phase)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	if now.Before(phaseStart) || !now.Before(phaseEnd) {
+		return fmt.Errorf("DKG %s message arrived outside its signed phase window", preview.Phase)
+	}
 	envelope, payload, fresh, err := b.store.Accept(encoded)
 	if err != nil || !fresh {
 		return err
@@ -246,25 +258,30 @@ func (b *Board) sendUntilDeadline(peer topology.Operator, phase Phase, encoded [
 }
 
 func (b *Board) phaseDeadline(phase Phase) (time.Time, error) {
+	_, deadline, err := b.phaseWindow(phase)
+	return deadline, err
+}
+
+func (b *Board) phaseWindow(phase Phase) (time.Time, time.Time, error) {
 	start, err := time.Parse(time.RFC3339, b.network.Document.DKG.StartAt)
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, time.Time{}, err
 	}
 	duration := time.Duration(b.network.Document.DKG.PhaseDurationMillis) * time.Millisecond
-	multiplier := 0
+	offset := 0
 	switch phase {
 	case DealPhase:
-		multiplier = 1
 	case ResponsePhase:
-		multiplier = 2
+		offset = 1
 	case JustificationPhase:
-		multiplier = 3
+		offset = 2
 	case ResultPhase:
-		multiplier = 4
+		offset = 3
 	default:
-		return time.Time{}, errors.New("unknown DKG phase")
+		return time.Time{}, time.Time{}, errors.New("unknown DKG phase")
 	}
-	return start.Add(time.Duration(multiplier) * duration), nil
+	phaseStart := start.Add(time.Duration(offset) * duration)
+	return phaseStart, phaseStart.Add(duration), nil
 }
 
 func (b *Board) WaitForResults(ctx context.Context) ([]storedMessage, error) {

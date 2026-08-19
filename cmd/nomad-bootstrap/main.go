@@ -37,7 +37,7 @@ func run() error {
 	operatorIDsValue := flag.String("operators", "operator-a,operator-b,operator-c", "comma-separated operator IDs")
 	endpointsValue := flag.String("endpoints", "operator-a:4200,operator-b:4200,operator-c:4200", "comma-separated signed UDP endpoints")
 	partialEndpointsValue := flag.String("partial-endpoints", "http://share-a:4300,http://share-b:4300,http://share-c:4300", "comma-separated public partial-proof endpoints")
-	dkgEndpointsValue := flag.String("dkg-endpoints", "http://dkg-a:4400,http://dkg-b:4400,http://dkg-c:4400", "comma-separated inter-operator DKG endpoints")
+	dkgEndpointsValue := flag.String("dkg-endpoints", "https://dkg-a:4400,https://dkg-b:4400,https://dkg-c:4400", "comma-separated inter-operator DKG endpoints")
 	cellInterval := flag.Uint("cell-interval-ms", 50, "public fixed cell interval")
 	validFor := flag.Duration("valid-for", 24*time.Hour, "topology validity period")
 	flag.Parse()

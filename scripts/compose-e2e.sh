@@ -42,9 +42,11 @@ for service in operator-a operator-b operator-c share-a share-b share-c partial-
 done
 for service in operator-a operator-b operator-c; do
     docker compose -p "$project_name" -f "$compose_file" exec -T "$service" \
-        grep -Fq '"version": "nomad-operator-secrets-v2"' /operator/node-secrets.json
+        grep -Fq '"version": "nomad-operator-secrets-v3"' /operator/node-secrets.json
     docker compose -p "$project_name" -f "$compose_file" exec -T "$service" \
         grep -Fq '"kex_private":' /operator/node-secrets.json
+    docker compose -p "$project_name" -f "$compose_file" exec -T "$service" \
+        grep -Fq '"dkg_private":' /operator/node-secrets.json
     if docker compose -p "$project_name" -f "$compose_file" exec -T "$service" \
         grep -Eq 'outbound_keys|inbound_keys' /operator/node-secrets.json; then
         echo "$service received centrally distributed peer keys" >&2

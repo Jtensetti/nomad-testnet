@@ -20,9 +20,11 @@ sees no operator private key and distributes no pairwise MAC secret.
 ```bash
 nomad-operator init --id=operator-a --endpoint=host-a:4200 \
   --partial-endpoint=https://host-a:4300 \
+  --dkg-endpoint=https://host-a:4400 \
   --secret=node-secrets.json --enrollment=enrollment.json
 
 nomad-topology draft --network-id=nomad-live --epoch=1 \
+  --dkg-start-delay=10m --dkg-phase-duration=2m --dkg-threshold=2 \
   --enrollments=a.json,b.json,c.json --out=topology-draft.json
 
 nomad-operator attest --secret=node-secrets.json \
@@ -31,7 +33,10 @@ nomad-operator attest --secret=node-secrets.json \
 
 After collecting exactly one attestation from every member, the authority uses
 `nomad-topology finalize`; every operator runs `nomad-operator verify` before
-starting its node. The complete runbook is in `deploy/MULTI_OPERATOR.md`.
+starting its node. Every operator then runs `nomad-dkg` before the signed start
+time. The command exchanges only signed public ceremony traffic and writes one
+operator-local threshold share plus the identical all-operator-certified public
+committee certificate. The complete runbook is in `deploy/MULTI_OPERATOR.md`.
 
 ## Run the live network
 

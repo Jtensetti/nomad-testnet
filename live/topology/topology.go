@@ -17,7 +17,6 @@ import (
 	"os"
 	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
@@ -440,7 +439,7 @@ func validCeremonyURL(endpoint *url.URL) bool {
 		return false
 	}
 	host := endpoint.Hostname()
-	if host == "localhost" || !strings.Contains(host, ".") {
+	if host == "localhost" {
 		return true
 	}
 	ip := net.ParseIP(host)
