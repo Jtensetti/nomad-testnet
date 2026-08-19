@@ -186,8 +186,15 @@ func sequenceChallenges(s *edwards25519.SuiteEd25519, pub PublicKey, in, out *Ba
 // of Neff's verifiable ElGamal sequence shuffle. Every chunk of a cell follows
 // the same secret permutation and receives fresh ElGamal randomness.
 func ShuffleAndProve(pub PublicKey, in *Batch) (*Batch, []byte, error) {
+	return shuffleAndProveWithDomain(pub, in, proofDomain)
+}
+
+func shuffleAndProveWithDomain(pub PublicKey, in *Batch, domain string) (*Batch, []byte, error) {
 	if err := validateBatch(in); err != nil {
 		return nil, nil, err
+	}
+	if domain == "" {
+		return nil, nil, errors.New("shuffle proof domain is required")
 	}
 	s := newSuite()
 	h, err := publicPoint(s, pub)
@@ -204,7 +211,7 @@ func ShuffleAndProve(pub PublicKey, in *Batch) (*Batch, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	encodedProof, err := proof.HashProve(s, proofDomain, prover)
+	encodedProof, err := proof.HashProve(s, domain, prover)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -212,8 +219,15 @@ func ShuffleAndProve(pub PublicKey, in *Batch) (*Batch, []byte, error) {
 }
 
 func VerifyShuffle(pub PublicKey, in, out *Batch, encodedProof []byte) error {
+	return verifyShuffleWithDomain(pub, in, out, encodedProof, proofDomain)
+}
+
+func verifyShuffleWithDomain(pub PublicKey, in, out *Batch, encodedProof []byte, domain string) error {
 	if len(encodedProof) == 0 {
 		return errors.New("shuffle proof is empty")
+	}
+	if domain == "" {
+		return errors.New("shuffle proof domain is required")
 	}
 	if err := validateBatch(in); err != nil {
 		return fmt.Errorf("input batch: %w", err)
@@ -235,7 +249,7 @@ func VerifyShuffle(pub PublicKey, in, out *Batch, encodedProof []byte) error {
 	}
 	xUp, yUp, xDown, yDown := kybershuffle.GetSequenceVerifiable(s, in.x, in.y, out.x, out.y, challenges)
 	verifier := kybershuffle.Verifier(s, nil, h, xUp, yUp, xDown, yDown)
-	if err := proof.HashVerify(s, proofDomain, verifier, encodedProof); err != nil {
+	if err := proof.HashVerify(s, domain, verifier, encodedProof); err != nil {
 		return fmt.Errorf("invalid shuffle proof: %w", err)
 	}
 	return nil

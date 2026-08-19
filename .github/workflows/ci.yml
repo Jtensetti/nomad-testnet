@@ -2,31 +2,57 @@ name: ci
 on: [push, pull_request]
 permissions:
   contents: read
+
 jobs:
-  test:
+  unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with: {go-version: '1.25.x'}
       - name: Verify pinned component snapshots
         run: sha256sum --check --quiet COMPONENTS.sha256
-      - name: Verify module snapshot is tidy
+      - name: Verify generated formatting and module graph
         run: |
+          gofmt -w .
           go mod tidy
-          git diff --exit-code -- go.mod go.sum
-          test -z "$(git status --porcelain -- go.mod go.sum)"
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
       - name: Enforce Selection Firewall dependency direction
         run: |
-          network_deps="$(go list -deps github.com/Jtensetti/nomad-constant-rate-fabric/fabric github.com/Jtensetti/nomad-selection-firewall/firewall github.com/Jtensetti/nomad-anytrust-mix-sim/mix)"
+          network_deps="$(go list -deps \
+            github.com/Jtensetti/nomad-testnet/live/node \
+            github.com/Jtensetti/nomad-testnet/live/hop \
+            github.com/Jtensetti/nomad-testnet/live/bundle \
+            github.com/Jtensetti/nomad-testnet/live/rawcache \
+            github.com/Jtensetti/nomad-testnet/live/topology)"
           if printf '%s\n' "$network_deps" | grep -Eq 'nomad-(semantic-basins|local-reconstruction)'; then
-            echo "network domain imports private selection code"
+            echo "network domain imports private selection or reconstruction code"
             exit 1
           fi
-          private_deps="$(go list -deps github.com/Jtensetti/nomad-semantic-basins/basin github.com/Jtensetti/nomad-local-reconstruction/reconstruct)"
-          if printf '%s\n' "$private_deps" | grep -Eq 'nomad-(constant-rate-fabric|selection-firewall|anytrust-mix-sim)'; then
-            echo "private domain imports network-control code"
+          materializer_imports="$(go list -f '{{join .Imports "\n"}}' github.com/Jtensetti/nomad-testnet/live/materialize)"
+          if printf '%s\n' "$materializer_imports" | grep -Eq '(^net$|nomad-testnet/live/node|nomad-constant-rate-fabric|nomad-selection-firewall|nomad-semantic-basins)'; then
+            echo "materializer directly imports network control or query code"
             exit 1
           fi
       - run: go test -race ./...
       - run: go vet ./...
+
+  live-compose:
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install packet-capture verifier
+        run: command -v tcpdump >/dev/null || (sudo apt-get update && sudo apt-get install -y tcpdump)
+      - name: Run isolated multi-process fabric-to-cache network
+        run: ./scripts/compose-e2e.sh
+      - name: Upload packet and process evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-fabric-evidence
+          path: runtime/evidence/
+          if-no-files-found: warn

@@ -1,0 +1,186 @@
+name: nomad-live
+
+x-locked-service: &locked-service
+  build:
+    context: ..
+  image: nomad-live:testnet
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 128
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=32m
+  restart: unless-stopped
+  networks: [fabric]
+
+services:
+  bootstrap:
+    <<: *locked-service
+    restart: "no"
+    command:
+      - nomad-bootstrap
+      - --out=/runtime
+      - --envelope=/fixture/demo.nomadobject
+      - --cell-interval-ms=50
+    volumes:
+      - ./fixture/demo.nomadobject:/fixture/demo.nomadobject:ro
+      - public-config:/runtime/public
+      - operator-a-secret:/runtime/operators/operator-a
+      - operator-b-secret:/runtime/operators/operator-b
+      - operator-c-secret:/runtime/operators/operator-c
+
+  operator-a:
+    <<: *locked-service
+    command:
+      - nomad-node
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --secrets=/operator/node-secrets.json
+      - --listen=:4200
+      - --cache=/cache
+      - --state=/state/sequence
+      - --health=/state/health.json
+      - --seed=/config/seed.json
+      - --cache-sweep=10s
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+    volumes:
+      - public-config:/config:ro
+      - operator-a-secret:/operator:ro
+      - raw-a:/cache
+      - state-a:/state
+    healthcheck:
+      test: [CMD, test, -s, /state/health.json]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+
+  operator-b:
+    <<: *locked-service
+    command:
+      - nomad-node
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --secrets=/operator/node-secrets.json
+      - --listen=:4200
+      - --cache=/cache
+      - --state=/state/sequence
+      - --health=/state/health.json
+      - --cache-sweep=10s
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+    volumes:
+      - public-config:/config:ro
+      - operator-b-secret:/operator:ro
+      - raw-b:/cache
+      - state-b:/state
+    healthcheck:
+      test: [CMD, test, -s, /state/health.json]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+
+  operator-c:
+    <<: *locked-service
+    command:
+      - nomad-node
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --secrets=/operator/node-secrets.json
+      - --listen=:4200
+      - --cache=/cache
+      - --state=/state/sequence
+      - --health=/state/health.json
+      - --cache-sweep=10s
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+    volumes:
+      - public-config:/config:ro
+      - operator-c-secret:/operator:ro
+      - raw-c:/cache
+      - state-c:/state
+    healthcheck:
+      test: [CMD, test, -s, /state/health.json]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+
+  share-a:
+    <<: *locked-service
+    command: &share-command
+      - nomad-share
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --descriptor=/config/descriptor.json
+      - --share=/operator/threshold-share.json
+      - --cache=/cache
+      - --out=/partials
+      - --interval=1s
+    depends_on:
+      operator-a: {condition: service_healthy}
+    volumes:
+      - public-config:/config:ro
+      - operator-a-secret:/operator:ro
+      - raw-a:/cache:ro
+      - partials:/partials
+
+  share-b:
+    <<: *locked-service
+    command: *share-command
+    depends_on:
+      operator-b: {condition: service_healthy}
+    volumes:
+      - public-config:/config:ro
+      - operator-b-secret:/operator:ro
+      - raw-b:/cache:ro
+      - partials:/partials
+
+  share-c:
+    <<: *locked-service
+    command: *share-command
+    depends_on:
+      operator-c: {condition: service_healthy}
+    volumes:
+      - public-config:/config:ro
+      - operator-c-secret:/operator:ro
+      - raw-c:/cache:ro
+      - partials:/partials
+
+  materializer:
+    <<: *locked-service
+    command:
+      - nomad-materializer
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --descriptor=/config/descriptor.json
+      - --cache=/cache
+      - --partials=/partials
+      - --out=/verified
+      - --interval=1s
+    depends_on:
+      operator-c: {condition: service_healthy}
+      share-a: {condition: service_started}
+      share-b: {condition: service_started}
+      share-c: {condition: service_started}
+    volumes:
+      - public-config:/config:ro
+      - raw-c:/cache:ro
+      - partials:/partials:ro
+      - ${NOMAD_VERIFIED_CACHE:-./runtime/verified}:/verified
+
+networks:
+  fabric:
+    internal: true
+
+volumes:
+  public-config:
+  operator-a-secret:
+  operator-b-secret:
+  operator-c-secret:
+  raw-a:
+  raw-b:
+  raw-c:
+  state-a:
+  state-b:
+  state-c:
+  partials:
