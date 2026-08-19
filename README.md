@@ -1,8 +1,44 @@
-# Nomad Testnet
+# Nomad live testnet
 
-Runnable integration harness for the Nomad v0.1 research reference stack.
+Nomad's reader-side reference deployment. It runs three separately keyed
+operator processes, emits authenticated 1200-byte UDP cells on a signed fixed
+cadence, stores only valid encrypted work, obtains public threshold partials on
+an independent fixed schedule, and materializes a signed object for Nomad
+Browser without any query-triggered network action.
 
-## What the composed test does
+This repository now contains two harnesses:
+
+- `go run ./cmd/nomad-testnet` is the deterministic protocol integration test.
+- `deploy/compose.yaml` is the live fabric-to-cache deployment and release gate.
+
+## Run the live network
+
+Docker Compose supplies the reproducible single-administrator deployment:
+
+```bash
+./scripts/compose-e2e.sh
+```
+
+The script builds the locked-down image, bootstraps a signed epoch, starts three
+UDP nodes, three threshold-share servers, one public-cadence partial fetcher and
+one networkless materializer. It waits for the exact verified browser object,
+checks every process, records packet/process evidence, and rejects a capture
+whose cells are not 1200 bytes or whose cadence/topology is wrong.
+
+To feed a locally installed Nomad Browser directly, set its existing object
+cache as the materializer destination before starting Compose:
+
+```bash
+export NOMAD_VERIFIED_CACHE="$HOME/Library/Containers/io.nomad.browser/Data/Library/Application Support/NomadBrowser/objects"
+docker compose -f deploy/compose.yaml up --build
+```
+
+Docker Desktop must be allowed to mount that directory. The browser performs
+only local cache reads and signature verification; it has no network
+entitlement. See `deploy/MULTI_OPERATOR.md` for deployment across independently
+controlled hosts.
+
+## What the deterministic harness does
 
 1. Creates canonical content and a signed object manifest.
 2. Produces fixed 504-byte RLNC generation packets over GF(2^8).
@@ -29,14 +65,14 @@ cannot check them out. `components/` is a generated source snapshot used only
 for integration CI. `COMPONENTS.lock` records the exact source commit for every
 snapshot. Component changes must update both the snapshot and lock entry.
 
-## Security status
+## Live security status
 
-**Research software, not an audited anonymity network.** The shuffle now
-preserves payloads and carries a Kyber Neff proof, but the test profile still
-uses a single decryption key. Production gates include independent
-cryptographic review, threshold key generation/decryption, committee identity
-and accountability, replay/drop/delay handling, WAN/NAT/Sybil work, a
-publication airlock, and browser-engine isolation.
+**Live testnet software, not yet an audited production anonymity network.** The
+live path uses authenticated Pedersen DKG output, 2-of-3 proved threshold
+decryption and one verified Neff shuffle per operator. Its one-host Compose
+profile demonstrates process, key and cache separation; it cannot prove that
+three organizations independently administer the operators. The exact release
+gate and remaining external production requirements are in `LIVE_DOD.md`.
 
 The lexical hashing embedder is an offline development baseline, not a semantic
 model. A real embedding model must remain local.
@@ -44,5 +80,5 @@ model. A real embedding model must remain local.
 ```bash
 go test -race ./...
 go vet ./...
-go run ./cmd/nomad-testnet
+./scripts/compose-e2e.sh
 ```

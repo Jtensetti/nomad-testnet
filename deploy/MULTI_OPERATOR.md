@@ -1,0 +1,109 @@
+# Multi-operator deployment
+
+The live binaries are deliberately deployable without Docker Compose. Compose
+is the reproducible one-host acceptance profile; a real committee places each
+operator on separately administered infrastructure.
+
+## Trust and ownership split
+
+Every operator receives only:
+
+- the authority-signed `topology.json` and authority public key;
+- its own `node-secrets.json`, Ed25519 identity secret and directed hop keys;
+- its own `threshold-share.json` from the epoch DKG;
+- its own raw-cache and sequence-state volumes.
+
+No operator receives another operator's secret volume. The reader/materializer
+receives public configuration, one authenticated raw cache and public partial
+proofs; it never receives a threshold secret share or node identity key.
+
+The bootstrap command in this repository is a ceremony harness. For a real
+operator set, run the authenticated DKG as an independently witnessed epoch
+ceremony, deliver each output share over that operator's administrative channel,
+and erase the ceremony host. Do not copy the Compose bootstrap volume layout to
+production.
+
+## Network prerequisites
+
+The signed topology must name stable UDP endpoints for port 4200 and stable
+partial-proof endpoints for port 4300. The current proof service is plain HTTP;
+run both services inside an operator-authenticated tunnel such as WireGuard.
+The inner Nomad datagram HMAC remains mandatory because it binds topology,
+epoch, receiver, sender, batch coordinate and sequence independently of the
+tunnel.
+
+Allow constant-rate UDP between the signed peers. Do not use an autoscaler,
+proxy, retry layer or load balancer that bursts, coalesces, duplicates or
+selects traffic in response to cache demand. Pin each signed endpoint to one
+operator instance for the epoch.
+
+## Per-operator processes
+
+Operator A starts its node with only operator A's files:
+
+```bash
+nomad-node \
+  --topology=/etc/nomad/topology.json \
+  --authority-key=/etc/nomad/authority.pub \
+  --secrets=/run/nomad/node-secrets.json \
+  --listen=:4200 \
+  --cache=/var/lib/nomad/raw \
+  --state=/var/lib/nomad/sequence \
+  --health=/run/nomad/health.json
+
+nomad-share \
+  --topology=/etc/nomad/topology.json \
+  --authority-key=/etc/nomad/authority.pub \
+  --descriptor=/etc/nomad/descriptor.json \
+  --share=/run/nomad/threshold-share.json \
+  --cache=/var/lib/nomad/raw \
+  --out=/var/lib/nomad/partials \
+  --interval=1s \
+  --listen=:4300
+```
+
+Repeat with distinct secrets, storage and hosts for B and C. Run as an
+unprivileged dedicated user with a read-only root filesystem, no Linux
+capabilities, a private temporary directory, an explicit file allowlist and an
+egress policy limited to the signed peers.
+
+## Reader-side processes
+
+The public fetch plan is authority signed and independent of browser activity.
+On a reader host, run:
+
+```bash
+nomad-partial-fetch \
+  --topology=/etc/nomad/topology.json \
+  --authority-key=/etc/nomad/authority.pub \
+  --plan=/etc/nomad/fetch-plan.json \
+  --out=/var/lib/nomad/partials \
+  --interval=1s
+
+nomad-materializer \
+  --topology=/etc/nomad/topology.json \
+  --authority-key=/etc/nomad/authority.pub \
+  --descriptor=/etc/nomad/descriptor.json \
+  --cache=/var/lib/nomad/raw \
+  --partials=/var/lib/nomad/partials \
+  --out=/var/lib/nomad/verified \
+  --interval=1s
+```
+
+The materializer imports no socket package and must have networking disabled at
+the OS/container boundary. Sync or mount `/var/lib/nomad/verified` into the
+Nomad Browser object cache. Cache refresh is periodic and must never be invoked
+by a search event.
+
+## Epoch change and recovery
+
+Topology, hop keys, identity attestations, threshold shares and persistent
+sequence state are one epoch. Rotate all of them together. Never restore old
+sequence state under a current hop key. A lost sequence state requires a fresh
+epoch; an equivocation, invalid share or unexplained drop alarm pauses that
+operator rather than silently changing cadence or routing.
+
+Before admitting an operator set, run the same commit's unit/race/vet checks,
+the Compose end-to-end gate, packet-capture verifier and a WAN fault campaign.
+Record the signed topology digest, image digest, evidence hashes and operator
+sign-offs in the release record.

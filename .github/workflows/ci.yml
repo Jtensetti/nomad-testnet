@@ -18,11 +18,11 @@ jobs:
           gofmt -w cmd live testnet
           go mod tidy
       - name: Export formatted source checkpoint
-        run: tar --exclude=.git --exclude=formatted-source.tgz -czf formatted-source.tgz .
+        run: tar --exclude=.git -czf /tmp/formatted-source.tgz .
       - uses: actions/upload-artifact@v4
         with:
           name: formatted-source
-          path: formatted-source.tgz
+          path: /tmp/formatted-source.tgz
       - name: Enforce Selection Firewall dependency direction
         run: |
           network_deps="$(go list -deps \
