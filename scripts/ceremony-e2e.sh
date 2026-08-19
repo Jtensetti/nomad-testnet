@@ -26,6 +26,7 @@ for operator in a b c; do
         --id="operator-$operator" \
         --endpoint="127.0.0.1:420$index" \
         --partial-endpoint="http://127.0.0.1:430$index" \
+		--dkg-endpoint="http://127.0.0.1:440$index" \
         --secret="$ceremony_root/operator-$operator/node-secrets.json" \
         --enrollment="$ceremony_root/operator-$operator/enrollment.json" \
         >"$ceremony_root/operator-$operator/init.json"

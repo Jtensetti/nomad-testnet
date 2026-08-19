@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"github.com/Jtensetti/nomad-testnet/live/hop"
 	"github.com/Jtensetti/nomad-testnet/live/rawcache"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
@@ -145,6 +146,8 @@ func nodeTestTopology(t *testing.T) (topology.Verified, map[string]ed25519.Priva
 		t.Fatal(err)
 	}
 	identities := make(map[string]ed25519.PrivateKey)
+	dkgSession := [32]byte{1}
+	now := time.Now().UTC().Truncate(time.Second)
 	document := topology.Document{
 		Version: topology.Version, NetworkID: "node-test", Epoch: 7,
 		NotBefore: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
@@ -153,6 +156,7 @@ func nodeTestTopology(t *testing.T) (topology.Verified, map[string]ed25519.Priva
 			CellSize: topology.CellSize, CellIntervalMillis: 10,
 			MaxLatenessMillis: 40, QueueCapacity: 32,
 		},
+		DKG: topology.DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
 		Operators: make([]topology.Operator, 3),
 	}
 	for index := range document.Operators {
@@ -165,12 +169,18 @@ func nodeTestTopology(t *testing.T) (topology.Verified, map[string]ed25519.Priva
 		if err != nil {
 			t.Fatal(err)
 		}
+		dkgPublic, _, err := mix.GenerateDKGIdentity()
+		if err != nil {
+			t.Fatal(err)
+		}
 		identities[id] = privateKey
 		document.Operators[index] = topology.Operator{
 			ID: id, Index: uint16(index), Endpoint: endpoints[index],
 			PartialEndpoint: "http://127.0.0.1:" + []string{"4311", "4312", "4313"}[index],
+			DKGEndpoint:     "http://127.0.0.1:" + []string{"4411", "4412", "4413"}[index],
 			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey),
 			KEXKey:          base64.StdEncoding.EncodeToString(kexKey.PublicKey().Bytes()),
+			DKGIdentityKey:  base64.StdEncoding.EncodeToString(dkgPublic[:]),
 			PeerPlan:        []uint16{uint16((index + 1) % 3)},
 		}
 	}

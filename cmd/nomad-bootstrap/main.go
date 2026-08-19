@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"github.com/Jtensetti/nomad-testnet/live/batch"
 	"github.com/Jtensetti/nomad-testnet/live/bundle"
 	"github.com/Jtensetti/nomad-testnet/live/fetchplan"
@@ -36,6 +37,7 @@ func run() error {
 	operatorIDsValue := flag.String("operators", "operator-a,operator-b,operator-c", "comma-separated operator IDs")
 	endpointsValue := flag.String("endpoints", "operator-a:4200,operator-b:4200,operator-c:4200", "comma-separated signed UDP endpoints")
 	partialEndpointsValue := flag.String("partial-endpoints", "http://share-a:4300,http://share-b:4300,http://share-c:4300", "comma-separated public partial-proof endpoints")
+	dkgEndpointsValue := flag.String("dkg-endpoints", "http://dkg-a:4400,http://dkg-b:4400,http://dkg-c:4400", "comma-separated inter-operator DKG endpoints")
 	cellInterval := flag.Uint("cell-interval-ms", 50, "public fixed cell interval")
 	validFor := flag.Duration("valid-for", 24*time.Hour, "topology validity period")
 	flag.Parse()
@@ -48,8 +50,9 @@ func run() error {
 	operatorIDs := splitList(*operatorIDsValue)
 	endpoints := splitList(*endpointsValue)
 	partialEndpoints := splitList(*partialEndpointsValue)
-	if len(operatorIDs) < 3 || len(operatorIDs) != len(endpoints) || len(operatorIDs) != len(partialEndpoints) {
-		return errors.New("operators, UDP endpoints and partial endpoints must contain the same three-or-more entries")
+	dkgEndpoints := splitList(*dkgEndpointsValue)
+	if len(operatorIDs) < 3 || len(operatorIDs) != len(endpoints) || len(operatorIDs) != len(partialEndpoints) || len(operatorIDs) != len(dkgEndpoints) {
+		return errors.New("operators, UDP endpoints, partial endpoints and DKG endpoints must contain the same three-or-more entries")
 	}
 	if len(operatorIDs) > 64 {
 		return errors.New("at most 64 operators are supported")
@@ -74,6 +77,12 @@ func run() error {
 	}
 	identities := make(map[string]ed25519.PrivateKey, len(operatorIDs))
 	kexKeys := make(map[string]*ecdh.PrivateKey, len(operatorIDs))
+	dkgKeys := make(map[string]mix.DKGPrivateIdentity, len(operatorIDs))
+	dkgSession := [32]byte{}
+	if _, err := rand.Read(dkgSession[:]); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Truncate(time.Second)
 	document := topology.Document{
 		Version: topology.Version, NetworkID: *networkID, Epoch: 1,
 		NotBefore: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
@@ -82,6 +91,7 @@ func run() error {
 			CellSize: topology.CellSize, CellIntervalMillis: uint32(*cellInterval),
 			MaxLatenessMillis: uint32(*cellInterval * 4), QueueCapacity: 256,
 		},
+		DKG: topology.DKGProfile{Threshold: batch.DefaultThreshold, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Add(2 * time.Minute).Format(time.RFC3339), PhaseDurationMillis: 30_000},
 		Operators: make([]topology.Operator, len(operatorIDs)),
 	}
 	for index, id := range operatorIDs {
@@ -93,13 +103,20 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		dkgPublic, dkgPrivate, err := mix.GenerateDKGIdentity()
+		if err != nil {
+			return err
+		}
 		identities[id] = privateKey
 		kexKeys[id] = kexKey
+		dkgKeys[id] = dkgPrivate
 		document.Operators[index] = topology.Operator{
 			ID: id, Index: uint16(index), Endpoint: endpoints[index],
 			PartialEndpoint: partialEndpoints[index],
+			DKGEndpoint:     dkgEndpoints[index],
 			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey),
 			KEXKey:          base64.StdEncoding.EncodeToString(kexKey.PublicKey().Bytes()),
+			DKGIdentityKey:  base64.StdEncoding.EncodeToString(dkgPublic[:]),
 			PeerPlan:        []uint16{uint16((index + 1) % len(operatorIDs))},
 		}
 	}
@@ -115,7 +132,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	secrets, err := buildSecrets(verifiedTopology, identities, kexKeys)
+	secrets, err := buildSecrets(verifiedTopology, identities, kexKeys, dkgKeys)
 	if err != nil {
 		return err
 	}
@@ -191,18 +208,20 @@ func run() error {
 	return json.NewEncoder(os.Stdout).Encode(summary)
 }
 
-func buildSecrets(network topology.Verified, identities map[string]ed25519.PrivateKey, kexKeys map[string]*ecdh.PrivateKey) ([]topology.Secrets, error) {
+func buildSecrets(network topology.Verified, identities map[string]ed25519.PrivateKey, kexKeys map[string]*ecdh.PrivateKey, dkgKeys map[string]mix.DKGPrivateIdentity) ([]topology.Secrets, error) {
 	files := make([]topology.Secrets, len(network.Document.Operators))
 	for index, operator := range network.Document.Operators {
 		identity := identities[operator.ID]
 		kexKey := kexKeys[operator.ID]
-		if len(identity) != ed25519.PrivateKeySize || kexKey == nil {
+		dkgKey, dkgFound := dkgKeys[operator.ID]
+		if len(identity) != ed25519.PrivateKeySize || kexKey == nil || !dkgFound {
 			return nil, fmt.Errorf("missing private material for %s", operator.ID)
 		}
 		files[index] = topology.Secrets{
 			Version: topology.SecretVersion, OperatorID: operator.ID,
 			IdentityPrivate: base64.StdEncoding.EncodeToString(identity),
 			KEXPrivate:      base64.StdEncoding.EncodeToString(kexKey.Bytes()),
+			DKGPrivate:      base64.StdEncoding.EncodeToString(dkgKey[:]),
 		}
 	}
 	return files, nil

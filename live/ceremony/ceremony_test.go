@@ -31,6 +31,7 @@ func TestIndependentOperatorTopologyCeremony(t *testing.T) {
 			keys,
 			[]string{"127.0.0.1:4203", "127.0.0.1:4201", "127.0.0.1:4202"}[index],
 			[]string{"http://127.0.0.1:4303", "http://127.0.0.1:4301", "http://127.0.0.1:4302"}[index],
+			[]string{"http://127.0.0.1:4403", "http://127.0.0.1:4401", "http://127.0.0.1:4402"}[index],
 		)
 		if err != nil {
 			t.Fatal(err)

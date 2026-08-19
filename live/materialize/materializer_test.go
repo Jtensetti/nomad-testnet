@@ -27,11 +27,14 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	identities := make(map[string]ed25519.PrivateKey)
+	dkgSession := [32]byte{1}
+	now := time.Now().UTC().Truncate(time.Second)
 	document := topology.Document{
 		Version: topology.Version, NetworkID: "materializer-test", Epoch: 1,
 		NotBefore: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
 		NotAfter:  time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 		Traffic:   topology.TrafficClass{CellSize: topology.CellSize, CellIntervalMillis: 10, MaxLatenessMillis: 40, QueueCapacity: 64},
+		DKG: topology.DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
 		Operators: make([]topology.Operator, 3),
 	}
 	for index := range document.Operators {
@@ -44,12 +47,18 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		dkgPublic, _, err := mix.GenerateDKGIdentity()
+		if err != nil {
+			t.Fatal(err)
+		}
 		identities[id] = privateKey
 		document.Operators[index] = topology.Operator{
 			ID: id, Index: uint16(index), Endpoint: []string{"127.0.0.1:4201", "127.0.0.1:4202", "127.0.0.1:4203"}[index],
 			PartialEndpoint: []string{"http://127.0.0.1:4301", "http://127.0.0.1:4302", "http://127.0.0.1:4303"}[index],
+			DKGEndpoint:     []string{"http://127.0.0.1:4401", "http://127.0.0.1:4402", "http://127.0.0.1:4403"}[index],
 			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey),
 			KEXKey:          base64.StdEncoding.EncodeToString(kexKey.PublicKey().Bytes()),
+			DKGIdentityKey:  base64.StdEncoding.EncodeToString(dkgPublic[:]),
 			PeerPlan:        []uint16{uint16((index + 1) % 3)},
 		}
 	}

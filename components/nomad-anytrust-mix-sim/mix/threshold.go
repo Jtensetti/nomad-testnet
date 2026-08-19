@@ -161,6 +161,12 @@ func validateThresholdCommittee(committee ThresholdCommittee) error {
 	return nil
 }
 
+// ValidateThresholdCommittee validates public committee material received from
+// an authenticated external DKG certificate.
+func ValidateThresholdCommittee(committee ThresholdCommittee) error {
+	return validateThresholdCommittee(committee)
+}
+
 func isZeroCommitteeID(id CommitteeID) bool {
 	return id == CommitteeID{}
 }

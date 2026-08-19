@@ -79,6 +79,9 @@ func draft(arguments []string) error {
 	epoch := flags.Uint64("epoch", 1, "public topology epoch")
 	cellInterval := flags.Uint("cell-interval-ms", 50, "public fixed cell interval")
 	validFor := flags.Duration("valid-for", 24*time.Hour, "topology validity period")
+	dkgStartDelay := flags.Duration("dkg-start-delay", 2*time.Minute, "delay before the public DKG schedule starts")
+	dkgPhaseDuration := flags.Duration("dkg-phase-duration", 30*time.Second, "duration of each public DKG phase")
+	dkgThreshold := flags.Uint("dkg-threshold", 0, "DKG threshold; zero selects majority")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -88,6 +91,12 @@ func draft(arguments []string) error {
 	}
 	if *validFor < time.Hour || *validFor > 365*24*time.Hour {
 		return errors.New("--valid-for must be between one hour and one year")
+	}
+	if *dkgStartDelay < 10*time.Second || *dkgStartDelay > 24*time.Hour {
+		return errors.New("--dkg-start-delay must be between ten seconds and one day")
+	}
+	if *dkgPhaseDuration < time.Second || *dkgPhaseDuration > 10*time.Minute {
+		return errors.New("--dkg-phase-duration must be between one second and ten minutes")
 	}
 	enrollments := make([]ceremony.Enrollment, len(paths))
 	for index, path := range paths {
@@ -109,6 +118,8 @@ func draft(arguments []string) error {
 			CellSize: topology.CellSize, CellIntervalMillis: uint32(*cellInterval),
 			MaxLatenessMillis: uint32(*cellInterval * 4), QueueCapacity: 256,
 		},
+		DKGStart: now.Add(*dkgStartDelay), DKGPhaseDuration: *dkgPhaseDuration,
+		DKGThreshold: uint32(*dkgThreshold),
 	})
 	if err != nil {
 		return err

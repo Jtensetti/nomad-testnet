@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"testing"
 	"time"
+
+	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 )
 
 func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
@@ -17,11 +19,15 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 	}
 	identities := make(map[string]ed25519.PrivateKey)
 	kexKeys := make(map[string]*ecdh.PrivateKey)
+	dkgKeys := make(map[string]string)
+	dkgSession := [32]byte{1}
+	now := time.Now().UTC().Truncate(time.Second)
 	document := Document{
 		Version: Version, NetworkID: "testnet", Epoch: 3,
-		NotBefore: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
-		NotAfter:  time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		NotBefore: now.Add(-time.Hour).Format(time.RFC3339),
+		NotAfter:  now.Add(time.Hour).Format(time.RFC3339),
 		Traffic:   TrafficClass{CellSize: CellSize, CellIntervalMillis: 10, MaxLatenessMillis: 40, QueueCapacity: 64},
+		DKG: DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
 		Operators: make([]Operator, 3),
 	}
 	for index := range document.Operators {
@@ -34,13 +40,20 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		dkgPublic, dkgPrivate, err := mix.GenerateDKGIdentity()
+		if err != nil {
+			t.Fatal(err)
+		}
 		identities[id] = privateKey
 		kexKeys[id] = kexKey
+		dkgKeys[id] = base64.StdEncoding.EncodeToString(dkgPrivate[:])
 		document.Operators[index] = Operator{
 			ID: id, Index: uint16(index), Endpoint: "127.0.0.1:" + string(rune('1'+index)) + "200",
 			PartialEndpoint: "http://127.0.0.1:" + string(rune('1'+index)) + "300",
+			DKGEndpoint:     "http://127.0.0.1:" + string(rune('1'+index)) + "400",
 			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey),
 			KEXKey:          base64.StdEncoding.EncodeToString(kexKey.PublicKey().Bytes()),
+			DKGIdentityKey:  base64.StdEncoding.EncodeToString(dkgPublic[:]),
 			PeerPlan:        []uint16{uint16((index + 1) % 3)},
 		}
 	}
@@ -71,6 +84,7 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 		Version: SecretVersion, OperatorID: "operator-a",
 		IdentityPrivate: base64.StdEncoding.EncodeToString(identities["operator-a"]),
 		KEXPrivate:      base64.StdEncoding.EncodeToString(kexKeys["operator-a"].Bytes()),
+		DKGPrivate:      dkgKeys["operator-a"],
 	}
 	secretBytesA, err := EncodeSecrets(secretsA)
 	if err != nil {
@@ -84,6 +98,7 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 		Version: SecretVersion, OperatorID: "operator-b",
 		IdentityPrivate: base64.StdEncoding.EncodeToString(identities["operator-b"]),
 		KEXPrivate:      base64.StdEncoding.EncodeToString(kexKeys["operator-b"].Bytes()),
+		DKGPrivate:      dkgKeys["operator-b"],
 	}
 	secretBytesB, err := EncodeSecrets(secretsB)
 	if err != nil {
@@ -147,5 +162,11 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 	lowOrderKEX.Operators[0].KEXKey = base64.StdEncoding.EncodeToString(make([]byte, 32))
 	if err := ValidateDraft(lowOrderKEX); err == nil {
 		t.Fatal("non-contributory X25519 public key was accepted")
+	}
+	invalidDKG := document
+	invalidDKG.Operators = append([]Operator(nil), document.Operators...)
+	invalidDKG.Operators[0].DKGIdentityKey = base64.StdEncoding.EncodeToString(make([]byte, 32))
+	if err := ValidateDraft(invalidDKG); err == nil {
+		t.Fatal("identity-point DKG public key was accepted")
 	}
 }

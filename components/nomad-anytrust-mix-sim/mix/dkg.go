@@ -25,6 +25,7 @@ type dkgParticipant struct {
 	index    uint32
 	identity kyber.Scalar
 	public   kyber.Point
+	config   *dkg.Config
 	handler  *dkg.DistKeyGenerator
 }
 
@@ -75,6 +76,7 @@ func RunAuthenticatedDKG(id CommitteeID, epoch uint64, members, threshold uint32
 		if err != nil {
 			return ThresholdCommittee{}, nil, DKGTranscript{}, fmt.Errorf("create DKG member %d: %w", index, err)
 		}
+		participants[index].config = config
 		participants[index].handler = handler
 	}
 
@@ -86,6 +88,11 @@ func RunAuthenticatedDKG(id CommitteeID, epoch uint64, members, threshold uint32
 		}
 		deals = append(deals, bundle)
 	}
+	for _, bundle := range deals {
+		if err := dkg.VerifyPacketSignature(participants[0].config, bundle); err != nil {
+			return ThresholdCommittee{}, nil, DKGTranscript{}, fmt.Errorf("verify DKG deal: %w", err)
+		}
+	}
 	responses := make([]*dkg.ResponseBundle, 0, members)
 	for index := range participants {
 		bundle, err := participants[index].handler.ProcessDeals(deals)
@@ -94,6 +101,11 @@ func RunAuthenticatedDKG(id CommitteeID, epoch uint64, members, threshold uint32
 		}
 		if bundle != nil {
 			responses = append(responses, bundle)
+		}
+	}
+	for _, bundle := range responses {
+		if err := dkg.VerifyPacketSignature(participants[0].config, bundle); err != nil {
+			return ThresholdCommittee{}, nil, DKGTranscript{}, fmt.Errorf("verify DKG response: %w", err)
 		}
 	}
 	results := make([]*dkg.Result, members)

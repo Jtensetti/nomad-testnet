@@ -6,6 +6,7 @@ package ceremony
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -16,12 +17,13 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
 const (
-	EnrollmentVersion  = "nomad-operator-enrollment-v1"
-	AttestationVersion = "nomad-topology-attestation-v1"
+	EnrollmentVersion  = "nomad-operator-enrollment-v2"
+	AttestationVersion = "nomad-topology-attestation-v2"
 	MaximumArtifact    = 1 << 20
 )
 
@@ -30,8 +32,10 @@ type Enrollment struct {
 	OperatorID      string `json:"operator_id"`
 	Endpoint        string `json:"endpoint"`
 	PartialEndpoint string `json:"partial_endpoint"`
+	DKGEndpoint     string `json:"dkg_endpoint"`
 	IdentityKey     string `json:"identity_key"`
 	KEXKey          string `json:"kex_key"`
+	DKGIdentityKey  string `json:"dkg_identity_key"`
 	Signature       string `json:"signature"`
 }
 
@@ -48,17 +52,26 @@ type DraftConfig struct {
 	NotBefore time.Time
 	NotAfter  time.Time
 	Traffic   topology.TrafficClass
+	DKGStart  time.Time
+	DKGPhaseDuration time.Duration
+	DKGThreshold uint32
+	DKGSessionID [32]byte
 }
 
-func NewEnrollment(keys topology.PrivateKeys, endpoint, partialEndpoint string) (Enrollment, error) {
+func NewEnrollment(keys topology.PrivateKeys, endpoint, partialEndpoint, dkgEndpoint string) (Enrollment, error) {
 	if len(keys.Identity) != ed25519.PrivateKeySize || keys.KEX == nil {
 		return Enrollment{}, errors.New("complete operator private keys are required")
 	}
+	dkgPublic, err := mix.DKGPublicFromPrivate(keys.DKG)
+	if err != nil {
+		return Enrollment{}, errors.New("valid operator DKG private key is required")
+	}
 	enrollment := Enrollment{
 		Version: EnrollmentVersion, OperatorID: keys.OperatorID,
-		Endpoint: endpoint, PartialEndpoint: partialEndpoint,
+		Endpoint: endpoint, PartialEndpoint: partialEndpoint, DKGEndpoint: dkgEndpoint,
 		IdentityKey: base64.StdEncoding.EncodeToString(keys.Identity.Public().(ed25519.PublicKey)),
 		KEXKey:      base64.StdEncoding.EncodeToString(keys.KEX.PublicKey().Bytes()),
+		DKGIdentityKey: base64.StdEncoding.EncodeToString(dkgPublic[:]),
 	}
 	message, err := enrollmentMessage(enrollment)
 	if err != nil {
@@ -94,6 +107,15 @@ func VerifyEnrollment(enrollment Enrollment) error {
 	if err != nil {
 		return errors.New("invalid enrollment identity key")
 	}
+	dkgIdentityBytes, err := decodeFixed(enrollment.DKGIdentityKey, len(mix.DKGPublicIdentity{}))
+	if err != nil {
+		return errors.New("invalid enrollment DKG identity key")
+	}
+	var dkgIdentity mix.DKGPublicIdentity
+	copy(dkgIdentity[:], dkgIdentityBytes)
+	if err := mix.ValidateDKGPublicIdentity(dkgIdentity); err != nil {
+		return errors.New("invalid enrollment DKG identity key")
+	}
 	signature, err := decodeFixed(enrollment.Signature, ed25519.SignatureSize)
 	if err != nil {
 		return errors.New("invalid enrollment signature")
@@ -119,17 +141,42 @@ func BuildDraft(enrollments []Enrollment, config DraftConfig) (topology.Document
 		}
 	}
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].OperatorID < ordered[j].OperatorID })
+	dkgSessionID := config.DKGSessionID
+	if dkgSessionID == [32]byte{} {
+		if _, err := rand.Read(dkgSessionID[:]); err != nil {
+			return topology.Document{}, err
+		}
+	}
+	dkgStart := config.DKGStart
+	if dkgStart.IsZero() {
+		dkgStart = config.NotBefore.Add(2 * time.Minute)
+	}
+	phaseDuration := config.DKGPhaseDuration
+	if phaseDuration == 0 {
+		phaseDuration = 30 * time.Second
+	}
+	threshold := config.DKGThreshold
+	if threshold == 0 {
+		threshold = uint32(len(ordered)/2 + 1)
+	}
 	document := topology.Document{
 		Version: topology.Version, NetworkID: config.NetworkID, Epoch: config.Epoch,
 		NotBefore: config.NotBefore.UTC().Truncate(time.Second).Format(time.RFC3339),
 		NotAfter:  config.NotAfter.UTC().Truncate(time.Second).Format(time.RFC3339),
-		Traffic:   config.Traffic, Operators: make([]topology.Operator, len(ordered)),
+		Traffic: config.Traffic,
+		DKG: topology.DKGProfile{
+			Threshold: threshold, SessionID: base64.StdEncoding.EncodeToString(dkgSessionID[:]),
+			StartAt: dkgStart.UTC().Truncate(time.Second).Format(time.RFC3339),
+			PhaseDurationMillis: uint32(phaseDuration / time.Millisecond),
+		},
+		Operators: make([]topology.Operator, len(ordered)),
 	}
 	for index, enrollment := range ordered {
 		document.Operators[index] = topology.Operator{
 			ID: enrollment.OperatorID, Index: uint16(index), Endpoint: enrollment.Endpoint,
-			PartialEndpoint: enrollment.PartialEndpoint, IdentityKey: enrollment.IdentityKey,
-			KEXKey: enrollment.KEXKey, PeerPlan: []uint16{uint16((index + 1) % len(ordered))},
+			PartialEndpoint: enrollment.PartialEndpoint, DKGEndpoint: enrollment.DKGEndpoint,
+			IdentityKey: enrollment.IdentityKey, KEXKey: enrollment.KEXKey,
+			DKGIdentityKey: enrollment.DKGIdentityKey, PeerPlan: []uint16{uint16((index + 1) % len(ordered))},
 		}
 	}
 	if err := topology.ValidateDraft(document); err != nil {
@@ -169,6 +216,14 @@ func CreateAttestation(document topology.Document, keys topology.PrivateKeys) (A
 	configuredKEX, err := decodeFixed(operator.KEXKey, 32)
 	if err != nil || keys.KEX == nil || !bytes.Equal(configuredKEX, keys.KEX.PublicKey().Bytes()) {
 		return Attestation{}, errors.New("operator key-agreement private key does not match topology draft")
+	}
+	dkgPublic, err := mix.DKGPublicFromPrivate(keys.DKG)
+	if err != nil {
+		return Attestation{}, err
+	}
+	configuredDKG, err := decodeFixed(operator.DKGIdentityKey, len(mix.DKGPublicIdentity{}))
+	if err != nil || !bytes.Equal(configuredDKG, dkgPublic[:]) {
+		return Attestation{}, errors.New("operator DKG private key does not match topology draft")
 	}
 	attested, err := topology.Attest(document, keys.OperatorID, keys.Identity)
 	if err != nil {
@@ -253,7 +308,7 @@ func enrollmentMessage(enrollment Enrollment) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	digest := sha256.Sum256(append([]byte("nomad-operator-enrollment-v1"), encoded...))
+	digest := sha256.Sum256(append([]byte("nomad-operator-enrollment-v2"), encoded...))
 	return digest[:], nil
 }
 

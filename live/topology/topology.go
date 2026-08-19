@@ -17,11 +17,14 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
+
+	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 )
 
 const (
-	Version          = "nomad-live-topology-v2"
+	Version          = "nomad-live-topology-v3"
 	CellSize         = 1200
 	MaximumFileBytes = 1 << 20
 )
@@ -35,13 +38,24 @@ type TrafficClass struct {
 	QueueCapacity      uint32 `json:"queue_capacity"`
 }
 
+// DKGProfile is public epoch configuration. Its schedule and membership are
+// independent of all reader activity and are attested by every operator.
+type DKGProfile struct {
+	Threshold           uint32 `json:"threshold"`
+	SessionID           string `json:"session_id"`
+	StartAt             string `json:"start_at"`
+	PhaseDurationMillis uint32 `json:"phase_duration_ms"`
+}
+
 type Operator struct {
 	ID              string   `json:"id"`
 	Index           uint16   `json:"index"`
 	Endpoint        string   `json:"endpoint"`
 	PartialEndpoint string   `json:"partial_endpoint"`
+	DKGEndpoint     string   `json:"dkg_endpoint"`
 	IdentityKey     string   `json:"identity_key"`
 	KEXKey          string   `json:"kex_key"`
+	DKGIdentityKey  string   `json:"dkg_identity_key"`
 	PeerPlan        []uint16 `json:"peer_plan"`
 	Attestation     string   `json:"attestation"`
 }
@@ -53,6 +67,7 @@ type Document struct {
 	NotBefore string       `json:"not_before"`
 	NotAfter  string       `json:"not_after"`
 	Traffic   TrafficClass `json:"traffic"`
+	DKG       DKGProfile   `json:"dkg"`
 	Operators []Operator   `json:"operators"`
 }
 
@@ -95,7 +110,7 @@ func DraftDigest(document Document) ([32]byte, error) {
 	if err != nil {
 		return [32]byte{}, err
 	}
-	return sha256.Sum256(signingMessage("nomad-topology-draft-v2", canonical)), nil
+	return sha256.Sum256(signingMessage("nomad-topology-draft-v3", canonical)), nil
 }
 
 func Load(path string, authority ed25519.PublicKey, now time.Time) (Verified, error) {
@@ -140,13 +155,13 @@ func Verify(encoded []byte, authority ed25519.PublicKey, now time.Time) (Verifie
 	if err != nil {
 		return Verified{}, fmt.Errorf("topology authority signature: %w", err)
 	}
-	if !ed25519.Verify(authority, signingMessage("nomad-topology-authority-v2", canonical), signature) {
+	if !ed25519.Verify(authority, signingMessage("nomad-topology-authority-v3", canonical), signature) {
 		return Verified{}, errors.New("topology authority signature verification failed")
 	}
 	if err := verifyAttestations(signed.Document); err != nil {
 		return Verified{}, err
 	}
-	return Verified{Document: signed.Document, Digest: sha256.Sum256(signingMessage("nomad-topology-digest-v2", canonical))}, nil
+	return Verified{Document: signed.Document, Digest: sha256.Sum256(signingMessage("nomad-topology-digest-v3", canonical))}, nil
 }
 
 func Sign(document Document, authority ed25519.PrivateKey, identities map[string]ed25519.PrivateKey) (Signed, error) {
@@ -216,7 +231,7 @@ func Finalize(document Document, authority ed25519.PrivateKey) (Signed, error) {
 	}
 	return Signed{
 		Document:  copyDocument,
-		Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(authority, signingMessage("nomad-topology-authority-v2", canonical))),
+		Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(authority, signingMessage("nomad-topology-authority-v3", canonical))),
 	}, nil
 }
 
@@ -294,11 +309,30 @@ func validateDocument(document Document, now time.Time) error {
 	if len(document.Operators) < 3 || len(document.Operators) > 64 {
 		return errors.New("a multi-operator topology requires between three and 64 operators")
 	}
+	if document.DKG.Threshold < 2 || int(document.DKG.Threshold) > len(document.Operators) {
+		return errors.New("DKG threshold must be between two and the operator count")
+	}
+	if _, err := decodeFixed(document.DKG.SessionID, 32); err != nil {
+		return errors.New("invalid DKG session ID")
+	}
+	dkgStart, err := time.Parse(time.RFC3339, document.DKG.StartAt)
+	if err != nil || dkgStart.Before(notBefore) {
+		return errors.New("invalid DKG start time")
+	}
+	if document.DKG.PhaseDurationMillis < 1_000 || document.DKG.PhaseDurationMillis > 600_000 {
+		return errors.New("DKG phase duration must be between one second and ten minutes")
+	}
+	dkgEnd := dkgStart.Add(4 * time.Duration(document.DKG.PhaseDurationMillis) * time.Millisecond)
+	if dkgEnd.After(notAfter) {
+		return errors.New("DKG schedule exceeds topology validity")
+	}
 	ids := make(map[string]struct{}, len(document.Operators))
 	endpoints := make(map[string]struct{}, len(document.Operators))
 	partialEndpoints := make(map[string]struct{}, len(document.Operators))
+	dkgEndpoints := make(map[string]struct{}, len(document.Operators))
 	identityKeys := make(map[string]struct{}, len(document.Operators))
 	kexKeys := make(map[string]struct{}, len(document.Operators))
+	dkgIdentityKeys := make(map[string]struct{}, len(document.Operators))
 	probeBytes := make([]byte, 32)
 	probeBytes[0] = 1
 	probePrivate, err := ecdh.X25519().NewPrivateKey(probeBytes)
@@ -334,6 +368,14 @@ func validateDocument(document Document, now time.Time) error {
 			return fmt.Errorf("duplicate partial endpoint %q", operator.PartialEndpoint)
 		}
 		partialEndpoints[operator.PartialEndpoint] = struct{}{}
+		dkgURL, err := url.Parse(operator.DKGEndpoint)
+		if err != nil || !validCeremonyURL(dkgURL) {
+			return fmt.Errorf("operator %s has invalid DKG endpoint", operator.ID)
+		}
+		if _, exists := dkgEndpoints[operator.DKGEndpoint]; exists {
+			return fmt.Errorf("duplicate DKG endpoint %q", operator.DKGEndpoint)
+		}
+		dkgEndpoints[operator.DKGEndpoint] = struct{}{}
 		if _, err := decodeFixed(operator.IdentityKey, ed25519.PublicKeySize); err != nil {
 			return fmt.Errorf("operator %s has invalid identity key", operator.ID)
 		}
@@ -356,6 +398,19 @@ func validateDocument(document Document, now time.Time) error {
 			return fmt.Errorf("duplicate operator key-agreement key for %s", operator.ID)
 		}
 		kexKeys[operator.KEXKey] = struct{}{}
+		dkgIdentityBytes, err := decodeFixed(operator.DKGIdentityKey, len(mix.DKGPublicIdentity{}))
+		if err != nil {
+			return fmt.Errorf("operator %s has invalid DKG identity key", operator.ID)
+		}
+		var dkgIdentity mix.DKGPublicIdentity
+		copy(dkgIdentity[:], dkgIdentityBytes)
+		if err := mix.ValidateDKGPublicIdentity(dkgIdentity); err != nil {
+			return fmt.Errorf("operator %s has invalid DKG identity key: %w", operator.ID, err)
+		}
+		if _, exists := dkgIdentityKeys[operator.DKGIdentityKey]; exists {
+			return fmt.Errorf("duplicate operator DKG identity key for %s", operator.ID)
+		}
+		dkgIdentityKeys[operator.DKGIdentityKey] = struct{}{}
 		if len(operator.PeerPlan) == 0 || len(operator.PeerPlan) >= len(document.Operators) {
 			return fmt.Errorf("operator %s has invalid peer plan length", operator.ID)
 		}
@@ -371,6 +426,25 @@ func validateDocument(document Document, now time.Time) error {
 		}
 	}
 	return validateStrongConnectivity(document)
+}
+
+func validCeremonyURL(endpoint *url.URL) bool {
+	if endpoint == nil || endpoint.Hostname() == "" || endpoint.Port() == "" || endpoint.User != nil ||
+		(endpoint.Path != "" && endpoint.Path != "/") || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return false
+	}
+	if endpoint.Scheme == "https" {
+		return true
+	}
+	if endpoint.Scheme != "http" {
+		return false
+	}
+	host := endpoint.Hostname()
+	if host == "localhost" || !strings.Contains(host, ".") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func validateStrongConnectivity(document Document) error {
@@ -421,7 +495,7 @@ func operatorSigningMessage(document Document, operatorID string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	return signingMessage("nomad-operator-attestation-v2", encoded), nil
+	return signingMessage("nomad-operator-attestation-v3", encoded), nil
 }
 
 func verifyAttestations(document Document) error {

@@ -15,27 +15,31 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"golang.org/x/crypto/hkdf"
 )
 
-const SecretVersion = "nomad-operator-secrets-v2"
+const SecretVersion = "nomad-operator-secrets-v3"
 
 type Secrets struct {
 	Version         string `json:"version"`
 	OperatorID      string `json:"operator_id"`
 	IdentityPrivate string `json:"identity_private"`
 	KEXPrivate      string `json:"kex_private"`
+	DKGPrivate      string `json:"dkg_private"`
 }
 
 type PrivateKeys struct {
 	OperatorID string
 	Identity   ed25519.PrivateKey
 	KEX        *ecdh.PrivateKey
+	DKG        mix.DKGPrivateIdentity
 }
 
 type VerifiedSecrets struct {
 	Operator     Operator
 	Identity     ed25519.PrivateKey
+	DKG          mix.DKGPrivateIdentity
 	OutboundKeys map[uint16][32]byte
 	InboundKeys  map[uint16][32]byte
 }
@@ -96,6 +100,11 @@ func VerifySecrets(encoded []byte, verified Verified) (VerifiedSecrets, error) {
 	if !bytes.Equal(private.KEX.PublicKey().Bytes(), configuredKEX) {
 		return VerifiedSecrets{}, errors.New("operator key-agreement private key does not match signed topology")
 	}
+	configuredDKG, _ := decodeFixed(operator.DKGIdentityKey, len(mix.DKGPublicIdentity{}))
+	derivedDKG, err := mix.DKGPublicFromPrivate(private.DKG)
+	if err != nil || !bytes.Equal(derivedDKG[:], configuredDKG) {
+		return VerifiedSecrets{}, errors.New("operator DKG private key does not match signed topology")
+	}
 
 	outbound := make(map[uint16][32]byte)
 	for _, peerIndex := range operator.PeerPlan {
@@ -115,7 +124,7 @@ func VerifySecrets(encoded []byte, verified Verified) (VerifiedSecrets, error) {
 		inbound[peer.Index] = key
 	}
 	return VerifiedSecrets{
-		Operator: operator, Identity: private.Identity, OutboundKeys: outbound, InboundKeys: inbound,
+		Operator: operator, Identity: private.Identity, DKG: private.DKG, OutboundKeys: outbound, InboundKeys: inbound,
 	}, nil
 }
 
@@ -154,7 +163,16 @@ func DecodePrivateKeys(encoded []byte) (PrivateKeys, error) {
 	if err != nil {
 		return PrivateKeys{}, errors.New("invalid operator key-agreement private key")
 	}
-	return PrivateKeys{OperatorID: secrets.OperatorID, Identity: privateKey, KEX: kex}, nil
+	dkgBytes, err := decodeFixed(secrets.DKGPrivate, len(mix.DKGPrivateIdentity{}))
+	if err != nil {
+		return PrivateKeys{}, errors.New("invalid operator DKG private key")
+	}
+	var dkgPrivate mix.DKGPrivateIdentity
+	copy(dkgPrivate[:], dkgBytes)
+	if _, err := mix.DKGPublicFromPrivate(dkgPrivate); err != nil {
+		return PrivateKeys{}, errors.New("invalid operator DKG private key")
+	}
+	return PrivateKeys{OperatorID: secrets.OperatorID, Identity: privateKey, KEX: kex, DKG: dkgPrivate}, nil
 }
 
 func GenerateSecrets(operatorID string) (Secrets, error) {
@@ -169,10 +187,15 @@ func GenerateSecrets(operatorID string) (Secrets, error) {
 	if err != nil {
 		return Secrets{}, err
 	}
+	_, dkgPrivate, err := mix.GenerateDKGIdentity()
+	if err != nil {
+		return Secrets{}, err
+	}
 	return Secrets{
 		Version: SecretVersion, OperatorID: operatorID,
 		IdentityPrivate: base64.StdEncoding.EncodeToString(identity),
 		KEXPrivate:      base64.StdEncoding.EncodeToString(kex.Bytes()),
+		DKGPrivate:      base64.StdEncoding.EncodeToString(dkgPrivate[:]),
 	}, nil
 }
 

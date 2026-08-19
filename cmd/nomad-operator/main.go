@@ -41,13 +41,14 @@ func initialize(arguments []string) error {
 	operatorID := flags.String("id", "", "stable operator identifier")
 	endpoint := flags.String("endpoint", "", "public UDP host:port")
 	partialEndpoint := flags.String("partial-endpoint", "", "public threshold-partial URL")
+	dkgEndpoint := flags.String("dkg-endpoint", "", "public inter-operator DKG URL")
 	secretPath := flags.String("secret", "", "new private operator-secret path")
 	enrollmentPath := flags.String("enrollment", "", "new public enrollment path")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || *operatorID == "" || *endpoint == "" || *partialEndpoint == "" || *secretPath == "" || *enrollmentPath == "" {
-		return errors.New("--id, --endpoint, --partial-endpoint, --secret and --enrollment are required")
+	if flags.NArg() != 0 || *operatorID == "" || *endpoint == "" || *partialEndpoint == "" || *dkgEndpoint == "" || *secretPath == "" || *enrollmentPath == "" {
+		return errors.New("--id, --endpoint, --partial-endpoint, --dkg-endpoint, --secret and --enrollment are required")
 	}
 	if filepath.Clean(*secretPath) == filepath.Clean(*enrollmentPath) {
 		return errors.New("secret and enrollment paths must differ")
@@ -64,7 +65,7 @@ func initialize(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	enrollment, err := ceremony.NewEnrollment(keys, *endpoint, *partialEndpoint)
+	enrollment, err := ceremony.NewEnrollment(keys, *endpoint, *partialEndpoint, *dkgEndpoint)
 	if err != nil {
 		return err
 	}
