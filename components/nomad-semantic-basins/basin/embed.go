@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -19,6 +20,15 @@ import (
 	"unicode"
 )
 
+const (
+	DefaultMaxInputBytes         = 64 << 10
+	DefaultMaxEmbeddingDims      = 8192
+	DefaultMaxEmbeddingResponse = 8 << 20
+	HardMaxInputBytes            = 1 << 20
+	HardMaxEmbeddingDims         = 1 << 16
+	HardMaxEmbeddingResponse     = 32 << 20
+)
+
 type Embedder interface {
 	Embed(context.Context, string) ([]float32, error)
 }
@@ -26,17 +36,27 @@ type Embedder interface {
 // LexicalHashEmbedder is a deterministic bag-of-words/character-ngram
 // baseline. It is useful for tests and lexical similarity only; it is not a
 // semantic model.
-type LexicalHashEmbedder struct{ Dims int }
+type LexicalHashEmbedder struct {
+	Dims          int
+	MaxInputBytes int
+}
 
 func (h LexicalHashEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
-	if h.Dims <= 0 {
-		return nil, errors.New("dims must be positive")
+	if h.Dims <= 0 || h.Dims > HardMaxEmbeddingDims {
+		return nil, errors.New("dims are outside the allowed range")
 	}
-	v := make([]float32, h.Dims)
 	s := strings.ToLower(strings.TrimSpace(text))
 	if s == "" {
 		return nil, errors.New("text must not be empty")
 	}
+	maxInput, err := boundedInt(h.MaxInputBytes, DefaultMaxInputBytes, HardMaxInputBytes, "maximum input size")
+	if err != nil {
+		return nil, err
+	}
+	if len(s) > maxInput {
+		return nil, errors.New("text exceeds maximum input size")
+	}
+	v := make([]float32, h.Dims)
 	scanner := bufio.NewScanner(strings.NewReader(s))
 	scanner.Split(bufio.ScanWords)
 	for scanner.Scan() {
@@ -81,10 +101,13 @@ func (h LexicalHashEmbedder) Embed(_ context.Context, text string) ([]float32, e
 // rejects redirects so private query text cannot leave the host through normal
 // HTTP client configuration.
 type LoopbackHTTPEmbedder struct {
-	BaseURL string
-	Model   string
-	APIKey  string
-	Timeout time.Duration
+	BaseURL         string
+	Model           string
+	APIKey          string
+	Timeout         time.Duration
+	MaxInputBytes   int
+	MaxDimensions   int
+	MaxResponseBytes int
 }
 
 type embeddingRequest struct {
@@ -99,8 +122,24 @@ type embeddingResponse struct {
 }
 
 func (e LoopbackHTTPEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	if strings.TrimSpace(text) == "" {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
 		return nil, errors.New("text must not be empty")
+	}
+	maxInput, err := boundedInt(e.MaxInputBytes, DefaultMaxInputBytes, HardMaxInputBytes, "maximum input size")
+	if err != nil {
+		return nil, err
+	}
+	if len(trimmed) > maxInput {
+		return nil, errors.New("text exceeds maximum input size")
+	}
+	maxDimensions, err := boundedInt(e.MaxDimensions, DefaultMaxEmbeddingDims, HardMaxEmbeddingDims, "maximum dimensions")
+	if err != nil {
+		return nil, err
+	}
+	maxResponse, err := boundedInt(e.MaxResponseBytes, DefaultMaxEmbeddingResponse, HardMaxEmbeddingResponse, "maximum response size")
+	if err != nil {
+		return nil, err
 	}
 	if e.BaseURL == "" || e.Model == "" {
 		return nil, errors.New("base URL and model are required")
@@ -120,7 +159,7 @@ func (e LoopbackHTTPEmbedder) Embed(ctx context.Context, text string) ([]float32
 		return nil, errors.New("embedding endpoint host must be a literal loopback IP")
 	}
 
-	body, err := json.Marshal(embeddingRequest{Model: e.Model, Input: text})
+	body, err := json.Marshal(embeddingRequest{Model: e.Model, Input: trimmed})
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +180,8 @@ func (e LoopbackHTTPEmbedder) Embed(ctx context.Context, text string) ([]float32
 	client := &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
-			Proxy: nil,
+			Proxy:             nil,
+			DisableKeepAlives: true,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("embedding endpoint redirects are disabled")
@@ -155,17 +195,37 @@ func (e LoopbackHTTPEmbedder) Embed(ctx context.Context, text string) ([]float32
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("embedding service returned %s", resp.Status)
 	}
-	var out embeddingResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxResponse)+1))
+	if err != nil {
 		return nil, err
 	}
-	if len(out.Data) == 0 || len(out.Data[0].Embedding) == 0 {
-		return nil, errors.New("empty embedding response")
+	if len(payload) > maxResponse {
+		return nil, errors.New("embedding response exceeds maximum size")
+	}
+	var out embeddingResponse
+	if err := json.Unmarshal(payload, &out); err != nil {
+		return nil, err
+	}
+	if len(out.Data) != 1 || len(out.Data[0].Embedding) == 0 {
+		return nil, errors.New("embedding response must contain exactly one non-empty vector")
+	}
+	if len(out.Data[0].Embedding) > maxDimensions {
+		return nil, errors.New("embedding response exceeds maximum dimensions")
 	}
 	if !normalize(out.Data[0].Embedding) {
 		return nil, errors.New("embedding response was the zero vector")
 	}
 	return out.Data[0].Embedding, nil
+}
+
+func boundedInt(value, defaultValue, hardMaximum int, name string) (int, error) {
+	if value == 0 {
+		return defaultValue, nil
+	}
+	if value < 0 || value > hardMaximum {
+		return 0, fmt.Errorf("%s is outside the allowed range", name)
+	}
+	return value, nil
 }
 
 func normalize(v []float32) bool {
@@ -240,4 +300,3 @@ func HammingDistance(a, b uint64) int {
 	}
 	return n
 }
-
