@@ -27,6 +27,7 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	identities := make(map[string]ed25519.PrivateKey)
+	dkgIdentities := make(map[string]mix.DKGPrivateIdentity)
 	dkgSession := [32]byte{1}
 	now := time.Now().UTC().Truncate(time.Second)
 	document := topology.Document{
@@ -47,11 +48,12 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		dkgPublic, _, err := mix.GenerateDKGIdentity()
+		dkgPublic, dkgPrivate, err := mix.GenerateDKGIdentity()
 		if err != nil {
 			t.Fatal(err)
 		}
 		identities[id] = privateKey
+		dkgIdentities[id] = dkgPrivate
 		document.Operators[index] = topology.Operator{
 			ID: id, Index: uint16(index), Endpoint: []string{"127.0.0.1:4201", "127.0.0.1:4202", "127.0.0.1:4203"}[index],
 			PartialEndpoint: []string{"http://127.0.0.1:4301", "http://127.0.0.1:4302", "http://127.0.0.1:4303"}[index],
@@ -83,7 +85,7 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 		ContentHash: hex.EncodeToString(root[:]), PublisherKey: base64.StdEncoding.EncodeToString(publisherPublic),
 		Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(publisherPrivate, reconstruct.SigningMessage(root))),
 	}
-	generated, err := batch.Generate(context.Background(), envelope, network, authorityPrivate, identities)
+	generated, err := batch.Generate(context.Background(), envelope, network, authorityPrivate, identities, dkgIdentities)
 	if err != nil {
 		t.Fatal(err)
 	}

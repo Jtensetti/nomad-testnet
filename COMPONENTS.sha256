@@ -1,7 +1,7 @@
 5154eeec1f1386247f9896afffd75a4561a8926833108766610a2a1df4b9dac8  components/nomad-anytrust-mix-sim/LICENSE
 20cec57690d167dfbd11112b30c00ce15101ac1b740eadc1969c90047a0ebbd0  components/nomad-anytrust-mix-sim/go.mod
 a317f9e7daa771aeb1efb006c809de20c8b403ae5ebe31adfa464cc56c9764ce  components/nomad-anytrust-mix-sim/go.sum
-155719c1677a30cbcf875574539d817da41c90d4ff5f58ed836beade08d27cce  components/nomad-anytrust-mix-sim/mix/dkg.go
+e594d9647a0f3396ba35ee5dbffd3c593861b1eb6b418c02cf3b2f9460ed4450  components/nomad-anytrust-mix-sim/mix/dkg.go
 67bede2b97b922409cbff82783b59250fbf64aa9384ec16e59ee3ac2cf420684  components/nomad-anytrust-mix-sim/mix/dkg_protocol.go
 e2fd4353ac98019117160d5afc0fa53b87fdb0610f2742d2bd5346cf36372a39  components/nomad-anytrust-mix-sim/mix/mix.go
 5001318778fca4e1310b04d635af6f5d86396275672f769fe389a47b283998c5  components/nomad-anytrust-mix-sim/mix/threshold.go

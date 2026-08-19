@@ -138,7 +138,7 @@ func run() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	generated, err := batch.Generate(ctx, envelope, verifiedTopology, authorityPrivate, identities)
+	generated, err := batch.Generate(ctx, envelope, verifiedTopology, authorityPrivate, identities, dkgKeys)
 	if err != nil {
 		return err
 	}
@@ -204,7 +204,7 @@ func run() error {
 		StreamID  string   `json:"stream_id"`
 		BatchSize uint16   `json:"batch_size"`
 		Threshold uint32   `json:"threshold"`
-	}{*networkID, operatorIDs, generated.Descriptor.StreamID, generated.Descriptor.BatchSize, generated.Descriptor.Committee.Threshold}
+	}{*networkID, operatorIDs, generated.Descriptor.StreamID, generated.Descriptor.BatchSize, generated.Descriptor.DKGCertificate.Manifest.Committee.Threshold}
 	return json.NewEncoder(os.Stdout).Encode(summary)
 }
 

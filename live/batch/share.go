@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	ShareVersion   = "nomad-threshold-share-v1"
+	ShareVersion   = "nomad-threshold-share-v2"
 	PartialVersion = "nomad-partial-decryption-v1"
 )
 
@@ -74,6 +74,9 @@ func LoadShare(path string, descriptor VerifiedDescriptor, network topology.Veri
 }
 
 func VerifyShare(encoded []byte, descriptor VerifiedDescriptor, network topology.Verified) (mix.MemberSecret, error) {
+	if len(encoded) == 0 || len(encoded) > MaximumFileBytes {
+		return mix.MemberSecret{}, errors.New("threshold share is empty or too large")
+	}
 	var file ShareFile
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
@@ -106,6 +109,9 @@ func VerifyShare(encoded []byte, descriptor VerifiedDescriptor, network topology
 	copy(secret.CommitteeID[:], committeeID)
 	copy(secret.Secret[:], secretBytes)
 	copy(secret.Public[:], publicBytes)
+	if err := mix.ValidateMemberSecret(descriptor.Committee, secret); err != nil {
+		return mix.MemberSecret{}, fmt.Errorf("invalid private threshold share: %w", err)
+	}
 	return secret, nil
 }
 

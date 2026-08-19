@@ -17,12 +17,13 @@ import (
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"github.com/Jtensetti/nomad-local-reconstruction/reconstruct"
 	"github.com/Jtensetti/nomad-rlnc/rlnc"
+	"github.com/Jtensetti/nomad-testnet/live/committee"
 	"github.com/Jtensetti/nomad-testnet/live/hop"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
 const (
-	DescriptorVersion   = "nomad-batch-descriptor-v1"
+	DescriptorVersion   = "nomad-batch-descriptor-v2"
 	EnvelopeVersion     = 1
 	MaximumFileBytes    = 4 << 20
 	DefaultBatchSize    = 16
@@ -91,8 +92,7 @@ type Descriptor struct {
 	ContentHash        string            `json:"content_hash"`
 	PublisherKey       string            `json:"publisher_key"`
 	ObjectSignature    string            `json:"object_signature"`
-	Committee          CommitteeFile     `json:"committee"`
-	DKGTranscript      DKGTranscriptFile `json:"dkg_transcript"`
+	DKGCertificate     committee.Certificate `json:"dkg_certificate"`
 	MixRounds          []MixRoundFile    `json:"mix_rounds"`
 	AuthoritySignature string            `json:"authority_signature"`
 }
@@ -106,6 +106,7 @@ type VerifiedDescriptor struct {
 	Signature  []byte
 	Committee  mix.ThresholdCommittee
 	Transcript mix.DKGTranscript
+	Certificate committee.Verified
 }
 
 func LoadDescriptor(path string, authority ed25519.PublicKey, network topology.Verified) (VerifiedDescriptor, error) {
@@ -196,21 +197,11 @@ func VerifyDescriptor(encoded []byte, authority ed25519.PublicKey, network topol
 		int(descriptor.K)+int(descriptor.SymbolSize) > rlnc.PacketSize-rlnc.PacketHeaderSize {
 		return VerifiedDescriptor{}, errors.New("invalid descriptor RLNC dimensions")
 	}
-	committee, err := descriptor.Committee.toMix()
+	certified, err := committee.Verify(descriptor.DKGCertificate, network)
 	if err != nil {
-		return VerifiedDescriptor{}, err
+		return VerifiedDescriptor{}, fmt.Errorf("verify DKG certificate: %w", err)
 	}
-	if committee.ID == (mix.CommitteeID{}) || committee.Epoch != descriptor.TopologyEpoch || len(committee.Members) != len(network.Document.Operators) {
-		return VerifiedDescriptor{}, errors.New("threshold committee is not bound to the operator topology")
-	}
-	transcript, err := descriptor.DKGTranscript.toMix(len(committee.Members))
-	if err != nil {
-		return VerifiedDescriptor{}, err
-	}
-	if len(transcript.Qualified) < int(committee.Threshold) {
-		return VerifiedDescriptor{}, errors.New("DKG transcript qualified set is below threshold")
-	}
-	finalPayloads, err := verifyMixRounds(descriptor.MixRounds, committee, network)
+	finalPayloads, err := verifyMixRounds(descriptor.MixRounds, certified.Committee, network)
 	if err != nil {
 		return VerifiedDescriptor{}, err
 	}
@@ -221,7 +212,7 @@ func VerifyDescriptor(encoded []byte, authority ed25519.PublicKey, network topol
 	return VerifiedDescriptor{
 		Descriptor: descriptor, Stream: stream, Generation: generation, Root: root,
 		Publisher: ed25519.PublicKey(publisher), Signature: objectSignature,
-		Committee: committee, Transcript: transcript,
+		Committee: certified.Committee, Transcript: certified.Transcript, Certificate: certified,
 	}, nil
 }
 
