@@ -94,6 +94,16 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	tampered := generated.Descriptor
+	tampered.DKGCertificate.Attestations[0].Signature = base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize))
+	tampered, err = batch.SignDescriptor(tampered, authorityPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tamperedBytes, _ := batch.EncodeDescriptor(tampered)
+	if _, err := batch.VerifyDescriptor(tamperedBytes, authorityPublic, network); err == nil {
+		t.Fatal("authority-signed descriptor with an invalid operator DKG attestation was accepted")
+	}
 	cache, err := rawcache.Open(filepath.Join(t.TempDir(), "raw"), 8)
 	if err != nil {
 		t.Fatal(err)

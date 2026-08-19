@@ -62,6 +62,46 @@ test "$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$bootstrap_id")" = none
 test "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$bootstrap_id")" = true
 test "$(docker inspect -f '{{.Config.User}}' "$bootstrap_id")" = 65532:65532
 
+for service in dkg-a dkg-b dkg-c fixture-publisher; do
+    container_id=$(docker compose -p "$project_name" -f "$compose_file" ps -a -q "$service")
+    test -n "$container_id"
+    test "$(docker inspect -f '{{.State.ExitCode}}' "$container_id")" = 0
+    test "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$container_id")" = true
+    test "$(docker inspect -f '{{.Config.User}}' "$container_id")" = 65532:65532
+    docker inspect -f '{{json .HostConfig.CapDrop}}' "$container_id" | grep -Fq '"ALL"'
+    docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$container_id" | grep -Fq 'no-new-privileges:true'
+done
+fixture_publisher_id=$(docker compose -p "$project_name" -f "$compose_file" ps -a -q fixture-publisher)
+test "$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$fixture_publisher_id")" = none
+
+for name in a b c; do
+    dkg_id=$(docker compose -p "$project_name" -f "$compose_file" ps -a -q "dkg-$name")
+    docker cp "$dkg_id:/certificate/dkg-certificate.json" "$evidence_root/dkg-$name-certificate.json"
+    docker compose -p "$project_name" -f "$compose_file" exec -T "operator-$name" \
+        sha256sum /operator/distributed-threshold-share.json > "$evidence_root/operator-$name-share.sha256"
+done
+cmp "$evidence_root/dkg-a-certificate.json" "$evidence_root/dkg-b-certificate.json"
+cmp "$evidence_root/dkg-a-certificate.json" "$evidence_root/dkg-c-certificate.json"
+grep -Fq '"version": "nomad-dkg-certificate-v1"' "$evidence_root/dkg-a-certificate.json"
+docker compose -p "$project_name" -f "$compose_file" exec -T operator-a \
+    cat /published/descriptor.json > "$evidence_root/descriptor.json"
+python3 - "$evidence_root" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+certificate = json.loads((root / "dkg-a-certificate.json").read_text())
+descriptor = json.loads((root / "descriptor.json").read_text())
+if descriptor.get("version") != "nomad-batch-descriptor-v2":
+    raise SystemExit("live descriptor is not the certified DKG format")
+if descriptor.get("dkg_certificate") != certificate:
+    raise SystemExit("live descriptor does not embed the distributed DKG certificate")
+PY
+test "$(cut -d ' ' -f 1 "$evidence_root/operator-a-share.sha256")" != "$(cut -d ' ' -f 1 "$evidence_root/operator-b-share.sha256")"
+test "$(cut -d ' ' -f 1 "$evidence_root/operator-a-share.sha256")" != "$(cut -d ' ' -f 1 "$evidence_root/operator-c-share.sha256")"
+test "$(cut -d ' ' -f 1 "$evidence_root/operator-b-share.sha256")" != "$(cut -d ' ' -f 1 "$evidence_root/operator-c-share.sha256")"
+
 pcap="$evidence_root/fabric.pcap"
 if ! command -v tcpdump >/dev/null 2>&1; then
     echo "tcpdump is required for the live release gate" >&2

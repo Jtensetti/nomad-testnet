@@ -174,12 +174,12 @@ func (b *Board) deliver(encoded []byte) error {
 	if err != nil {
 		return err
 	}
-	phaseStart, phaseEnd, err := b.phaseWindow(preview.Phase)
+	acceptanceStart, phaseDeadline, err := b.phaseWindow(preview.Phase)
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC()
-	if now.Before(phaseStart) || !now.Before(phaseEnd) {
+	if now.Before(acceptanceStart) || !now.Before(phaseDeadline) {
 		return fmt.Errorf("DKG %s message arrived outside its signed phase window", preview.Phase)
 	}
 	envelope, payload, fresh, err := b.store.Accept(encoded)
@@ -268,20 +268,20 @@ func (b *Board) phaseWindow(phase Phase) (time.Time, time.Time, error) {
 		return time.Time{}, time.Time{}, err
 	}
 	duration := time.Duration(b.network.Document.DKG.PhaseDurationMillis) * time.Millisecond
-	offset := 0
+	deadlineMultiplier := 0
 	switch phase {
 	case DealPhase:
+		deadlineMultiplier = 1
 	case ResponsePhase:
-		offset = 1
+		deadlineMultiplier = 2
 	case JustificationPhase:
-		offset = 2
+		deadlineMultiplier = 3
 	case ResultPhase:
-		offset = 3
+		deadlineMultiplier = 4
 	default:
 		return time.Time{}, time.Time{}, errors.New("unknown DKG phase")
 	}
-	phaseStart := start.Add(time.Duration(offset) * duration)
-	return phaseStart, phaseStart.Add(duration), nil
+	return start, start.Add(time.Duration(deadlineMultiplier) * duration), nil
 }
 
 func (b *Board) WaitForResults(ctx context.Context) ([]storedMessage, error) {

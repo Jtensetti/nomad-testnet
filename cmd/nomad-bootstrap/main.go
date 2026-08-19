@@ -5,11 +5,17 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
+	"math/big"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,12 +46,22 @@ func run() error {
 	dkgEndpointsValue := flag.String("dkg-endpoints", "https://dkg-a:4400,https://dkg-b:4400,https://dkg-c:4400", "comma-separated inter-operator DKG endpoints")
 	cellInterval := flag.Uint("cell-interval-ms", 50, "public fixed cell interval")
 	validFor := flag.Duration("valid-for", 24*time.Hour, "topology validity period")
+	dkgStartDelay := flag.Duration("dkg-start-delay", 2*time.Minute, "delay before the signed DKG schedule")
+	dkgPhaseDuration := flag.Duration("dkg-phase-duration", 30*time.Second, "duration of each signed DKG phase")
+	authorityPrivateOutput := flag.String("authority-private-out", "", "optional new 0600 authority private-key path for integration fixtures")
+	emitDKGTestTLS := flag.Bool("emit-dkg-test-tls", false, "generate a private test CA and DKG server certificates")
 	flag.Parse()
 	if *output == "" || *envelopePath == "" {
 		return errors.New("--out and --envelope are required")
 	}
 	if *validFor < time.Hour || *validFor > 365*24*time.Hour {
 		return errors.New("--valid-for must be between one hour and one year")
+	}
+	if *dkgStartDelay < 10*time.Second || *dkgStartDelay > 24*time.Hour {
+		return errors.New("--dkg-start-delay must be between ten seconds and one day")
+	}
+	if *dkgPhaseDuration < time.Second || *dkgPhaseDuration > 10*time.Minute {
+		return errors.New("--dkg-phase-duration must be between one second and ten minutes")
 	}
 	operatorIDs := splitList(*operatorIDsValue)
 	endpoints := splitList(*endpointsValue)
@@ -91,7 +107,7 @@ func run() error {
 			CellSize: topology.CellSize, CellIntervalMillis: uint32(*cellInterval),
 			MaxLatenessMillis: uint32(*cellInterval * 4), QueueCapacity: 256,
 		},
-		DKG:       topology.DKGProfile{Threshold: batch.DefaultThreshold, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Add(2 * time.Minute).Format(time.RFC3339), PhaseDurationMillis: 30_000},
+		DKG:       topology.DKGProfile{Threshold: batch.DefaultThreshold, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Add(*dkgStartDelay).Format(time.RFC3339), PhaseDurationMillis: uint32(*dkgPhaseDuration / time.Millisecond)},
 		Operators: make([]topology.Operator, len(operatorIDs)),
 	}
 	for index, id := range operatorIDs {
@@ -170,6 +186,14 @@ func run() error {
 	if err := writeNew(filepath.Join(publicDirectory, "authority.pub"), []byte(base64.StdEncoding.EncodeToString(authorityPublic)+"\n"), 0o644); err != nil {
 		return err
 	}
+	if *authorityPrivateOutput != "" {
+		if err := requireRealParent(*authorityPrivateOutput); err != nil {
+			return err
+		}
+		if err := writeNew(*authorityPrivateOutput, []byte(base64.StdEncoding.EncodeToString(authorityPrivate)+"\n"), 0o600); err != nil {
+			return err
+		}
+	}
 	for path, content := range map[string][]byte{
 		"topology.json": topologyBytes, "descriptor.json": descriptorBytes,
 		"seed.json": seedBytes, "fetch-plan.json": partialPlanBytes,
@@ -195,6 +219,11 @@ func run() error {
 			return err
 		}
 		if err := writeNew(filepath.Join(operatorDirectory, "threshold-share.json"), shareBytes, 0o600); err != nil {
+			return err
+		}
+	}
+	if *emitDKGTestTLS {
+		if err := generateDKGTestTLS(publicDirectory, *output, verifiedTopology); err != nil {
 			return err
 		}
 	}
@@ -227,6 +256,72 @@ func buildSecrets(network topology.Verified, identities map[string]ed25519.Priva
 	return files, nil
 }
 
+// generateDKGTestTLS creates an ephemeral private PKI solely for the isolated
+// Compose acceptance network. Real operators provision independently managed
+// certificates from their normal trust infrastructure.
+func generateDKGTestTLS(publicDirectory, outputRoot string, network topology.Verified) error {
+	caPublic, caPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	notBefore := time.Now().UTC().Add(-time.Minute)
+	notAfter, err := time.Parse(time.RFC3339, network.Document.NotAfter)
+	if err != nil {
+		return err
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Nomad isolated DKG test CA"},
+		NotBefore: notBefore, NotAfter: notAfter, IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, caPublic, caPrivate)
+	if err != nil {
+		return err
+	}
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	if err := writeNew(filepath.Join(publicDirectory, "dkg-test-ca.pem"), caPEM, 0o644); err != nil {
+		return err
+	}
+	for index, operator := range network.Document.Operators {
+		endpoint, err := url.Parse(operator.DKGEndpoint)
+		if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" {
+			return fmt.Errorf("test TLS requires an HTTPS DKG endpoint for %s", operator.ID)
+		}
+		serverPublic, serverPrivate, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return err
+		}
+		template := &x509.Certificate{
+			SerialNumber: big.NewInt(int64(index + 2)), Subject: pkix.Name{CommonName: endpoint.Hostname()},
+			NotBefore: notBefore, NotAfter: notAfter, KeyUsage: x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		}
+		if ip := net.ParseIP(endpoint.Hostname()); ip != nil {
+			template.IPAddresses = []net.IP{ip}
+		} else {
+			template.DNSNames = []string{endpoint.Hostname()}
+		}
+		certificateDER, err := x509.CreateCertificate(rand.Reader, template, caTemplate, serverPublic, caPrivate)
+		if err != nil {
+			return err
+		}
+		privateDER, err := x509.MarshalPKCS8PrivateKey(serverPrivate)
+		if err != nil {
+			return err
+		}
+		operatorDirectory := filepath.Join(outputRoot, "operators", operator.ID)
+		certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificateDER})
+		privatePEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER})
+		if err := writeNew(filepath.Join(operatorDirectory, "dkg-tls.crt"), certificatePEM, 0o644); err != nil {
+			return err
+		}
+		if err := writeNew(filepath.Join(operatorDirectory, "dkg-tls.key"), privatePEM, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func splitList(value string) []string {
 	parts := strings.Split(value, ",")
 	out := make([]string, 0, len(parts))
@@ -252,6 +347,17 @@ func requireEmptyDirectory(path string) error {
 		}
 		return errors.New("output directory contains files; refuse to overwrite operator secrets")
 	})
+}
+
+func requireRealParent(path string) error {
+	info, err := os.Lstat(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("output parent must be a real directory")
+	}
+	return nil
 }
 
 func writeNew(path string, data []byte, mode os.FileMode) error {

@@ -20,7 +20,9 @@ RUN mkdir -p /runtime/public \
     /runtime/operators/operator-a \
     /runtime/operators/operator-b \
     /runtime/operators/operator-c \
-    /cache /state /partials /verified /config /operator && \
-    chown -R 65532:65532 /runtime /cache /state /partials /verified /config /operator
+    /cache /state /partials /verified /config /operator /authority /dkg \
+    /certificate /published /operators/a /operators/b /operators/c && \
+    chown -R 65532:65532 /runtime /cache /state /partials /verified /config /operator \
+    /authority /dkg /certificate /published /operators
 USER 65532:65532
 ENTRYPOINT []
