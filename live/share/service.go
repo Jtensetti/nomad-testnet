@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
@@ -24,17 +26,31 @@ type Service struct {
 	Secret     mix.MemberSecret
 	OutputDir  string
 	Interval   time.Duration
+	ListenAddress string
 }
 
 func (service Service) Run(ctx context.Context) error {
-	if service.Cache == nil || service.OutputDir == "" || service.Interval <= 0 {
-		return errors.New("share service requires cache, output directory and fixed interval")
+	if service.Cache == nil || service.OutputDir == "" || service.Interval <= 0 || service.ListenAddress == "" {
+		return errors.New("share service requires cache, output directory, fixed interval and listen address")
 	}
 	if err := os.MkdirAll(service.OutputDir, 0o700); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(service.Interval)
 	defer ticker.Stop()
+	server := &http.Server{
+		Addr: service.ListenAddress, Handler: service.handler(),
+		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second,
+		WriteTimeout: 5 * time.Second, IdleTimeout: 10 * time.Second,
+		MaxHeaderBytes: 8 << 10,
+	}
+	serverErrors := make(chan error, 1)
+	go func() { serverErrors <- server.ListenAndServe() }()
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownContext)
+	}()
 	for {
 		if _, err := service.ProcessOnce(); err != nil {
 			return err
@@ -42,9 +58,41 @@ func (service Service) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case err := <-serverErrors:
+			if errors.Is(err, http.ErrServerClosed) {
+				return nil
+			}
+			return err
 		case <-ticker.C:
 		}
 	}
+}
+
+func (service Service) handler() http.Handler {
+	expectedPath := "/v1/partial/" + service.Descriptor.Descriptor.StreamID + "/" + strconv.FormatUint(uint64(service.Secret.Index), 10)
+	filePath := filepath.Join(service.OutputDir, fmt.Sprintf("%s-%02d.partial.json", service.Descriptor.Descriptor.StreamID, service.Secret.Index))
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Cache-Control", "no-store")
+		response.Header().Set("X-Content-Type-Options", "nosniff")
+		if request.Method != http.MethodGet || request.URL.Path != expectedPath || request.URL.RawQuery != "" {
+			http.NotFound(response, request)
+			return
+		}
+		info, err := os.Lstat(filePath)
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > batch.MaximumFileBytes {
+			http.NotFound(response, request)
+			return
+		}
+		encoded, err := os.ReadFile(filePath)
+		if err != nil || len(encoded) > batch.MaximumFileBytes {
+			http.Error(response, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		response.Header().Set("Content-Type", "application/vnd.nomad.partial+json")
+		response.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write(encoded)
+	})
 }
 
 func (service Service) ProcessOnce() (bool, error) {

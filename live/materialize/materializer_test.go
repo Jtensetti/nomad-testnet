@@ -42,6 +42,7 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 		identities[id] = privateKey
 		document.Operators[index] = topology.Operator{
 			ID: id, Index: uint16(index), Endpoint: []string{"127.0.0.1:4201", "127.0.0.1:4202", "127.0.0.1:4203"}[index],
+			PartialEndpoint: []string{"http://127.0.0.1:4301", "http://127.0.0.1:4302", "http://127.0.0.1:4303"}[index],
 			IdentityKey: base64.StdEncoding.EncodeToString(publicKey), PeerPlan: []uint16{uint16((index + 1) % 3)},
 		}
 	}

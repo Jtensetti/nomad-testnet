@@ -16,6 +16,7 @@ import (
 
 	"github.com/Jtensetti/nomad-testnet/live/batch"
 	"github.com/Jtensetti/nomad-testnet/live/bundle"
+	"github.com/Jtensetti/nomad-testnet/live/fetchplan"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -33,6 +34,7 @@ func run() error {
 	networkID := flag.String("network-id", "nomad-live-demo", "public network identifier")
 	operatorIDsValue := flag.String("operators", "operator-a,operator-b,operator-c", "comma-separated operator IDs")
 	endpointsValue := flag.String("endpoints", "operator-a:4200,operator-b:4200,operator-c:4200", "comma-separated signed UDP endpoints")
+	partialEndpointsValue := flag.String("partial-endpoints", "http://share-a:4300,http://share-b:4300,http://share-c:4300", "comma-separated public partial-proof endpoints")
 	cellInterval := flag.Uint("cell-interval-ms", 50, "public fixed cell interval")
 	validFor := flag.Duration("valid-for", 24*time.Hour, "topology validity period")
 	flag.Parse()
@@ -44,8 +46,9 @@ func run() error {
 	}
 	operatorIDs := splitList(*operatorIDsValue)
 	endpoints := splitList(*endpointsValue)
-	if len(operatorIDs) < 3 || len(operatorIDs) != len(endpoints) {
-		return errors.New("operators and endpoints must contain the same three-or-more entries")
+	partialEndpoints := splitList(*partialEndpointsValue)
+	if len(operatorIDs) < 3 || len(operatorIDs) != len(endpoints) || len(operatorIDs) != len(partialEndpoints) {
+		return errors.New("operators, UDP endpoints and partial endpoints must contain the same three-or-more entries")
 	}
 	if len(operatorIDs) > 64 {
 		return errors.New("at most 64 operators are supported")
@@ -87,6 +90,7 @@ func run() error {
 		identities[id] = privateKey
 		document.Operators[index] = topology.Operator{
 			ID: id, Index: uint16(index), Endpoint: endpoints[index],
+			PartialEndpoint: partialEndpoints[index],
 			IdentityKey: base64.StdEncoding.EncodeToString(publicKey),
 			PeerPlan: []uint16{uint16((index + 1) % len(operatorIDs))},
 		}
@@ -121,6 +125,19 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	partialPlan, err := fetchplan.Sign(fetchplan.Plan{
+		Version: fetchplan.Version, NetworkID: verifiedTopology.Document.NetworkID,
+		TopologyEpoch: verifiedTopology.Document.Epoch,
+		TopologyDigest: fmt.Sprintf("%x", verifiedTopology.Digest),
+		StreamID: generated.Descriptor.StreamID,
+	}, authorityPrivate)
+	if err != nil {
+		return err
+	}
+	partialPlanBytes, err := fetchplan.Encode(partialPlan)
+	if err != nil {
+		return err
+	}
 	publicDirectory := filepath.Join(*output, "public")
 	if err := os.MkdirAll(publicDirectory, 0o755); err != nil {
 		return err
@@ -129,7 +146,8 @@ func run() error {
 		return err
 	}
 	for path, content := range map[string][]byte{
-		"topology.json": topologyBytes, "descriptor.json": descriptorBytes, "seed.json": seedBytes,
+		"topology.json": topologyBytes, "descriptor.json": descriptorBytes,
+		"seed.json": seedBytes, "fetch-plan.json": partialPlanBytes,
 	} {
 		if err := writeNew(filepath.Join(publicDirectory, path), content, 0o644); err != nil {
 			return err

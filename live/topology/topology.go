@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -34,12 +35,13 @@ type TrafficClass struct {
 }
 
 type Operator struct {
-	ID          string   `json:"id"`
-	Index       uint16   `json:"index"`
-	Endpoint    string   `json:"endpoint"`
-	IdentityKey string   `json:"identity_key"`
-	PeerPlan    []uint16 `json:"peer_plan"`
-	Attestation string   `json:"attestation"`
+	ID              string   `json:"id"`
+	Index           uint16   `json:"index"`
+	Endpoint        string   `json:"endpoint"`
+	PartialEndpoint string   `json:"partial_endpoint"`
+	IdentityKey     string   `json:"identity_key"`
+	PeerPlan        []uint16 `json:"peer_plan"`
+	Attestation     string   `json:"attestation"`
 }
 
 type Document struct {
@@ -243,6 +245,7 @@ func validateDocument(document Document, now time.Time) error {
 	}
 	ids := make(map[string]struct{}, len(document.Operators))
 	endpoints := make(map[string]struct{}, len(document.Operators))
+	partialEndpoints := make(map[string]struct{}, len(document.Operators))
 	keys := make(map[string]struct{}, len(document.Operators))
 	for index, operator := range document.Operators {
 		if operator.Index != uint16(index) {
@@ -263,6 +266,16 @@ func validateDocument(document Document, now time.Time) error {
 			return fmt.Errorf("duplicate UDP endpoint %q", operator.Endpoint)
 		}
 		endpoints[operator.Endpoint] = struct{}{}
+		partialURL, err := url.Parse(operator.PartialEndpoint)
+		if err != nil || (partialURL.Scheme != "http" && partialURL.Scheme != "https") ||
+			partialURL.Hostname() == "" || partialURL.Port() == "" || partialURL.User != nil ||
+			(partialURL.Path != "" && partialURL.Path != "/") || partialURL.RawQuery != "" || partialURL.Fragment != "" {
+			return fmt.Errorf("operator %s has invalid partial endpoint", operator.ID)
+		}
+		if _, exists := partialEndpoints[operator.PartialEndpoint]; exists {
+			return fmt.Errorf("duplicate partial endpoint %q", operator.PartialEndpoint)
+		}
+		partialEndpoints[operator.PartialEndpoint] = struct{}{}
 		if _, err := decodeFixed(operator.IdentityKey, ed25519.PublicKeySize); err != nil {
 			return fmt.Errorf("operator %s has invalid identity key", operator.ID)
 		}

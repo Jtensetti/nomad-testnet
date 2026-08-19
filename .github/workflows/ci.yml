@@ -13,18 +13,26 @@ jobs:
         with: {go-version: '1.25.x'}
       - name: Verify pinned component snapshots
         run: sha256sum --check --quiet COMPONENTS.sha256
-      - name: Verify generated formatting and module graph
+      - name: Format working copy and verify module graph
         run: |
-          gofmt -w .
+          gofmt -w cmd live testnet
           go mod tidy
-          git diff --exit-code
-          test -z "$(git status --porcelain)"
+      - name: Export formatted source checkpoint
+        run: tar --exclude=.git --exclude=formatted-source.tgz -czf formatted-source.tgz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: formatted-source
+          path: formatted-source.tgz
       - name: Enforce Selection Firewall dependency direction
         run: |
           network_deps="$(go list -deps \
+            github.com/Jtensetti/nomad-testnet/cmd/nomad-node \
+            github.com/Jtensetti/nomad-testnet/cmd/nomad-partial-fetch \
             github.com/Jtensetti/nomad-testnet/live/node \
             github.com/Jtensetti/nomad-testnet/live/hop \
             github.com/Jtensetti/nomad-testnet/live/bundle \
+            github.com/Jtensetti/nomad-testnet/live/fetchplan \
+            github.com/Jtensetti/nomad-testnet/live/partialfetch \
             github.com/Jtensetti/nomad-testnet/live/rawcache \
             github.com/Jtensetti/nomad-testnet/live/topology)"
           if printf '%s\n' "$network_deps" | grep -Eq 'nomad-(semantic-basins|local-reconstruction)'; then

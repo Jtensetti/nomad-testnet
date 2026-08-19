@@ -30,7 +30,7 @@ while [ ! -s "$verified_root/$object_name" ]; do
     sleep 2
 done
 
-for service in operator-a operator-b operator-c share-a share-b share-c materializer; do
+for service in operator-a operator-b operator-c share-a share-b share-c partial-fetcher materializer; do
     container_id=$(docker compose -p "$project_name" -f "$compose_file" ps -q "$service")
     test -n "$container_id"
     test "$(docker inspect -f '{{.State.Running}}' "$container_id")" = true

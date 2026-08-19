@@ -30,11 +30,12 @@ func run() error {
 	sharePath := flag.String("share", "", "operator threshold share")
 	cachePath := flag.String("cache", "", "operator raw cache")
 	outputPath := flag.String("out", "", "public partial-decryption directory")
+	listen := flag.String("listen", "", "public partial-proof HTTP listen address")
 	interval := flag.Duration("interval", time.Second, "fixed local cache scan interval")
 	flag.Parse()
 	for name, value := range map[string]string{
 		"--topology": *topologyPath, "--authority-key": *authorityPath, "--descriptor": *descriptorPath,
-		"--share": *sharePath, "--cache": *cachePath, "--out": *outputPath,
+		"--share": *sharePath, "--cache": *cachePath, "--out": *outputPath, "--listen": *listen,
 	} {
 		if value == "" {
 			return fmt.Errorf("%s is required", name)
@@ -62,7 +63,10 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	service := share.Service{Cache: cache, Descriptor: descriptor, Secret: secret, OutputDir: *outputPath, Interval: *interval}
+	service := share.Service{
+		Cache: cache, Descriptor: descriptor, Secret: secret, OutputDir: *outputPath,
+		Interval: *interval, ListenAddress: *listen,
+	}
 	if err := service.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}

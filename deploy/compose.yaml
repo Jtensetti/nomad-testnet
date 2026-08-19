@@ -116,13 +116,14 @@ services:
       - --cache=/cache
       - --out=/partials
       - --interval=1s
+      - --listen=:4300
     depends_on:
       operator-a: {condition: service_healthy}
     volumes:
       - public-config:/config:ro
       - operator-a-secret:/operator:ro
       - raw-a:/cache:ro
-      - partials:/partials
+      - partial-a:/partials
 
   share-b:
     <<: *locked-service
@@ -133,7 +134,7 @@ services:
       - public-config:/config:ro
       - operator-b-secret:/operator:ro
       - raw-b:/cache:ro
-      - partials:/partials
+      - partial-b:/partials
 
   share-c:
     <<: *locked-service
@@ -144,7 +145,24 @@ services:
       - public-config:/config:ro
       - operator-c-secret:/operator:ro
       - raw-c:/cache:ro
-      - partials:/partials
+      - partial-c:/partials
+
+  partial-fetcher:
+    <<: *locked-service
+    command:
+      - nomad-partial-fetch
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --plan=/config/fetch-plan.json
+      - --out=/partials
+      - --interval=1s
+    depends_on:
+      share-a: {condition: service_started}
+      share-b: {condition: service_started}
+      share-c: {condition: service_started}
+    volumes:
+      - public-config:/config:ro
+      - partials-local:/partials
 
   materializer:
     <<: *locked-service
@@ -159,13 +177,11 @@ services:
       - --interval=1s
     depends_on:
       operator-c: {condition: service_healthy}
-      share-a: {condition: service_started}
-      share-b: {condition: service_started}
-      share-c: {condition: service_started}
+      partial-fetcher: {condition: service_started}
     volumes:
       - public-config:/config:ro
       - raw-c:/cache:ro
-      - partials:/partials:ro
+      - partials-local:/partials:ro
       - ${NOMAD_VERIFIED_CACHE:-./runtime/verified}:/verified
 
 networks:
@@ -183,4 +199,7 @@ volumes:
   state-a:
   state-b:
   state-c:
-  partials:
+  partial-a:
+  partial-b:
+  partial-c:
+  partials-local:

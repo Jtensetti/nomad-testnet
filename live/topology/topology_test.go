@@ -30,6 +30,7 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 		identities[id] = privateKey
 		document.Operators[index] = Operator{
 			ID: id, Index: uint16(index), Endpoint: "127.0.0.1:" + string(rune('1'+index)) + "200",
+			PartialEndpoint: "http://127.0.0.1:" + string(rune('1'+index)) + "300",
 			IdentityKey: base64.StdEncoding.EncodeToString(publicKey), PeerPlan: []uint16{uint16((index + 1) % 3)},
 		}
 	}
