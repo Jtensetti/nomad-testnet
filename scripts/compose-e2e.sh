@@ -35,6 +35,10 @@ for service in operator-a operator-b operator-c share-a share-b share-c partial-
     test -n "$container_id"
     test "$(docker inspect -f '{{.State.Running}}' "$container_id")" = true
     test "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$container_id")" = true
+    test "$(docker inspect -f '{{.Config.User}}' "$container_id")" = 65532:65532
+    docker inspect -f '{{json .HostConfig.CapDrop}}' "$container_id" | grep -Fq '"ALL"'
+    docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$container_id" | grep -Fq 'no-new-privileges:true'
+    test "$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$container_id")" = 128
 done
 materializer_id=$(docker compose -p "$project_name" -f "$compose_file" ps -q materializer)
 test "$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$materializer_id")" = none
@@ -43,6 +47,7 @@ test -n "$bootstrap_id"
 test "$(docker inspect -f '{{.State.ExitCode}}' "$bootstrap_id")" = 0
 test "$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$bootstrap_id")" = none
 test "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$bootstrap_id")" = true
+test "$(docker inspect -f '{{.Config.User}}' "$bootstrap_id")" = 65532:65532
 
 pcap="$evidence_root/fabric.pcap"
 if ! command -v tcpdump >/dev/null 2>&1; then

@@ -60,3 +60,44 @@ jobs:
           name: live-fabric-evidence
           path: runtime/evidence/
           if-no-files-found: warn
+
+  release:
+    needs: [unit, live-compose]
+    if: github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.25.x'}
+      - uses: actions/download-artifact@v4
+        with:
+          name: live-fabric-evidence
+          path: evidence
+      - name: Build commit-addressed operator bundle
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          for command in nomad-bootstrap nomad-node nomad-share nomad-partial-fetch nomad-materializer; do
+            go build -trimpath -ldflags='-s -w' -o "dist/$command" "./cmd/$command"
+          done
+          tar -C dist -czf nomad-live-linux-amd64.tgz .
+          zip -qr live-fabric-evidence.zip evidence
+          sha256sum nomad-live-linux-amd64.tgz live-fabric-evidence.zip > SHA256SUMS
+      - name: Publish gated live-testnet prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          short_sha="${GITHUB_SHA:0:12}"
+          tag="nomad-live-testnet-${short_sha}"
+          gh release create "$tag" \
+            nomad-live-linux-amd64.tgz live-fabric-evidence.zip SHA256SUMS \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Nomad live fabric testnet (${short_sha})" \
+            --notes "Reader-side live testnet with three separately keyed operator processes, fixed-cadence authenticated UDP, threshold partial exchange, networkless materialization, packet evidence and browser-compatible verified output. This is not an audited production anonymity network; see LIVE_DOD.md for external gates."
