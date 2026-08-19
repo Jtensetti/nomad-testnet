@@ -81,24 +81,41 @@ jobs:
 
   release:
     needs: [unit, live-compose]
-    if: github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
+    if: >-
+      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify release commit marker
+        id: eligibility
+        run: |
+          subject="$(git log -1 --pretty=%s)"
+          if printf '%s\n' "$subject" | grep -q '^release:'; then
+            echo 'release=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'release=false' >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-go@v7
+        if: steps.eligibility.outputs.release == 'true'
         with: {go-version: '1.25.x'}
       - uses: actions/download-artifact@v4
+        if: steps.eligibility.outputs.release == 'true'
         with:
           name: live-fabric-evidence
           path: evidence/fabric
       - uses: actions/download-artifact@v4
+        if: steps.eligibility.outputs.release == 'true'
         with:
           name: operator-ceremony-evidence
           path: evidence/ceremony
       - name: Build commit-addressed operator bundle
+        if: steps.eligibility.outputs.release == 'true'
         env:
           CGO_ENABLED: 0
           GOOS: linux
@@ -112,14 +129,16 @@ jobs:
           zip -qr live-fabric-evidence.zip evidence
           sha256sum nomad-live-linux-amd64.tgz live-fabric-evidence.zip > SHA256SUMS
       - name: Publish gated live-testnet prerelease
+        if: steps.eligibility.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          short_sha="${GITHUB_SHA:0:12}"
+          target_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=12 HEAD)"
           tag="nomad-live-testnet-${short_sha}"
           gh release create "$tag" \
             nomad-live-linux-amd64.tgz live-fabric-evidence.zip SHA256SUMS \
-            --target "$GITHUB_SHA" \
+            --target "$target_sha" \
             --prerelease \
             --title "Nomad live fabric testnet (${short_sha})" \
             --notes "Reader-side live testnet with an offline operator enrollment/attestation ceremony, locally derived X25519+HKDF hop keys, three separately keyed operator processes, fixed-cadence authenticated UDP, threshold partial exchange, networkless materialization, packet and ceremony evidence, and browser-compatible verified output. This is not an audited production anonymity network; see LIVE_DOD.md for external gates."
