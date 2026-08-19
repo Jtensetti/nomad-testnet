@@ -76,6 +76,20 @@ func ValidateDKGPublicIdentity(public DKGPublicIdentity) error {
 	if point.Equal(s.Point().Null()) {
 		return errors.New("DKG public identity is the identity point")
 	}
+	// Edwards25519 has cofactor eight. UnmarshalBinary accepts encodings such
+	// as the all-zero, low-order point, so canonical encoding alone is not a
+	// subgroup check. Clear the cofactor and map back with 8^-1 in the prime
+	// order scalar field; equality holds exactly for points in the subgroup
+	// used by Kyber's Schnorr authentication scheme.
+	eight := s.Scalar().SetInt64(8)
+	cleared := s.Point().Mul(eight, point)
+	if cleared.Equal(s.Point().Null()) {
+		return errors.New("DKG public identity has small order")
+	}
+	projected := s.Point().Mul(s.Scalar().Inv(eight), cleared)
+	if !projected.Equal(point) {
+		return errors.New("DKG public identity is outside the prime-order subgroup")
+	}
 	return nil
 }
 
