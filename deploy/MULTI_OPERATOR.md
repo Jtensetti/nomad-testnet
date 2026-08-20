@@ -1,100 +1,66 @@
 # Multi-operator deployment
 
-The live binaries are deliberately deployable without Docker Compose. Compose
-is the reproducible one-host acceptance profile; a real committee places each
-operator on separately administered infrastructure.
+This is the production-shaped deployment contract for the live binaries.
+Docker Compose is only a one-host acceptance profile. A real committee places
+each operator on separately administered infrastructure.
 
-## Trust and ownership split
+## Security boundary
 
-Every operator receives only:
+Each operator receives only:
 
-- the authority-signed `topology.json` and authority public key;
-- its own `node-secrets.json`, containing only its Ed25519 identity and
-  epoch-scoped X25519 and dedicated DKG private keys;
-- its own `threshold-share.json` from the epoch DKG;
-- its own raw-cache and sequence-state volumes.
+- the authority-signed topology and pinned authority public key;
+- the activated `epoch-descriptor.json` and its own persistent epoch-chain;
+- its own operator secret;
+- its own DKG state and threshold share;
+- its own raw cache, sequence state and partial output.
 
-No operator receives another operator's secret volume. The reader/materializer
-receives public configuration, one authenticated raw cache and public partial
-proofs; it never receives a threshold secret share or node identity key.
+No operator receives another operator's private material. A coordinator may
+collect public enrollments, attestations, topology documents, DKG certificates,
+epoch descriptors and erasure statements. It must never receive an operator's
+private keys or threshold share.
 
-Before bootstrap or content work, each administrator runs `nomad-operator
-init` locally and sends only the resulting self-signed enrollment to the
-topology coordinator. The coordinator creates one deterministic draft with
-`nomad-topology draft`. Every administrator inspects that complete document and
-returns `nomad-operator attest` output. The coordinator can finalize only with
-one valid, same-draft attestation per listed member. Each node derives its
-directed hop keys locally via X25519+HKDF; the coordinator never handles a
-pairwise MAC key. Run `nomad-operator verify` against the final topology before
-starting either process.
+## 1. Enrollment and topology
 
-Each operator runs locally (example A):
+Each administrator creates its identity locally:
 
 ```bash
-install -d -m 0700 /var/lib/nomad/ceremony
 nomad-operator init \
   --id=operator-a \
   --endpoint=203.0.113.10:4200 \
   --partial-endpoint=https://operator-a.example:4300 \
   --dkg-endpoint=https://operator-a.example:4400 \
-  --secret=/var/lib/nomad/ceremony/node-secrets.json \
-  --enrollment=/var/lib/nomad/ceremony/enrollment.json
+  --secret=/etc/nomad/operator-secret.json \
+  --enrollment=operator-a.enrollment.json
 ```
 
-The coordinator collects only the public enrollment files and publishes the
-draft:
-
-```bash
-nomad-topology draft \
-  --network-id=nomad-live \
-  --epoch=1 \
-  --cell-interval-ms=50 \
-  --dkg-start-delay=10m \
-  --dkg-phase-duration=2m \
-  --dkg-threshold=2 \
-  --enrollments=operator-a.json,operator-b.json,operator-c.json \
-  --out=topology-draft.json
-```
-
-After independently comparing the draft digest and reviewing every field, each
-operator returns an attestation:
+The coordinator builds a draft from public enrollments. Every operator reviews
+and attests the exact draft. The authority can finalize only the attested
+membership:
 
 ```bash
 nomad-operator attest \
-  --secret=/var/lib/nomad/ceremony/node-secrets.json \
+  --secret=/etc/nomad/operator-secret.json \
   --draft=topology-draft.json \
   --out=operator-a.attestation.json
-```
-
-The authority key is generated once per authority lifecycle with
-`nomad-topology authority-init`. The coordinator then finalizes the epoch:
-
-```bash
-nomad-topology finalize \
-  --draft=topology-draft.json \
-  --attestations=operator-a.attestation.json,operator-b.attestation.json,operator-c.attestation.json \
-  --authority-private=authority.key \
-  --out=topology.json
 
 nomad-operator verify \
-  --secret=/var/lib/nomad/ceremony/node-secrets.json \
-  --topology=topology.json \
-  --authority-key=authority.pub
+  --secret=/etc/nomad/operator-secret.json \
+  --topology=/etc/nomad/topology.json \
+  --authority-key=/etc/nomad/authority.pub
 ```
 
-Compare the reported topology digest out of band before opening the epoch.
+Compare the topology digest out of band before starting the epoch.
 
-Before the signed DKG start time, every administrator starts exactly one local
-ceremony process. The state directory must be empty and private; an interrupted
-session is deliberately non-resumable and requires a newly attested topology
-with a fresh session ID:
+## 2. Distributed DKG
+
+Run one DKG process per operator before the signed DKG start boundary:
 
 ```bash
 install -d -m 0700 /var/lib/nomad/dkg /run/nomad
 nomad-dkg \
   --topology=/etc/nomad/topology.json \
   --authority-key=/etc/nomad/authority.pub \
-  --secrets=/var/lib/nomad/ceremony/node-secrets.json \
+  --secrets=/etc/nomad/operator-secret.json \
   --listen=:4400 \
   --state=/var/lib/nomad/dkg \
   --share-out=/run/nomad/threshold-share.json \
@@ -103,50 +69,47 @@ nomad-dkg \
   --tls-private-key=/etc/nomad/tls/dkg.key
 ```
 
-All configured members must land in QUAL and every member must sign the same
-manifest before any certificate activates. Identical message retries are
-idempotent; a different message from the same sender and phase is recorded as
-equivocation and aborts the ceremony. Compare the reported certificate digest
-out of band. No coordinator ever receives a threshold secret.
+Every configured operator must land in QUAL and attest the same DKG manifest.
+An interrupted ceremony is not resumed. Wait for the next public retry offset
+and start a fresh signed session.
 
-`nomad-fixture-publisher` exists only to connect this ceremony to the repository's
-deterministic acceptance object. It reads all mixer identities on one
-network-disabled test process and therefore is neither the production shuffle
-administration model nor an anonymous publication airlock. Real deployment must
-replace that fixture stage with separately administered shuffle rounds and the
-future publication protocol before making an anonymity claim.
+## 3. Epoch activation is separate from topology validity
 
-## Network prerequisites
+A signed topology is not by itself permission to serve threshold work. The
+epoch descriptor binds:
 
-The signed topology must name stable UDP endpoints for port 4200 and stable
-partial-proof endpoints for port 4300. The current proof service is plain HTTP;
-run both services inside an operator-authenticated tunnel such as WireGuard.
-The inner Nomad datagram HMAC remains mandatory because it binds topology,
-epoch, receiver, sender, batch coordinate and sequence independently of the
-tunnel.
+- the exact signed topology;
+- the exact all-operator-certified DKG certificate;
+- a transition type (`genesis`, `scheduled`, or `emergency`);
+- public `activate_at` and `retire_at` boundaries;
+- required previous-epoch approvals for a successor;
+- activation signatures from the new epoch's entire membership.
 
-Allow constant-rate UDP between the signed peers. Do not use an autoscaler,
-proxy, retry layer or load balancer that bursts, coalesces, duplicates or
-selects traffic in response to cache demand. Pin each signed endpoint to one
-operator instance for the epoch.
+Each operator keeps a local writable chain, for example:
 
-## Per-operator processes
+```text
+/var/lib/nomad/epoch-chain/
+```
 
-Operator A starts its node with only operator A's files:
+Do not share this directory between operators. Distribute the public epoch
+descriptor to every operator. A service may import the same descriptor again;
+identical re-import is idempotent. Conflicting valid descriptors halt the chain.
+
+## 4. Runtime processes
+
+The network process and threshold-share process are separate security domains.
+Use the current release's fixed-rate network sender boundary; do not insert an
+autoscaler, proxy, demand-driven retry layer or load balancer in front of the
+fixed-cadence path.
+
+The share service must be started with the verified epoch chain:
 
 ```bash
-nomad-node \
-  --topology=/etc/nomad/topology.json \
-  --authority-key=/etc/nomad/authority.pub \
-  --secrets=/run/nomad/node-secrets.json \
-  --listen=:4200 \
-  --cache=/var/lib/nomad/raw \
-  --state=/var/lib/nomad/sequence \
-  --health=/run/nomad/health.json
-
 nomad-share \
   --topology=/etc/nomad/topology.json \
   --authority-key=/etc/nomad/authority.pub \
+  --epoch-descriptor=/etc/nomad/epoch-descriptor.json \
+  --epoch-chain=/var/lib/nomad/epoch-chain \
   --descriptor=/etc/nomad/descriptor.json \
   --share=/run/nomad/threshold-share.json \
   --cache=/var/lib/nomad/raw \
@@ -155,15 +118,31 @@ nomad-share \
   --listen=:4300
 ```
 
-Repeat with distinct secrets, storage and hosts for B and C. Run as an
-unprivileged dedicated user with a read-only root filesystem, no Linux
-capabilities, a private temporary directory, an explicit file allowlist and an
-egress policy limited to the signed peers.
+`nomad-share` fails before opening its HTTP listener unless the exact topology
+epoch is `ACTIVE` in the chain. Before every partial-decryption attempt and
+before every HTTP response containing an already-generated partial, it refreshes
+the persisted chain. A scheduled retirement, emergency successor, or persisted
+halt therefore fails closed without a service restart.
 
-## Reader-side processes
+Run each process as an unprivileged dedicated user with a read-only root
+filesystem, dropped capabilities, private temporary directory and explicit
+writable paths only for the state it owns.
 
-The public fetch plan is authority signed and independent of browser activity.
-On a reader host, run:
+## 5. Network prerequisites
+
+The topology names stable public endpoints. The current proof service is plain
+HTTP internally; put it inside an operator-authenticated tunnel such as
+WireGuard when crossing untrusted networks. The Nomad cell authentication is
+still mandatory because it binds sender, receiver, topology, epoch, sequence
+and batch context independently of the tunnel.
+
+Do not change cadence, routing or retries based on cache demand, publication
+state, search activity or any other private state.
+
+## 6. Reader side
+
+The fetch plan is public and authority-signed. The materializer must have no
+network capability at the OS/container boundary:
 
 ```bash
 nomad-partial-fetch \
@@ -183,20 +162,58 @@ nomad-materializer \
   --interval=1s
 ```
 
-The materializer imports no socket package and must have networking disabled at
-the OS/container boundary. Sync or mount `/var/lib/nomad/verified` into the
-Nomad Browser object cache. Cache refresh is periodic and must never be invoked
-by a search event.
+Mount or sync the verified output into the Nomad Browser cache on a public
+schedule. Browser search must never trigger a refresh.
 
-## Epoch change and recovery
+## 7. Rotation and emergency retirement
 
-Topology, hop keys, identity attestations, threshold shares and persistent
-sequence state are one epoch. Rotate all of them together. Never restore old
-sequence state under a current hop key. A lost sequence state requires a fresh
-epoch; an equivocation, invalid share or unexplained drop alarm pauses that
-operator rather than silently changing cadence or routing.
+Prepare the next epoch only from the public rotation schedule. A scheduled
+successor activates exactly at the predecessor's retirement boundary. An
+emergency successor may activate earlier and immediately makes its predecessor
+`RETIRED` in chain state.
 
-Before admitting an operator set, run the same commit's unit/race/vet checks,
-the Compose end-to-end gate, packet-capture verifier and a WAN fault campaign.
-Record the signed topology digest, image digest, evidence hashes and operator
-sign-offs in the release record.
+The share service must use the same chain that receives successor descriptors.
+Do not decide retirement from topology `NotAfter`: the topology envelope is not
+the epoch serving window.
+
+After retirement, erase the epoch-private share and DKG secret state:
+
+```bash
+nomad-operator erase \
+  --secret=/etc/nomad/operator-secret.json \
+  --chain=/var/lib/nomad/epoch-chain \
+  --epoch=N \
+  --authority-key=/etc/nomad/authority.pub \
+  --network=nomad-live \
+  --filesystem=ext4 \
+  --out=/var/lib/nomad/evidence/erasure-N.json \
+  /run/nomad/threshold-share-N.json \
+  /var/lib/nomad/dkg-N/private-state.json
+```
+
+The command refuses `READY` or `ACTIVE` epochs and refuses to erase the chain,
+operator identity, authority key or its own evidence output. It validates the
+operator identity before destroying files and fsyncs affected directories
+before returning a signed erasure statement.
+
+The erasure claim is intentionally limited. Overwrite/unlink is not a physical
+media guarantee on flash, journaling or copy-on-write filesystems and is defeated
+by snapshots/backups. Use full-disk encryption and do not back up epoch-private
+material.
+
+## 8. Admission evidence
+
+Before admitting a committee/release, record at least:
+
+- source commit and binary/image digest;
+- topology digest and DKG certificate digest;
+- activated epoch descriptor digest;
+- operator sign-offs;
+- unit/race/vet results;
+- Compose acceptance evidence;
+- packet-capture evidence;
+- WAN/fault-campaign evidence;
+- erasure statements for retired epochs.
+
+A three-host deployment controlled by one administrator is useful WAN evidence,
+but it is **not** evidence of independent operator governance.
