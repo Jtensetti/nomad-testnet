@@ -224,6 +224,8 @@ services:
       - nomad-share
       - --topology=/config/topology.json
       - --authority-key=/config/authority.pub
+      - --epoch-descriptor=/published/epoch-descriptor.json
+      - --epoch-chain=/epoch-chain
       - --descriptor=/published/descriptor.json
       - --share=/operator/distributed-threshold-share.json
       - --cache=/cache
@@ -239,6 +241,7 @@ services:
       - operator-a-secret:/operator:ro
       - raw-a:/cache:ro
       - partial-a:/partials
+      - epoch-chain-a:/epoch-chain
 
   share-b:
     <<: *locked-service
@@ -252,6 +255,7 @@ services:
       - operator-b-secret:/operator:ro
       - raw-b:/cache:ro
       - partial-b:/partials
+      - epoch-chain-b:/epoch-chain
 
   share-c:
     <<: *locked-service
@@ -265,6 +269,7 @@ services:
       - operator-c-secret:/operator:ro
       - raw-c:/cache:ro
       - partial-c:/partials
+      - epoch-chain-c:/epoch-chain
 
   partial-fetcher:
     <<: *locked-service
@@ -334,3 +339,6 @@ volumes:
   partial-b:
   partial-c:
   partials-local:
+  epoch-chain-a:
+  epoch-chain-b:
+  epoch-chain-c:
