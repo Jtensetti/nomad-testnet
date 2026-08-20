@@ -29,6 +29,10 @@ jobs:
       TF_INPUT: 'false'
       SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
       SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+      # Current standardized Scaleway names. The legacy DEFAULT aliases are
+      # also exported because the Terraform provider still documents them.
+      SCW_PROJECT_ID: ${{ secrets.SCW_PROJECT_ID }}
+      SCW_ORGANIZATION_ID: ${{ secrets.SCW_ORGANIZATION_ID }}
       SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_PROJECT_ID }}
       SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_ORGANIZATION_ID }}
       TF_VAR_project_id: ${{ secrets.SCW_PROJECT_ID }}
@@ -46,6 +50,8 @@ jobs:
           set -euo pipefail
           test -n "$SCW_ACCESS_KEY"
           test -n "$SCW_SECRET_KEY"
+          test -n "$SCW_PROJECT_ID"
+          test -n "$SCW_ORGANIZATION_ID"
           test -n "$TF_VAR_project_id"
 
       - name: Prepare ephemeral plan inputs
