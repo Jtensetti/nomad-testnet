@@ -29,12 +29,6 @@ variable "deployment_id" {
   }
 }
 
-variable "enable_ipv6_wan" {
-  description = "Open Nomad/WireGuard test ports on IPv6. IPv6 addresses are provisioned regardless, but public IPv6 ingress stays closed by default."
-  type        = bool
-  default     = false
-}
-
 variable "ttl_hours" {
   description = "Public lab TTL recorded in tags/cloud-init. Nodes power themselves off after this many hours as a cost backstop; Terraform destroy is still required to release billed IPv4 addresses."
   type        = number
