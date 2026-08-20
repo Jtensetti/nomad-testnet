@@ -2,7 +2,12 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY . .
-RUN CGO_ENABLED=0 go test ./live/... && \
+# Image builds run many services concurrently under BuildKit. Run deterministic
+# short tests here, but leave wall-clock traffic-analysis campaigns to the
+# dedicated CI privacy job where their noise controls and evidence are valid.
+# TestWireTimingIsIndependentOfPrivateActivityUnderStress explicitly skips
+# under -short; the unchanged 2% gate is still run by `go test -race ./...` in CI.
+RUN CGO_ENABLED=0 go test -short ./live/... && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-bootstrap ./cmd/nomad-bootstrap && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-dkg ./cmd/nomad-dkg && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-fixture-publisher ./cmd/nomad-fixture-publisher && \
