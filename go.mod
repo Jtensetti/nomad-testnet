@@ -11,12 +11,10 @@ require (
 	github.com/Jtensetti/nomad-semantic-basins v0.0.0
 	go.dedis.ch/kyber/v4 v4.0.2
 	golang.org/x/crypto v0.48.0
+	golang.org/x/sys v0.47.0
 )
 
-require (
-	go.dedis.ch/fixbuf v1.0.3 // indirect
-	golang.org/x/sys v0.42.0 // indirect
-)
+require go.dedis.ch/fixbuf v1.0.3 // indirect
 
 replace github.com/Jtensetti/nomad-anytrust-mix-sim => ./components/nomad-anytrust-mix-sim
 

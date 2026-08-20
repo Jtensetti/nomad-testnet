@@ -138,6 +138,47 @@ func (chain *Chain) pathFor(number uint64) string {
 	return filepath.Join(chain.root, fmt.Sprintf("%020d.epoch.json", number))
 }
 
+// refreshLocked re-reads state another process may have changed. It is
+// called under both the process mutex and the cross-process lock.
+func (chain *Chain) refreshLocked() error {
+	if chain.halted {
+		return nil
+	}
+	if _, err := os.Lstat(filepath.Join(chain.root, haltedMarker)); err == nil {
+		chain.halted = true
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for {
+		next := uint64(1)
+		if len(chain.epochs) > 0 {
+			next = chain.epochs[len(chain.epochs)-1].Epoch + 1
+		}
+		encoded, err := os.ReadFile(chain.pathFor(next))
+		if errors.Is(err, os.ErrNotExist) {
+			// Epoch numbers need not be contiguous across a re-bootstrap, so
+			// a missing successor simply means nothing new to adopt here.
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var previous *Verified
+		if len(chain.epochs) > 0 {
+			previous = &chain.epochs[len(chain.epochs)-1]
+		}
+		verified, err := Verify(encoded, chain.authority, previous, nil)
+		if err != nil {
+			return fmt.Errorf("stored epoch %d: %w", next, err)
+		}
+		if verified.NetworkID != chain.networkID {
+			return fmt.Errorf("stored epoch %d belongs to network %q", next, verified.NetworkID)
+		}
+		chain.epochs = append(chain.epochs, verified)
+	}
+}
+
 // Append verifies and persists one descriptor. Re-appending identical bytes
 // for a known epoch is idempotent. A distinct descriptor for a known epoch,
 // or any epoch at or below the tip that is not stored, is fatal
@@ -145,6 +186,16 @@ func (chain *Chain) pathFor(number uint64) string {
 func (chain *Chain) Append(encoded []byte) (Verified, error) {
 	chain.mu.Lock()
 	defer chain.mu.Unlock()
+	lock, err := acquireChainLock(chain.root)
+	if err != nil {
+		return Verified{}, err
+	}
+	defer func() { _ = lock.release() }()
+	// Another process may have halted or advanced the store while this one
+	// waited for the lock, so re-read the on-disk state before deciding.
+	if err := chain.refreshLocked(); err != nil {
+		return Verified{}, err
+	}
 	if chain.halted {
 		return Verified{}, ErrHalted
 	}

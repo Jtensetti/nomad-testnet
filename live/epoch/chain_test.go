@@ -290,19 +290,84 @@ func TestHaltSurvivesEvidencePersistenceFailure(t *testing.T) {
 	if _, err := chain.Append(firstEncoded); err != nil {
 		t.Fatal(err)
 	}
-	// Occupy the marker path so persisting the evidence cannot succeed as a
-	// fresh exclusive create, exactly as a competing instance would.
-	if err := os.WriteFile(filepath.Join(root, "HALTED"), []byte("{}"), 0o600); err != nil {
+	stored, _ := chain.Tip()
+	probe, err := decodeDescriptor(secondEncoded)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := chain.Append(secondEncoded); !errors.Is(err, ErrEquivocation) {
-		t.Fatalf("expected equivocation, got %v", err)
+	offeredDigest, err := Digest(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Point the chain at a directory that does not exist, so persisting the
+	// evidence must fail the way a full disk or read-only mount would.
+	chain.root = filepath.Join(root, "missing")
+	persistErr := chain.halt(stored, offeredDigest, secondEncoded)
+	if persistErr == nil {
+		t.Fatal("this case is only meaningful when persistence actually fails")
 	}
 	if !chain.Halted() {
 		t.Fatal("a detected equivocation must halt the chain even when evidence cannot be written")
 	}
+	chain.root = root
 	if _, active := chain.ActiveAt(first.ActivateAt); active {
 		t.Fatal("a halted chain must not report an active epoch")
+	}
+	if _, err := chain.Append(firstEncoded); !errors.Is(err, ErrHalted) {
+		t.Fatal("a halted chain must refuse further appends")
+	}
+}
+
+// TestPreexistingHaltMarkerStopsAnotherInstance covers the cross-process
+// case: a marker written by another instance must halt this one at its next
+// mutating operation, not be treated as a write failure.
+func TestPreexistingHaltMarkerStopsAnotherInstance(t *testing.T) {
+	f, genesisEncoded, _, successorEncoded, _ := buildTwoEpochChain(t)
+	root := t.TempDir()
+	chain, err := OpenChain(root, "nomad-test", f.AuthorityPublic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chain.Append(genesisEncoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "HALTED"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chain.Append(successorEncoded); !errors.Is(err, ErrHalted) {
+		t.Fatalf("expected the chain to observe another instance's halt, got %v", err)
+	}
+	if !chain.Halted() {
+		t.Fatal("chain must adopt a halt recorded by another instance")
+	}
+}
+
+// TestSecondInstanceAdoptsAppendsFromTheFirst exercises two handles on one
+// directory, the ordinary node-plus-CLI deployment.
+func TestSecondInstanceAdoptsAppendsFromTheFirst(t *testing.T) {
+	f, genesisEncoded, _, successorEncoded, successor := buildTwoEpochChain(t)
+	root := t.TempDir()
+	first, err := OpenChain(root, "nomad-test", f.AuthorityPublic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := OpenChain(root, "nomad-test", f.AuthorityPublic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Append(genesisEncoded); err != nil {
+		t.Fatal(err)
+	}
+	// The second handle knew nothing of that append; adopting it must not
+	// look like a conflict.
+	if _, err := second.Append(successorEncoded); err != nil {
+		t.Fatalf("second instance must adopt the first instance's epoch: %v", err)
+	}
+	if second.Halted() || first.Halted() {
+		t.Fatal("concurrent instances on one directory must not halt each other")
+	}
+	if tip, ok := second.Tip(); !ok || tip.Epoch != successor.Epoch {
+		t.Fatal("second instance should hold the successor tip")
 	}
 }
 
