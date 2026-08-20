@@ -1,12 +1,14 @@
 package epoch
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
 var (
@@ -33,24 +37,42 @@ const haltedMarker = "HALTED"
 type Chain struct {
 	mu        sync.Mutex
 	root      string
+	networkID string
 	authority ed25519.PublicKey
 	revoked   RevocationSet
 	epochs    []Verified
 	halted    bool
 }
 
+// equivocationProof is self-contained: both descriptors are recorded in
+// full, so a third party can re-verify the conflict without the chain that
+// observed it.
 type equivocationProof struct {
 	NetworkID      string `json:"network_id"`
 	Epoch          uint64 `json:"epoch"`
 	StoredDigest   string `json:"stored_digest"`
 	OfferedDigest  string `json:"offered_digest"`
+	StoredEncoded  string `json:"stored_descriptor_base64"`
 	OfferedEncoded string `json:"offered_descriptor_base64"`
 }
 
 // OpenChain loads and re-verifies every stored descriptor in epoch order.
-func OpenChain(root string, authority ed25519.PublicKey, revoked RevocationSet) (*Chain, error) {
+//
+// networkID pins the network this store is for; a descriptor from any other
+// network is rejected, including the very first genesis on an empty store.
+//
+// revoked applies to what this chain admits from now on. It is deliberately
+// NOT applied when re-verifying already-accepted history: revocation is
+// forward-scoped by specification, and re-checking history against it would
+// make a compromise announcement render a verifier unable to open its own
+// chain, exactly when it needs to accept the emergency successor that
+// excludes the compromised operator.
+func OpenChain(root, networkID string, authority ed25519.PublicKey, revoked RevocationSet) (*Chain, error) {
 	if root == "" {
 		return nil, errors.New("epoch chain directory is required")
+	}
+	if networkID == "" {
+		return nil, errors.New("epoch chain network ID is required")
 	}
 	if len(authority) != ed25519.PublicKeySize {
 		return nil, errors.New("epoch chain authority key is invalid")
@@ -62,7 +84,7 @@ func OpenChain(root string, authority ed25519.PublicKey, revoked RevocationSet) 
 	if err != nil || !info.IsDir() {
 		return nil, errors.New("epoch chain root is not a directory")
 	}
-	chain := &Chain{root: root, authority: authority, revoked: revoked}
+	chain := &Chain{root: root, networkID: networkID, authority: authority, revoked: revoked}
 	if _, err := os.Lstat(filepath.Join(root, haltedMarker)); err == nil {
 		chain.halted = true
 		return chain, nil
@@ -95,12 +117,17 @@ func OpenChain(root string, authority ed25519.PublicKey, revoked RevocationSet) 
 		if len(chain.epochs) > 0 {
 			previous = &chain.epochs[len(chain.epochs)-1]
 		}
-		verified, err := Verify(encoded, authority, previous, revoked)
+		// Historical epochs are re-verified without the revocation set; see
+		// the OpenChain doc comment.
+		verified, err := Verify(encoded, authority, previous, nil)
 		if err != nil {
 			return nil, fmt.Errorf("stored epoch %d: %w", number, err)
 		}
 		if verified.Epoch != number {
 			return nil, fmt.Errorf("stored epoch %d contains descriptor for epoch %d", number, verified.Epoch)
+		}
+		if verified.NetworkID != networkID {
+			return nil, fmt.Errorf("stored epoch %d belongs to network %q, not %q", number, verified.NetworkID, networkID)
 		}
 		chain.epochs = append(chain.epochs, verified)
 	}
@@ -121,16 +148,36 @@ func (chain *Chain) Append(encoded []byte) (Verified, error) {
 	if chain.halted {
 		return Verified{}, ErrHalted
 	}
-	var probe Descriptor
-	if err := json.Unmarshal(encoded, &probe); err != nil {
-		return Verified{}, fmt.Errorf("decode epoch descriptor: %w", err)
+	if len(encoded) == 0 || len(encoded) > MaximumFileBytes {
+		return Verified{}, errors.New("epoch descriptor is empty or too large")
+	}
+	probe, err := decodeDescriptor(encoded)
+	if err != nil {
+		return Verified{}, err
 	}
 	offeredDigest, err := Digest(probe)
 	if err != nil {
 		return Verified{}, err
 	}
-	if stored, storedIndex, exists := chain.lookupSlot(probe); exists {
+	probeNetwork, probeEpoch, err := embeddedIdentity(probe)
+	if err != nil {
+		return Verified{}, err
+	}
+	if chain.networkID != "" && probeNetwork != chain.networkID {
+		return Verified{}, errors.New("epoch descriptor belongs to a different network")
+	}
+	if stored, storedIndex, exists := chain.lookupSlot(probeEpoch); exists {
 		if stored.Digest == offeredDigest {
+			// Identical bytes for a stored epoch are idempotent, but only
+			// after they verify: a caller must never read success here as a
+			// warrant to persist or relay unverified input.
+			var slotPrevious *Verified
+			if storedIndex > 0 {
+				slotPrevious = &chain.epochs[storedIndex-1]
+			}
+			if _, err := Verify(encoded, chain.authority, slotPrevious, chain.revoked); err != nil {
+				return Verified{}, fmt.Errorf("stored-epoch descriptor failed verification: %w", err)
+			}
 			return stored, nil
 		}
 		// Only a fully valid competing descriptor is equivocation. Invalid
@@ -147,11 +194,26 @@ func (chain *Chain) Append(encoded []byte) (Verified, error) {
 		if competing.NetworkID != stored.NetworkID {
 			return Verified{}, errors.New("descriptor belongs to a different network")
 		}
-		if err := chain.halt(stored, offeredDigest, encoded); err != nil {
-			return Verified{}, err
+		// The halt itself has already taken effect in memory. A failure to
+		// persist the evidence is reported alongside the equivocation, never
+		// in place of it.
+		persistErr := chain.halt(stored, offeredDigest, encoded)
+		if persistErr != nil {
+			return Verified{}, fmt.Errorf("%w: epoch %d has digests %s and %s (evidence not persisted: %v)",
+				ErrEquivocation, stored.Epoch, hex.EncodeToString(stored.Digest[:]), hex.EncodeToString(offeredDigest[:]), persistErr)
 		}
 		return Verified{}, fmt.Errorf("%w: epoch %d has digests %s and %s",
 			ErrEquivocation, stored.Epoch, hex.EncodeToString(stored.Digest[:]), hex.EncodeToString(offeredDigest[:]))
+	}
+	// Chain rule 2: an epoch number at or below the high-water mark was
+	// already used and is burned permanently, even if its descriptor file
+	// has since been removed from this store.
+	watermark, err := chain.readWatermark()
+	if err != nil {
+		return Verified{}, err
+	}
+	if probeEpoch <= watermark {
+		return Verified{}, fmt.Errorf("epoch %d is at or below the burned high-water mark %d", probeEpoch, watermark)
 	}
 	var previous *Verified
 	if len(chain.epochs) > 0 {
@@ -164,6 +226,9 @@ func (chain *Chain) Append(encoded []byte) (Verified, error) {
 	if previous != nil && verified.Epoch <= previous.Epoch {
 		return Verified{}, errors.New("epoch descriptor rolls back the chain")
 	}
+	if err := chain.raiseWatermark(verified.Epoch); err != nil {
+		return Verified{}, err
+	}
 	path := chain.pathFor(verified.Epoch)
 	if err := writeNewFile(path, encoded, 0o644); err != nil {
 		return Verified{}, err
@@ -175,37 +240,152 @@ func (chain *Chain) Append(encoded []byte) (Verified, error) {
 	return verified, nil
 }
 
-// lookupSlot finds the stored epoch competing with the probe for the same
-// chain position. The probe's epoch number lives inside its embedded
-// topology, which is expensive to verify up front, so slots are matched on
-// the previous-epoch digest: the chain is linear, so each stored descriptor
-// has a unique previous digest and a probe sharing it claims that slot.
-func (chain *Chain) lookupSlot(probe Descriptor) (Verified, int, bool) {
+// lookupSlot finds the stored epoch a candidate competes with. Slots are
+// matched on the epoch number carried by the embedded topology, which is
+// what the specification defines equivocation over. Matching on the
+// previous-epoch digest instead would make every genesis collide, so a
+// lawful re-bootstrap at a later epoch would be misrecorded as equivocation
+// and would halt every verifier that saw it.
+func (chain *Chain) lookupSlot(epochNumber uint64) (Verified, int, bool) {
 	for index, stored := range chain.epochs {
-		if stored.Descriptor.PreviousEpochDigest == probe.PreviousEpochDigest {
+		if stored.Epoch == epochNumber {
 			return stored, index, true
 		}
 	}
 	return Verified{}, 0, false
 }
 
-func (chain *Chain) halt(stored Verified, offeredDigest [32]byte, offered []byte) error {
-	proof := equivocationProof{
-		NetworkID:     stored.NetworkID,
-		Epoch:         stored.Epoch,
-		StoredDigest:  hex.EncodeToString(stored.Digest[:]),
-		OfferedDigest: hex.EncodeToString(offeredDigest[:]),
+// embeddedIdentity reads the network and epoch a candidate claims, from the
+// signed topology inside it. The bytes are already covered by the digest;
+// this only reads them, and every signature check still happens in Verify.
+func embeddedIdentity(descriptor Descriptor) (string, uint64, error) {
+	topologyBytes, err := decodeBounded(descriptor.Topology)
+	if err != nil {
+		return "", 0, errors.New("invalid embedded topology encoding")
 	}
-	proof.OfferedEncoded = base64.StdEncoding.EncodeToString(offered)
+	var signed topology.Signed
+	decoder := json.NewDecoder(bytes.NewReader(topologyBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&signed); err != nil {
+		return "", 0, fmt.Errorf("decode embedded topology: %w", err)
+	}
+	if signed.Document.Epoch == 0 || signed.Document.NetworkID == "" {
+		return "", 0, errors.New("embedded topology has no network or epoch")
+	}
+	return signed.Document.NetworkID, signed.Document.Epoch, nil
+}
+
+func decodeDescriptor(encoded []byte) (Descriptor, error) {
+	var descriptor Descriptor
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&descriptor); err != nil {
+		return Descriptor{}, fmt.Errorf("decode epoch descriptor: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return Descriptor{}, errors.New("trailing epoch descriptor data")
+	}
+	return descriptor, nil
+}
+
+// halt records a detected equivocation. The in-memory halt is set first and
+// is never cleared: a verifier that has seen two valid descriptors for one
+// epoch must stop serving epochs even if it cannot persist the evidence
+// (full disk, read-only mount, a marker another instance already wrote).
+// Persistence failure is reported alongside the halt, never instead of it.
+func (chain *Chain) halt(stored Verified, offeredDigest [32]byte, offered []byte) error {
+	chain.halted = true
+	proof := equivocationProof{
+		NetworkID:      stored.NetworkID,
+		Epoch:          stored.Epoch,
+		StoredDigest:   hex.EncodeToString(stored.Digest[:]),
+		OfferedDigest:  hex.EncodeToString(offeredDigest[:]),
+		StoredEncoded:  base64.StdEncoding.EncodeToString(chain.encodedFor(stored.Epoch)),
+		OfferedEncoded: base64.StdEncoding.EncodeToString(offered),
+	}
 	encodedProof, err := json.MarshalIndent(proof, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := writeNewFile(filepath.Join(chain.root, haltedMarker), encodedProof, 0o600); err != nil {
+	path := filepath.Join(chain.root, haltedMarker)
+	if err := writeNewFile(path, encodedProof, 0o600); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			// An existing marker means this chain is already halted, which
+			// is the state we want, not a failure.
+			return nil
+		}
 		return err
 	}
-	chain.halted = true
 	return nil
+}
+
+const watermarkFile = "HIGHEST_EPOCH"
+
+// readWatermark returns the highest epoch number this store has ever
+// accepted. It is persisted separately from the descriptor files so that
+// deleting a descriptor cannot silently re-open a burned epoch number for a
+// different successor.
+func (chain *Chain) readWatermark() (uint64, error) {
+	encoded, err := os.ReadFile(filepath.Join(chain.root, watermarkFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	value, err := strconv.ParseUint(strings.TrimSpace(string(encoded)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("malformed epoch high-water mark: %w", err)
+	}
+	return value, nil
+}
+
+func (chain *Chain) raiseWatermark(epochNumber uint64) error {
+	current, err := chain.readWatermark()
+	if err != nil {
+		return err
+	}
+	if epochNumber <= current {
+		return fmt.Errorf("refusing to lower the epoch high-water mark from %d to %d", current, epochNumber)
+	}
+	path := filepath.Join(chain.root, watermarkFile)
+	temporary, err := os.CreateTemp(chain.root, ".watermark-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	ok := false
+	defer func() {
+		_ = temporary.Close()
+		if !ok {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(temporary, "%d\n", epochNumber); err != nil {
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	ok = true
+	return syncDir(chain.root)
+}
+
+func (chain *Chain) encodedFor(epochNumber uint64) []byte {
+	encoded, err := os.ReadFile(chain.pathFor(epochNumber))
+	if err != nil {
+		return nil
+	}
+	return encoded
 }
 
 // Halted reports whether the chain recorded a fatal equivocation.
@@ -259,7 +439,7 @@ func (chain *Chain) StateOf(epochNumber uint64, now time.Time) (State, error) {
 		if stored.Epoch != epochNumber {
 			continue
 		}
-		state := stored.StateAt(now)
+		state := stored.stateAtIgnoringSuccessors(now)
 		if state == StateActive && index+1 < len(chain.epochs) {
 			successor := chain.epochs[index+1]
 			if successor.Descriptor.Transition == TransitionEmergency && !now.Before(successor.ActivateAt) {
@@ -278,7 +458,7 @@ func (chain *Chain) HighestRetired(now time.Time) uint64 {
 	defer chain.mu.Unlock()
 	highest := uint64(0)
 	for index, stored := range chain.epochs {
-		state := stored.StateAt(now)
+		state := stored.stateAtIgnoringSuccessors(now)
 		if state == StateActive && index+1 < len(chain.epochs) {
 			successor := chain.epochs[index+1]
 			if successor.Descriptor.Transition == TransitionEmergency && !now.Before(successor.ActivateAt) {

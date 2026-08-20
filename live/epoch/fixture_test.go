@@ -29,6 +29,15 @@ type fixture struct {
 
 func newFixture(t *testing.T, operatorCount int) *fixture {
 	t.Helper()
+	return newNamedFixture(t, "set", operatorCount)
+}
+
+// newNamedFixture derives keys from the set name as well as the operator
+// index, so two fixtures created in one test have genuinely distinct
+// operator identities. Sharing identity keys across fixtures would make any
+// test of "an operator outside this set cannot approve" silently vacuous.
+func newNamedFixture(t *testing.T, setName string, operatorCount int) *fixture {
+	t.Helper()
 	_, authority, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -36,9 +45,9 @@ func newFixture(t *testing.T, operatorCount int) *fixture {
 	operators := make([]fixtureOperator, operatorCount)
 	for index := range operators {
 		id := fmt.Sprintf("op-%c", 'a'+index)
-		seed := sha256.Sum256([]byte("nomad-epoch-test-identity-" + id))
+		seed := sha256.Sum256([]byte("nomad-epoch-test-identity-" + setName + "-" + id))
 		identity := ed25519.NewKeyFromSeed(seed[:])
-		kexSeed := sha256.Sum256([]byte("nomad-epoch-test-kex-" + id))
+		kexSeed := sha256.Sum256([]byte("nomad-epoch-test-kex-" + setName + "-" + id))
 		kex, err := ecdh.X25519().NewPrivateKey(kexSeed[:])
 		if err != nil {
 			t.Fatal(err)

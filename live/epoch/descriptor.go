@@ -123,11 +123,16 @@ func activationMessage(digest [32]byte) []byte {
 	return message
 }
 
-func approvalMessage(previousDigest, digest [32]byte) []byte {
-	message := make([]byte, 0, len(approvalDomain)+64)
+// approvalMessage binds the approving operator's own identity key in
+// addition to the transition it approves. Without that binding every
+// approver signs identical bytes, so one signature is verbatim reusable in
+// every quorum slot and a single operator can mint a whole quorum.
+func approvalMessage(previousDigest, digest [32]byte, approver ed25519.PublicKey) []byte {
+	message := make([]byte, 0, len(approvalDomain)+64+ed25519.PublicKeySize)
 	message = append(message, approvalDomain...)
 	message = append(message, previousDigest[:]...)
 	message = append(message, digest[:]...)
+	message = append(message, approver...)
 	return message
 }
 
@@ -153,7 +158,7 @@ func Approve(descriptor Descriptor, previous Verified, operator topology.Operato
 	if err != nil {
 		return Approval{}, err
 	}
-	signature := ed25519.Sign(identity, approvalMessage(previous.Digest, digest))
+	signature := ed25519.Sign(identity, approvalMessage(previous.Digest, digest, identity.Public().(ed25519.PublicKey)))
 	return Approval{OperatorID: operator.ID, Index: uint32(operator.Index), Signature: base64.StdEncoding.EncodeToString(signature)}, nil
 }
 
@@ -297,6 +302,10 @@ func verifyChainLink(descriptor Descriptor, network topology.Verified, previous 
 		if !activateAt.After(previous.ActivateAt) {
 			return errors.New("emergency transition must activate after the previous activation boundary")
 		}
+	default:
+		// A transition kind accepted by the canonical encoder but not
+		// constrained here would otherwise get no window rules at all.
+		return errors.New("unsupported transition kind for a chained epoch")
 	}
 	return nil
 }
@@ -309,17 +318,23 @@ func verifyApprovals(descriptor Descriptor, digest [32]byte, previous *Verified,
 	if len(descriptor.Approvals) < quorum {
 		return fmt.Errorf("transition requires at least %d previous-epoch approvals", quorum)
 	}
-	message := approvalMessage(previous.Digest, digest)
-	seen := make(map[uint32]struct{}, len(descriptor.Approvals))
+	members := len(previous.Topology.Document.Operators)
+	// Deduplication keys on the resolved operator, never on the wire value:
+	// an index that is out of range, or that aliases another index under any
+	// narrowing conversion, must not be able to occupy two quorum slots.
+	seen := make(map[string]struct{}, len(descriptor.Approvals))
 	for _, approval := range descriptor.Approvals {
+		if approval.Index >= uint32(members) {
+			return errors.New("approval index is outside previous-epoch membership")
+		}
 		operator, err := previous.Topology.Operator(uint16(approval.Index))
 		if err != nil || operator.ID != approval.OperatorID {
 			return errors.New("approval does not match previous-epoch membership")
 		}
-		if _, exists := seen[approval.Index]; exists {
+		if _, exists := seen[operator.ID]; exists {
 			return errors.New("duplicate transition approval")
 		}
-		seen[approval.Index] = struct{}{}
+		seen[operator.ID] = struct{}{}
 		if revokedIdentity(revoked, operator.IdentityKey) {
 			return fmt.Errorf("approval from revoked operator %s", operator.ID)
 		}
@@ -328,9 +343,12 @@ func verifyApprovals(descriptor Descriptor, digest [32]byte, previous *Verified,
 			return errors.New("invalid previous-epoch operator identity")
 		}
 		signature, err := decodeBase64(approval.Signature, ed25519.SignatureSize)
-		if err != nil || !ed25519.Verify(ed25519.PublicKey(public), message, signature) {
+		if err != nil || !ed25519.Verify(ed25519.PublicKey(public), approvalMessage(previous.Digest, digest, public), signature) {
 			return fmt.Errorf("invalid transition approval from %s", approval.OperatorID)
 		}
+	}
+	if len(seen) < quorum {
+		return fmt.Errorf("transition requires at least %d distinct previous-epoch approvals", quorum)
 	}
 	return nil
 }
@@ -389,9 +407,12 @@ func (s State) String() string {
 	}
 }
 
-// StateAt reports the descriptor's own lifecycle state. Emergency retirement
-// by a successor is a chain-level decision; see Chain.StateOf.
-func (v Verified) StateAt(now time.Time) State {
+// stateAtIgnoringSuccessors reports this descriptor's own window position.
+// It is deliberately unexported: it cannot see an emergency successor that
+// has already retired this epoch, so a caller using it to decide whether to
+// serve an epoch could serve two committees at once. Chain.StateOf and
+// Chain.ActiveAt are the only correct ways to ask.
+func (v Verified) stateAtIgnoringSuccessors(now time.Time) State {
 	if now.Before(v.ActivateAt) {
 		return StateReady
 	}

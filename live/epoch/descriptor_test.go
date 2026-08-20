@@ -19,13 +19,13 @@ func TestGenesisAndScheduledTransitionVerify(t *testing.T) {
 	if successor.Descriptor.PreviousEpochDigest != hex.EncodeToString(genesis.Digest[:]) {
 		t.Fatal("successor does not chain to genesis digest")
 	}
-	if state := genesis.StateAt(genesis.ActivateAt.Add(-time.Second)); state != StateReady {
+	if state := genesis.stateAtIgnoringSuccessors(genesis.ActivateAt.Add(-time.Second)); state != StateReady {
 		t.Fatalf("expected READY before activation, got %s", state)
 	}
-	if state := genesis.StateAt(genesis.ActivateAt); state != StateActive {
+	if state := genesis.stateAtIgnoringSuccessors(genesis.ActivateAt); state != StateActive {
 		t.Fatalf("expected ACTIVE at boundary, got %s", state)
 	}
-	if state := genesis.StateAt(genesis.RetireAt); state != StateRetired {
+	if state := genesis.stateAtIgnoringSuccessors(genesis.RetireAt); state != StateRetired {
 		t.Fatalf("expected RETIRED at retirement, got %s", state)
 	}
 	if !successor.ActivateAt.Equal(genesis.RetireAt) {
@@ -307,5 +307,134 @@ func TestCrossEpochShareRejected(t *testing.T) {
 	}
 	if _, err := mix.CreatePartialDecryption(successor.Certificate.Committee, genesisSecrets[0], batch); err == nil {
 		t.Fatal("a share from another epoch's committee must be rejected")
+	}
+}
+
+// TestApprovalQuorumCannotBeForgedByOneOperator is the regression for a
+// confirmed exploit: Approval.Index is attacker-chosen and was narrowed to
+// uint16 for lookup while being deduplicated on the full uint32, so indices
+// i, i+65536, i+131072 all resolved to one operator and were counted as
+// three distinct approvers. Because the approval message committed to
+// nothing about the approver, a single signature was reusable in every
+// slot, letting one previous-epoch operator mint a whole quorum and force a
+// membership change alone.
+func TestApprovalQuorumCannotBeForgedByOneOperator(t *testing.T) {
+	f := newFixture(t, 5)
+	session1 := sha256.Sum256([]byte("quorum-forgery-1"))
+	topologyBytes1, network1 := f.buildSignedTopology(t, 1, 3, genesisTimes(), session1, 10)
+	certificateBytes1, _ := f.buildCertificate(t, network1)
+	_, genesis := f.buildDescriptor(t, nil, nil, TransitionGenesis, genesisTimes(), network1, topologyBytes1, certificateBytes1)
+	if got := ApprovalQuorum(genesis); got != 3 {
+		t.Fatalf("expected a 3-of-5 quorum, got %d", got)
+	}
+
+	session2 := sha256.Sum256([]byte("quorum-forgery-2"))
+	topologyBytes2, network2 := f.buildSignedTopology(t, 2, 3, successorTimes(), session2, 30)
+	certificateBytes2, _ := f.buildCertificate(t, network2)
+	descriptor, err := New(&genesis, TransitionScheduled, canonicalTime(successorTimes().Activate), canonicalTime(successorTimes().Retire), topologyBytes2, certificateBytes2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One cooperating operator produces its single legitimate approval.
+	operator, err := genesis.Topology.Operator(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := Approve(descriptor, genesis, operator, f.Operators[1].Identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// It is then replayed into aliasing index slots to claim a full quorum.
+	descriptor.Approvals = []Approval{
+		approval,
+		{OperatorID: approval.OperatorID, Index: approval.Index + 1<<16, Signature: approval.Signature},
+		{OperatorID: approval.OperatorID, Index: approval.Index + 2<<16, Signature: approval.Signature},
+	}
+	for index, member := range network2.Document.Operators {
+		activation, err := Activate(descriptor, member, f.Operators[index].Identity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		descriptor.Activations = append(descriptor.Activations, activation)
+	}
+	if _, err := Verify(reencode(t, descriptor), f.AuthorityPublic, &genesis, nil); err == nil {
+		t.Fatal("a single operator must not be able to satisfy the approval quorum")
+	}
+
+	// The same replay without index aliasing must also fail: an approval
+	// signature is bound to its approver's identity key.
+	stolen := descriptor
+	other, err := genesis.Topology.Operator(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stolen.Approvals = []Approval{
+		approval,
+		{OperatorID: other.ID, Index: 2, Signature: approval.Signature},
+		{OperatorID: network2.Document.Operators[3].ID, Index: 3, Signature: approval.Signature},
+	}
+	if _, err := Verify(reencode(t, stolen), f.AuthorityPublic, &genesis, nil); err == nil {
+		t.Fatal("an approval signature must not verify for a different approver")
+	}
+}
+
+// TestMembershipTransitionRequiresPreviousCommittee exercises a real
+// membership change (A B C D E -> A B C D F) rather than reusing one
+// operator set for both epochs, and checks that authority to make it comes
+// from the previous committee, not from the incoming one.
+func TestMembershipTransitionRequiresPreviousCommittee(t *testing.T) {
+	outgoing := newNamedFixture(t, "outgoing", 5)
+	session1 := sha256.Sum256([]byte("membership-1"))
+	topologyBytes1, network1 := outgoing.buildSignedTopology(t, 1, 3, genesisTimes(), session1, 10)
+	certificateBytes1, _ := outgoing.buildCertificate(t, network1)
+	_, genesis := outgoing.buildDescriptor(t, nil, nil, TransitionGenesis, genesisTimes(), network1, topologyBytes1, certificateBytes1)
+
+	// Epoch 2 keeps four operators and replaces the fifth with a newcomer
+	// holding genuinely different keys.
+	replacement := newNamedFixture(t, "replacement", 5)
+	incoming := &fixture{AuthorityPublic: outgoing.AuthorityPublic, AuthorityPrivate: outgoing.AuthorityPrivate}
+	incoming.Operators = append(incoming.Operators, outgoing.Operators[:4]...)
+	incoming.Operators = append(incoming.Operators, replacement.Operators[4])
+	session2 := sha256.Sum256([]byte("membership-2"))
+	topologyBytes2, network2 := incoming.buildSignedTopology(t, 2, 3, successorTimes(), session2, 30)
+	certificateBytes2, _ := incoming.buildCertificate(t, network2)
+
+	build := func(approvers []int, signWith *fixture) []byte {
+		descriptor, err := New(&genesis, TransitionScheduled, canonicalTime(successorTimes().Activate), canonicalTime(successorTimes().Retire), topologyBytes2, certificateBytes2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, index := range approvers {
+			operator, err := genesis.Topology.Operator(uint16(index))
+			if err != nil {
+				t.Fatal(err)
+			}
+			approval, err := Approve(descriptor, genesis, operator, signWith.Operators[index].Identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			descriptor.Approvals = append(descriptor.Approvals, approval)
+		}
+		for index, member := range network2.Document.Operators {
+			activation, err := Activate(descriptor, member, incoming.Operators[index].Identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			descriptor.Activations = append(descriptor.Activations, activation)
+		}
+		return reencode(t, descriptor)
+	}
+
+	// Two approvals is below the 3-of-5 quorum.
+	if _, err := Verify(build([]int{0, 1}, outgoing), outgoing.AuthorityPublic, &genesis, nil); err == nil {
+		t.Fatal("a membership change below quorum must be rejected")
+	}
+	// Three approvals from the outgoing committee authorize the change.
+	verified, err := Verify(build([]int{0, 1, 2}, outgoing), outgoing.AuthorityPublic, &genesis, nil)
+	if err != nil {
+		t.Fatalf("a quorum of the previous committee must authorize the change: %v", err)
+	}
+	if verified.Topology.Document.Operators[4].IdentityKey == genesis.Topology.Document.Operators[4].IdentityKey {
+		t.Fatal("fixture did not actually change membership")
 	}
 }

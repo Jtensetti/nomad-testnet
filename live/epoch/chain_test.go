@@ -3,6 +3,10 @@ package epoch
 import (
 	"crypto/sha256"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -10,7 +14,7 @@ import (
 func TestChainAppendActivateRetireAndReopen(t *testing.T) {
 	f, genesisEncoded, genesis, successorEncoded, successor := buildTwoEpochChain(t)
 	root := t.TempDir()
-	chain, err := OpenChain(root, f.AuthorityPublic, nil)
+	chain, err := OpenChain(root, "nomad-test", f.AuthorityPublic, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +44,7 @@ func TestChainAppendActivateRetireAndReopen(t *testing.T) {
 		t.Fatalf("expected highest retired epoch 1, got %d", highest)
 	}
 
-	reopened, err := OpenChain(root, f.AuthorityPublic, nil)
+	reopened, err := OpenChain(root, "nomad-test", f.AuthorityPublic, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +60,7 @@ func TestChainAppendActivateRetireAndReopen(t *testing.T) {
 
 func TestChainInvalidConflictCannotHalt(t *testing.T) {
 	f, genesisEncoded, genesis, _, _ := buildTwoEpochChain(t)
-	chain, err := OpenChain(t.TempDir(), f.AuthorityPublic, nil)
+	chain, err := OpenChain(t.TempDir(), "nomad-test", f.AuthorityPublic, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +106,7 @@ func TestChainHaltsOnValidEquivocation(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	chain, err := OpenChain(root, f.AuthorityPublic, nil)
+	chain, err := OpenChain(root, "nomad-test", f.AuthorityPublic, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +125,7 @@ func TestChainHaltsOnValidEquivocation(t *testing.T) {
 	if _, active := chain.ActiveAt(first.ActivateAt); active {
 		t.Fatal("halted chain must not report an active epoch")
 	}
-	reopened, err := OpenChain(root, f.AuthorityPublic, nil)
+	reopened, err := OpenChain(root, "nomad-test", f.AuthorityPublic, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +156,7 @@ func TestChainEmergencyRetiresPredecessor(t *testing.T) {
 		t.Fatal("fixture emergency must activate before scheduled retirement")
 	}
 
-	chain, err := OpenChain(t.TempDir(), f.AuthorityPublic, nil)
+	chain, err := OpenChain(t.TempDir(), "nomad-test", f.AuthorityPublic, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,33 +175,69 @@ func TestChainEmergencyRetiresPredecessor(t *testing.T) {
 	}
 }
 
-func TestJournalRefusesSecondDigest(t *testing.T) {
+// TestJournalRefusesSecondActivation exercises the enforced signing path.
+// An operator that has activated one descriptor for an epoch must refuse to
+// activate a second, distinct one: that refusal is the producer-side half of
+// the split-brain defense, and because any second valid descriptor halts
+// every verifier that sees it, an unjournalled signer is an outage waiting
+// to happen.
+func TestJournalRefusesSecondActivation(t *testing.T) {
+	f := newFixture(t, 3)
+	session := sha256.Sum256([]byte("journal-session"))
+	topologyBytes, network := f.buildSignedTopology(t, 1, 2, genesisTimes(), session, 10)
+	certificateBytes, _ := f.buildCertificate(t, network)
+
+	first, err := New(nil, TransitionGenesis, canonicalTime(genesisTimes().Activate), canonicalTime(genesisTimes().Retire), topologyBytes, certificateBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := genesisTimes()
+	other.Retire = other.Retire.Add(time.Hour)
+	second, err := New(nil, TransitionGenesis, canonicalTime(other.Activate), canonicalTime(other.Retire), topologyBytes, certificateBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	journal, err := OpenJournal(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := sha256.Sum256([]byte("descriptor-one"))
-	second := sha256.Sum256([]byte("descriptor-two"))
-	if err := journal.Record("nomad-test", 7, first); err != nil {
+	operator := network.Document.Operators[0]
+	if _, err := journal.ActivateWithJournal(first, operator, f.Operators[0].Identity); err != nil {
 		t.Fatal(err)
 	}
-	if err := journal.Record("nomad-test", 7, first); err != nil {
-		t.Fatal("identical record must be idempotent")
+	if _, err := journal.ActivateWithJournal(first, operator, f.Operators[0].Identity); err != nil {
+		t.Fatalf("re-signing the identical descriptor must be idempotent: %v", err)
 	}
-	if err := journal.Record("nomad-test", 7, second); !errors.Is(err, ErrConflictingSignature) {
-		t.Fatalf("expected conflicting-signature refusal, got %v", err)
+	if _, err := journal.ActivateWithJournal(second, operator, f.Operators[0].Identity); !errors.Is(err, ErrConflictingSignature) {
+		t.Fatalf("expected a refusal to sign a second descriptor for epoch 1, got %v", err)
 	}
-	if err := journal.Record("nomad-test", 8, second); err != nil {
-		t.Fatal("a different epoch must be recordable")
+	// A separate journal directory, i.e. a different operator, is unaffected.
+	fresh, err := OpenJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := journal.Record("other-network", 7, second); err != nil {
-		t.Fatal("a different network must be recordable")
+	if _, err := fresh.ActivateWithJournal(second, operator, f.Operators[0].Identity); err != nil {
+		t.Fatalf("an independent operator journal must be unaffected: %v", err)
+	}
+}
+
+func TestJournalRejectsPathTraversalNetworkID(t *testing.T) {
+	journal, err := OpenJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("descriptor"))
+	for _, networkID := range []string{"../escaped", "a/b", "", "UPPER", "-leading"} {
+		if err := journal.record(networkID, 1, roleActivation, digest); err == nil {
+			t.Fatalf("network ID %q must be rejected", networkID)
+		}
 	}
 }
 
 func TestChainRejectsForeignNetworkGenesisWithoutHalting(t *testing.T) {
 	f, genesisEncoded, genesis, _, _ := buildTwoEpochChain(t)
-	chain, err := OpenChain(t.TempDir(), f.AuthorityPublic, nil)
+	chain, err := OpenChain(t.TempDir(), "nomad-test", f.AuthorityPublic, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +247,7 @@ func TestChainRejectsForeignNetworkGenesisWithoutHalting(t *testing.T) {
 	// A fully valid genesis for a different network signed by the same
 	// authority competes for the genesis slot (zero previous digest) but is
 	// not equivocation for this network and must not halt the chain.
-	foreign := newFixture(t, 3)
+	foreign := newNamedFixture(t, "foreign", 3)
 	foreign.AuthorityPublic = f.AuthorityPublic
 	foreign.AuthorityPrivate = f.AuthorityPrivate
 	session := sha256.Sum256([]byte("foreign-network-session"))
@@ -224,5 +264,223 @@ func TestChainRejectsForeignNetworkGenesisWithoutHalting(t *testing.T) {
 	}
 	if _, active := chain.ActiveAt(genesis.ActivateAt); !active {
 		t.Fatal("chain must remain live")
+	}
+}
+
+// TestHaltSurvivesEvidencePersistenceFailure is the regression for a
+// confirmed fail-open: the in-memory halt was set only after the marker was
+// written, so any persistence error (EEXIST from another instance, ENOSPC,
+// read-only mount) left a verifier that had detected equivocation still
+// serving epochs.
+func TestHaltSurvivesEvidencePersistenceFailure(t *testing.T) {
+	f := newFixture(t, 3)
+	session := sha256.Sum256([]byte("halt-persistence"))
+	topologyBytes, network := f.buildSignedTopology(t, 1, 2, genesisTimes(), session, 10)
+	certificateBytes, _ := f.buildCertificate(t, network)
+	firstEncoded, first := f.buildDescriptor(t, nil, nil, TransitionGenesis, genesisTimes(), network, topologyBytes, certificateBytes)
+	other := genesisTimes()
+	other.Retire = other.Retire.Add(time.Hour)
+	secondEncoded, _ := f.buildDescriptor(t, nil, nil, TransitionGenesis, other, network, topologyBytes, certificateBytes)
+
+	root := t.TempDir()
+	chain, err := OpenChain(root, "nomad-test", f.AuthorityPublic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chain.Append(firstEncoded); err != nil {
+		t.Fatal(err)
+	}
+	// Occupy the marker path so persisting the evidence cannot succeed as a
+	// fresh exclusive create, exactly as a competing instance would.
+	if err := os.WriteFile(filepath.Join(root, "HALTED"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chain.Append(secondEncoded); !errors.Is(err, ErrEquivocation) {
+		t.Fatalf("expected equivocation, got %v", err)
+	}
+	if !chain.Halted() {
+		t.Fatal("a detected equivocation must halt the chain even when evidence cannot be written")
+	}
+	if _, active := chain.ActiveAt(first.ActivateAt); active {
+		t.Fatal("a halted chain must not report an active epoch")
+	}
+}
+
+// TestAppendNeverReturnsSuccessForUnverifiedBytes covers the idempotence
+// path, which previously returned success on a digest match without ever
+// verifying the offered bytes: the digest excludes approvals and
+// activations, so signature-stripped input matched and was accepted.
+func TestAppendNeverReturnsSuccessForUnverifiedBytes(t *testing.T) {
+	f, genesisEncoded, genesis, _, _ := buildTwoEpochChain(t)
+	chain, err := OpenChain(t.TempDir(), "nomad-test", f.AuthorityPublic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chain.Append(genesisEncoded); err != nil {
+		t.Fatal(err)
+	}
+	stripped := genesis.Descriptor
+	stripped.Activations = nil
+	strippedEncoded, err := Encode(stripped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chain.Append(strippedEncoded); err == nil {
+		t.Fatal("Append must not report success for bytes Verify rejects")
+	}
+	if chain.Halted() {
+		t.Fatal("unverifiable bytes must not halt the chain")
+	}
+	// Unknown fields must be rejected by Append's own decoder, not only by Verify.
+	garbled := append([]byte(nil), genesisEncoded...)
+	garbled = append([]byte(`{"attacker_controlled_field":1,`), garbled[1:]...)
+	if _, err := chain.Append(garbled); err == nil {
+		t.Fatal("Append must reject unknown fields")
+	}
+}
+
+// TestBurnedEpochNumberCannotBeReused implements chain rule 2 against a
+// persisted high-water mark: deleting a descriptor file must not re-open a
+// used epoch number for a different successor.
+func TestBurnedEpochNumberCannotBeReused(t *testing.T) {
+	f, genesisEncoded, genesis, successorEncoded, successor := buildTwoEpochChain(t)
+	root := t.TempDir()
+	chain, err := OpenChain(root, "nomad-test", f.AuthorityPublic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chain.Append(genesisEncoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chain.Append(successorEncoded); err != nil {
+		t.Fatal(err)
+	}
+	// Remove the stored epoch 2 and reopen: the high-water mark survives.
+	if err := os.Remove(filepath.Join(root, fmt.Sprintf("%020d.epoch.json", successor.Epoch))); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenChain(root, "nomad-test", f.AuthorityPublic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tip, ok := reopened.Tip(); !ok || tip.Epoch != genesis.Epoch {
+		t.Fatal("reopened chain should have fallen back to the genesis tip")
+	}
+	alternative := successorTimes()
+	alternative.Retire = alternative.Retire.Add(2 * time.Hour)
+	session := sha256.Sum256([]byte("burned-epoch-alternative"))
+	topologyBytes, network := f.buildSignedTopology(t, 2, 2, alternative, session, 40)
+	certificateBytes, _ := f.buildCertificate(t, network)
+	altEncoded, _ := f.buildDescriptor(t, &genesis, f, TransitionScheduled, alternative, network, topologyBytes, certificateBytes)
+	if _, err := reopened.Append(altEncoded); err == nil {
+		t.Fatal("a burned epoch number must not accept a different descriptor")
+	}
+}
+
+// TestLawfulRebootstrapIsNotEquivocation covers a confirmed false positive:
+// slots were matched by previous-epoch digest, so a valid genesis for a
+// later epoch (the specified recovery from quorum loss) collided with the
+// stored genesis and permanently halted every verifier that saw it.
+func TestLawfulRebootstrapIsNotEquivocation(t *testing.T) {
+	f, genesisEncoded, genesis, _, _ := buildTwoEpochChain(t)
+	chain, err := OpenChain(t.TempDir(), "nomad-test", f.AuthorityPublic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chain.Append(genesisEncoded); err != nil {
+		t.Fatal(err)
+	}
+	times := epochTimes{
+		NotBefore: fixtureBase.Add(20 * time.Hour),
+		NotAfter:  fixtureBase.Add(40 * time.Hour),
+		DKGStart:  fixtureBase.Add(21 * time.Hour),
+		Activate:  fixtureBase.Add(22 * time.Hour),
+		Retire:    fixtureBase.Add(30 * time.Hour),
+	}
+	session := sha256.Sum256([]byte("rebootstrap-session"))
+	topologyBytes, network := f.buildSignedTopology(t, 9, 2, times, session, 50)
+	certificateBytes, _ := f.buildCertificate(t, network)
+	rebootstrap, _ := f.buildDescriptor(t, nil, nil, TransitionGenesis, times, network, topologyBytes, certificateBytes)
+
+	_, err = chain.Append(rebootstrap)
+	if errors.Is(err, ErrEquivocation) {
+		t.Fatal("a genesis for a different epoch is not equivocation")
+	}
+	if chain.Halted() {
+		t.Fatal("a lawful re-bootstrap must not halt the chain")
+	}
+	if _, active := chain.ActiveAt(genesis.ActivateAt); !active {
+		t.Fatal("the chain must remain usable")
+	}
+}
+
+func TestChainPinsItsNetworkOnFirstGenesis(t *testing.T) {
+	foreign := newNamedFixture(t, "foreign-network", 3)
+	session := sha256.Sum256([]byte("network-pin"))
+	topologyBytes, network := foreign.buildSignedTopologyWithNetwork(t, "nomad-other", 1, 2, genesisTimes(), session, 60)
+	certificateBytes, _ := foreign.buildCertificate(t, network)
+	encoded, _ := foreign.buildDescriptor(t, nil, nil, TransitionGenesis, genesisTimes(), network, topologyBytes, certificateBytes)
+
+	chain, err := OpenChain(t.TempDir(), "nomad-test", foreign.AuthorityPublic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chain.Append(encoded); err == nil {
+		t.Fatal("an empty store must still reject a genesis for another network")
+	}
+	if chain.Halted() {
+		t.Fatal("a foreign-network genesis must not halt the chain")
+	}
+}
+
+// TestRevocationDoesNotBrickAnExistingStore covers a confirmed
+// self-inflicted denial of service: revocation was applied when
+// re-verifying stored history, so declaring a compromise made the chain
+// unopenable at exactly the moment the emergency successor was needed.
+func TestRevocationDoesNotBrickAnExistingStore(t *testing.T) {
+	f, genesisEncoded, genesis, _, _ := buildTwoEpochChain(t)
+	root := t.TempDir()
+	chain, err := OpenChain(root, "nomad-test", f.AuthorityPublic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chain.Append(genesisEncoded); err != nil {
+		t.Fatal(err)
+	}
+	revoked := RevocationSet{genesis.Topology.Document.Operators[0].IdentityKey: {}}
+	reopened, err := OpenChain(root, "nomad-test", f.AuthorityPublic, revoked)
+	if err != nil {
+		t.Fatalf("declaring a compromise must not make the store unopenable: %v", err)
+	}
+	if tip, ok := reopened.Tip(); !ok || tip.Epoch != genesis.Epoch {
+		t.Fatal("the accepted history must remain available after a revocation")
+	}
+}
+
+func TestConcurrentAppendAndReadsAreRaceFree(t *testing.T) {
+	f, genesisEncoded, genesis, successorEncoded, _ := buildTwoEpochChain(t)
+	chain, err := OpenChain(t.TempDir(), "nomad-test", f.AuthorityPublic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var group sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		group.Add(1)
+		go func(worker int) {
+			defer group.Done()
+			if worker%2 == 0 {
+				_, _ = chain.Append(genesisEncoded)
+				_, _ = chain.Append(successorEncoded)
+				return
+			}
+			_, _ = chain.ActiveAt(genesis.ActivateAt)
+			_, _ = chain.Tip()
+			_ = chain.HighestRetired(genesis.RetireAt)
+			_ = chain.Halted()
+		}(worker)
+	}
+	group.Wait()
+	if chain.Halted() {
+		t.Fatal("concurrent appends of the same descriptors must not look like equivocation")
 	}
 }
