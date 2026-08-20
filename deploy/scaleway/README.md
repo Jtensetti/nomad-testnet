@@ -100,6 +100,26 @@ billable. Always run the destroy operation when the experiment is finished.
 If an apply or measurement job fails, the workflow attempts an immediate
 fail-closed Terraform destroy using its local state.
 
+## Timing preflight
+
+The first WAN apply was blocked by issue #6 after two reproducible local
+idle-vs-active cadence findings around 3.2-3.3% against the unchanged 2.0%
+threshold. Decomposition isolated the strongest mechanism to concurrent
+producer/scheduler contention in `fabric.QueueSource`. The queue now uses a
+bounded non-blocking producer/consumer design so the scheduler does not acquire
+a producer-held mutex and can fall back to cover instead of waiting for work.
+
+Two separate post-fix CI measurements of the isolated concurrent-queue world
+reported 0.434% and 0.323%, both below the unchanged 2.0% threshold, while
+intentional distinguisher controls still fail as designed. Unit/race/vet and the
+multi-process Compose fabric-to-cache path are green. Issue #6 is therefore
+closed for the specific QueueSource timing channel.
+
+A different same-host resource-contention finding remains open as issue #7:
+CPU/disk activity colocated with a future end-user sender must be tested at the
+real client process boundary. Closing #6 does not claim that #7, WAN anonymity,
+or production anonymity is solved.
+
 ## First-phase claim
 
 A successful run means only:
