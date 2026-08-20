@@ -51,6 +51,9 @@ resource "scaleway_instance_ip" "ipv4" {
   type       = "routed_ipv4"
 }
 
+# Allocate IPv6 now so later dual-stack experiments can reuse the same host
+# shape. The first campaign does not open IPv6 Nomad ingress or claim IPv6
+# protocol evidence.
 resource "scaleway_instance_ip" "ipv6" {
   for_each   = local.nodes
   project_id = var.project_id
@@ -63,7 +66,7 @@ resource "scaleway_instance_security_group" "node" {
   project_id              = var.project_id
   zone                    = each.value.zone
   name                    = "nomad-wan-${var.deployment_id}-${each.key}"
-  description             = "Disposable Nomad WAN lab; SSH restricted to the orchestrator, protocol ports restricted to lab peers on IPv4."
+  description             = "Disposable Nomad WAN lab; SSH restricted to the orchestrator and active protocol ports restricted to lab peers."
   inbound_default_policy  = "drop"
   outbound_default_policy = "accept"
   stateful                = true
@@ -84,9 +87,9 @@ resource "scaleway_instance_security_group_rules" "node" {
     ip_range = var.admin_ipv4_cidr
   }
 
-  # Fixed-cadence Nomad cells, DKG TLS and WireGuard are reachable only from
-  # the other provisioned IPv4 addresses. Application-layer authentication is
-  # still mandatory; these rules are only a network reduction layer.
+  # The first campaign needs only the fixed-cadence fabric and TLS DKG. Every
+  # rule is restricted to the three provisioned IPv4 addresses. Partial-share
+  # serving and WireGuard are not started and therefore get no open port.
   dynamic "inbound_rule" {
     for_each = scaleway_instance_ip.ipv4
     content {
@@ -104,49 +107,6 @@ resource "scaleway_instance_security_group_rules" "node" {
       protocol = "TCP"
       port     = 4400
       ip_range = "${inbound_rule.value.address}/32"
-    }
-  }
-
-  dynamic "inbound_rule" {
-    for_each = scaleway_instance_ip.ipv4
-    content {
-      action   = "accept"
-      protocol = "UDP"
-      port     = 51820
-      ip_range = "${inbound_rule.value.address}/32"
-    }
-  }
-
-  # IPv6 is allocated on every host but remains closed by default. When an
-  # explicit dual-stack campaign enables it, rules are still peer-restricted;
-  # they never fall back to ::/0.
-  dynamic "inbound_rule" {
-    for_each = var.enable_ipv6_wan ? local.nodes : {}
-    content {
-      action   = "accept"
-      protocol = "UDP"
-      port     = 4200
-      ip_range = "${one([for address in scaleway_instance_server.node[inbound_rule.key].public_ips : address.address if address.family == "inet6"])}/128"
-    }
-  }
-
-  dynamic "inbound_rule" {
-    for_each = var.enable_ipv6_wan ? local.nodes : {}
-    content {
-      action   = "accept"
-      protocol = "TCP"
-      port     = 4400
-      ip_range = "${one([for address in scaleway_instance_server.node[inbound_rule.key].public_ips : address.address if address.family == "inet6"])}/128"
-    }
-  }
-
-  dynamic "inbound_rule" {
-    for_each = var.enable_ipv6_wan ? local.nodes : {}
-    content {
-      action   = "accept"
-      protocol = "UDP"
-      port     = 51820
-      ip_range = "${one([for address in scaleway_instance_server.node[inbound_rule.key].public_ips : address.address if address.family == "inet6"])}/128"
     }
   }
 }
