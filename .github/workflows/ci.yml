@@ -40,9 +40,22 @@ jobs:
             github.com/Jtensetti/nomad-testnet/live/fetchplan \
             github.com/Jtensetti/nomad-testnet/live/partialfetch \
             github.com/Jtensetti/nomad-testnet/live/rawcache \
+            github.com/Jtensetti/nomad-testnet/live/epoch \
             github.com/Jtensetti/nomad-testnet/live/topology)"
           if printf '%s\n' "$network_deps" | grep -Eq 'nomad-(semantic-basins|local-reconstruction)'; then
             echo "network domain imports private selection or reconstruction code"
+            exit 1
+          fi
+          # The publication API must have no network capability, transitively.
+          # Publish is a purely local operation; the only way a fragment
+          # leaves the queue is a pull by the constant-rate scheduler.
+          publish_deps="$(go list -deps github.com/Jtensetti/nomad-testnet/live/publish)"
+          if printf '%s\n' "$publish_deps" | grep -Eq '^(net|net/http|net/url|os/exec)$'; then
+            echo "publication API reaches a socket or process-launch capability"
+            exit 1
+          fi
+          if printf '%s\n' "$publish_deps" | grep -Eq 'nomad-(constant-rate-fabric|selection-firewall)|nomad-testnet/live/(node|hop|fetchplan|partialfetch|uplink)'; then
+            echo "publication API imports transport, peer selection or scheduling"
             exit 1
           fi
           materializer_imports="$(go list -f '{{join .Imports "\n"}}' github.com/Jtensetti/nomad-testnet/live/materialize)"
