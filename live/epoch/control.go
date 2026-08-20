@@ -2,6 +2,8 @@ package epoch
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 )
 
 // DescriptorIdentity reads the claimed network and epoch from a descriptor
