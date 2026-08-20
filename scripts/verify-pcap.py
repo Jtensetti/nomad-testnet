@@ -3,16 +3,10 @@
 
 import collections
 import json
-import re
 import statistics
-import subprocess
 import sys
 
-
-LINE = re.compile(
-    r"^(?P<time>\d+\.\d+)\s+(?:(?:\S+)\s+){0,2}IP6?\s+"
-    r"(?P<src>\S+)\s+>\s+(?P<dst>\S+):\s+UDP, length (?P<size>\d+)$"
-)
+from capture import CaptureError, read_capture
 
 
 def main() -> int:
@@ -25,24 +19,19 @@ def main() -> int:
         raise SystemExit("expected interval must be numeric")
     if expected_interval <= 0:
         raise SystemExit("expected interval must be positive")
-    result = subprocess.run(
-        ["tcpdump", "-tt", "-nn", "-r", sys.argv[1], "udp", "port", "4200"],
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        times, sizes, packet_destinations, sources = read_capture(
+            sys.argv[1], "udp port 4200"
+        )
+    except CaptureError as error:
+        raise SystemExit(f"capture could not be read in full: {error}")
     flows: dict[str, list[float]] = collections.defaultdict(list)
     destinations: dict[str, set[str]] = collections.defaultdict(set)
-    for raw in result.stdout.splitlines():
-        match = LINE.match(raw.strip())
-        if not match:
-            continue
-        if int(match.group("size")) != 1200:
-            raise SystemExit(f"non-1200-byte UDP payload: {raw}")
-        source = match.group("src")
-        flows[source].append(float(match.group("time")))
-        destinations[source].add(match.group("dst"))
+    for time, size, destination, source in zip(times, sizes, packet_destinations, sources):
+        if size != 1200:
+            raise SystemExit(f"non-1200-byte UDP payload from {source}: {size}")
+        flows[source].append(time)
+        destinations[source].add(destination)
     if len(flows) < 3:
         raise SystemExit(f"capture has {len(flows)} senders, want at least 3")
     evidence = {}

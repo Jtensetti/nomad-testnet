@@ -64,6 +64,8 @@ jobs:
             exit 1
           fi
       - run: go test -race ./...
+      - name: Verify the traffic-analysis harness still detects differences
+        run: python3 scripts/test-two-world-analysis.py
       - name: Run independent operator ceremony
         env:
           NOMAD_CEREMONY_EVIDENCE: runtime/evidence/operator-ceremony.json

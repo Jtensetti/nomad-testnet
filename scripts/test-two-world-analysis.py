@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""Self-tests for the preregistered analysis harness.
+
+An analysis tool that silently stops detecting differences is worse than no
+tool, so these check both directions: that identical worlds pass and that
+each kind of difference the preregistration names is actually caught.
+"""
+
+import importlib.util
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+
+spec = importlib.util.spec_from_file_location(
+    "twa", pathlib.Path(__file__).with_name("two-world-analysis.py")
+)
+twa = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(twa)
+
+import capture
+
+failures = []
+
+
+def check(name, condition):
+    if condition:
+        print(f"ok   {name}")
+    else:
+        print(f"FAIL {name}")
+        failures.append(name)
+
+
+# Capture parsing. tcpdump is not available in every environment the harness
+# runs in, so the line parser is exercised directly against recorded output.
+CAPTURE = """reading from file world-a.pcap, link-type EN10MB (Ethernet)
+1712345678.100000 IP 10.0.0.2.4200 > 10.0.0.3.4200: UDP, length 1200
+1712345678.150000 IP 10.0.0.2.4200 > 10.0.0.4.4200: UDP, length 1200
+1712345678.200000 IP6 fd00::2.4200 > fd00::3.4200: UDP, length 1200
+1712345678.250000 vlan 7, p 0, IP 10.0.0.2.4200 > 10.0.0.3.4200: UDP, length 1200
+"""
+parsed_times, parsed_sizes, parsed_destinations, parsed_sources = capture.parse_tcpdump(CAPTURE)
+check("parser reads every packet line", len(parsed_times) == 4)
+check("parser reads the IPv6 form", parsed_destinations[2] == "fd00::3.4200")
+# A VLAN-tagged capture puts four tokens between the timestamp and the IP
+# token. A prefix pattern that allows only two silently drops every tagged
+# packet, which on the cadence gate means an oversized cell passes unseen.
+check("parser reads the VLAN-tagged form",
+      parsed_destinations[3] == "10.0.0.3.4200" and parsed_sources[3] == "10.0.0.2.4200")
+check("parser reads sizes", parsed_sizes == [1200] * 4)
+
+# An unrecognised line must stop the run. Silently skipping it would drop
+# packets, and a dropped packet makes two worlds look more alike, not less.
+try:
+    capture.parse_tcpdump(CAPTURE + "1712345678.300000 IP 10.0.0.2 > 10.0.0.3: ICMP echo\n")
+    check("parser rejects an unparsed line", False)
+except capture.CaptureError:
+    check("parser rejects an unparsed line", True)
+
+# Preamble and trailer lines are not packets and must not be errors either.
+capture.parse_tcpdump(
+    "tcpdump: verbose output suppressed\nlistening on eth0\n4 packets captured\n"
+)
+check("parser tolerates tcpdump preamble and trailer lines", True)
+
+# Kolmogorov-Smirnov runs over inter-arrivals, not raw timestamps, so the
+# tests below feed it what the harness feeds it.
+steady_times = [0.05 * index for index in range(400)]
+steady_gaps = twa.interarrivals(steady_times)
+_, p_same = twa.ks_two_sample(steady_gaps, list(steady_gaps))
+check("KS accepts identical inter-arrivals", p_same > twa.KS_ALPHA)
+
+doubled_gaps = twa.interarrivals([0.10 * index for index in range(400)])
+_, p_shifted = twa.ks_two_sample(steady_gaps, doubled_gaps)
+check("KS rejects a doubled interval", p_shifted < twa.KS_ALPHA)
+
+# A small periodic jitter is the case that matters: a blatant difference
+# would be visible without statistics at all.
+subtle_gaps = twa.interarrivals(
+    [0.05 * index + (0.004 if index % 2 else 0.0) for index in range(400)]
+)
+_, p_subtle = twa.ks_two_sample(steady_gaps, subtle_gaps)
+check("KS rejects a subtle periodic shift", p_subtle < twa.KS_ALPHA)
+
+# Regression: heavily tied samples. A fixed-cadence capture yields only a
+# handful of distinct float inter-arrivals across thousands of packets, so
+# ties are the normal case rather than an edge case. A per-observation ECDF
+# walk charges each tie run as a gap and reports a large statistic for a
+# sample against itself -- a permanent false alarm on exactly the input this
+# harness exists to analyse.
+tied = [0.05] * 200 + [0.06] * 200
+statistic_tied, p_tied = twa.ks_two_sample(tied, list(tied))
+check("KS statistic is zero for a tied sample against itself", statistic_tied == 0.0)
+check("KS accepts a tied sample against itself", p_tied > twa.KS_ALPHA)
+
+# ...and the tie handling must not buy that by going blind: a real shift in
+# the same tied support still has to be caught.
+tied_shifted = [0.05] * 100 + [0.06] * 300
+_, p_tied_shifted = twa.ks_two_sample(tied, tied_shifted)
+check("KS rejects a shift within a tied support", p_tied_shifted < twa.KS_ALPHA)
+
+# The Kolmogorov survival function is only reached with a positive statistic,
+# but its series does not converge as lambda approaches zero, so the
+# boundary is asserted directly.
+check("Kolmogorov survival at zero is one", twa.kolmogorov_survival(0.0) == 1.0)
+check("Kolmogorov survival near zero is one", twa.kolmogorov_survival(0.01) > 0.99)
+check("Kolmogorov survival decays", twa.kolmogorov_survival(3.0) < 1e-6)
+
+# Chi-square over destination sequences.
+_, p_dest_same = twa.chi_square_destinations(["a"] * 50 + ["b"] * 50, ["a"] * 50 + ["b"] * 50)
+check("chi-square accepts identical peer usage", p_dest_same > twa.CHI_SQUARE_ALPHA)
+_, p_dest_skew = twa.chi_square_destinations(["a"] * 90 + ["b"] * 10, ["a"] * 10 + ["b"] * 90)
+check("chi-square rejects skewed peer usage", p_dest_skew < twa.CHI_SQUARE_ALPHA)
+
+# Burst detection: a steady 20/second stream and one with a burst must differ.
+steady = [index * 0.05 for index in range(100)]
+bursty = steady[:50] + [2.5 + index * 0.001 for index in range(50)]
+check("burst detection sees a catch-up burst", twa.max_burst(bursty) > twa.max_burst(steady))
+
+# Inter-arrival extraction must be order-independent, since capture order is
+# not guaranteed to be sorted.
+check("inter-arrivals are order independent",
+      twa.interarrivals([3.0, 1.0, 2.0]) == twa.interarrivals([1.0, 2.0, 3.0]))
+
+# The upper regularized gamma must behave at the boundaries it is used at.
+check("gamma survival at zero is one", abs(twa.upper_gamma_regularized(1.0, 0.0) - 1.0) < 1e-9)
+check("gamma survival decays", twa.upper_gamma_regularized(1.0, 20.0) < 1e-6)
+
+# End to end through main(), with a shim standing in for tcpdump so the exit
+# status and report assembly are exercised without a live capture. The
+# decision rule is only useful if a failing world actually produces a
+# non-zero exit, which is what CI and any operator script keys on.
+SHIM = """#!/bin/sh
+while [ $# -gt 0 ]; do
+  if [ "$1" = "-r" ]; then shift; cat "$1"; exit 0; fi
+  shift
+done
+exit 1
+"""
+
+
+def write_world(path, jitter=0.0, size=1200):
+    lines = ["reading from file capture.pcap, link-type EN10MB (Ethernet)"]
+    for index in range(400):
+        stamp = 1712345678.0 + 0.05 * index + (jitter if index % 2 else 0.0)
+        lines.append(f"{stamp:.6f} IP 10.0.0.2.4200 > 10.0.0.3.4200: UDP, length {size}")
+    path.write_text("\n".join(lines) + "\n")
+
+
+with tempfile.TemporaryDirectory() as workspace:
+    root = pathlib.Path(workspace)
+    (root / "tcpdump").write_text(SHIM)
+    (root / "tcpdump").chmod(0o755)
+    environment = dict(os.environ, PATH=f"{root}{os.pathsep}{os.environ['PATH']}")
+    write_world(root / "a", jitter=0.0)
+    write_world(root / "b", jitter=0.0)
+    write_world(root / "leaky", jitter=0.004)
+    write_world(root / "oversized", jitter=0.0, size=1201)
+
+    analysis = str(pathlib.Path(__file__).with_name("two-world-analysis.py"))
+
+    def run(left, right):
+        return subprocess.run(
+            [sys.executable, analysis, str(root / left), str(root / right), "1200", "50"],
+            env=environment, capture_output=True, text=True,
+        ).returncode
+
+    check("end to end: matching worlds exit 0", run("a", "b") == 0)
+    check("end to end: a jittered world exits non-zero", run("a", "leaky") == 1)
+    check("end to end: an off-size cell exits non-zero", run("a", "oversized") == 1)
+
+if failures:
+    print(f"\n{len(failures)} self-test(s) failed", file=sys.stderr)
+    sys.exit(1)
+print("\nall analysis self-tests passed")
