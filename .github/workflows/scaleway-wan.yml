@@ -73,6 +73,86 @@ jobs:
           bash -n scripts/wan/scaleway-provision.sh
           python3 -m py_compile scripts/wan/analyze-captures.py scripts/wan/summarize-result.py scripts/capture.py
 
+  cloud-plan:
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/agent/scaleway-wan'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+      SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+      SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_PROJECT_ID }}
+      SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_ORGANIZATION_ID }}
+      TF_VAR_project_id: ${{ secrets.SCW_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: '1.14.6'
+          terraform_wrapper: false
+      - name: Prepare plan-only public inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SCW_ACCESS_KEY"
+          test -n "$SCW_SECRET_KEY"
+          test -n "$TF_VAR_project_id"
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/nomad-wan-plan" -C "github-plan-${GITHUB_RUN_ID}"
+          runner_ip="$(curl -4 --fail --silent --show-error --max-time 10 https://api.ipify.org)"
+          [[ "$runner_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          {
+            echo "TF_VAR_ssh_public_key=$(cat "$RUNNER_TEMP/nomad-wan-plan.pub")"
+            echo "TF_VAR_admin_ipv4_cidr=${runner_ip}/32"
+            echo "TF_VAR_deployment_id=plan-${GITHUB_RUN_ID}"
+            echo "TF_VAR_ttl_hours=1"
+          } >> "$GITHUB_ENV"
+      - name: Plan against real Scaleway API
+        run: |
+          set -euo pipefail
+          mkdir -p runtime/evidence/scaleway-plan
+          terraform -chdir=deploy/scaleway init
+          terraform -chdir=deploy/scaleway plan -refresh=false -lock=false -out="$RUNNER_TEMP/nomad-wan.tfplan"
+          terraform -chdir=deploy/scaleway show -no-color "$RUNNER_TEMP/nomad-wan.tfplan" > runtime/evidence/scaleway-plan/terraform-plan.txt
+          terraform -chdir=deploy/scaleway show -json "$RUNNER_TEMP/nomad-wan.tfplan" > runtime/evidence/scaleway-plan/terraform-plan.json
+      - name: Assert exact zero-cost plan shape
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import collections, json
+          from pathlib import Path
+
+          plan = json.loads(Path('runtime/evidence/scaleway-plan/terraform-plan.json').read_text())
+          changes = []
+          for resource in plan.get('resource_changes', []):
+              actions = resource.get('change', {}).get('actions', [])
+              if actions == ['no-op']:
+                  continue
+              if actions != ['create']:
+                  raise SystemExit(f"unexpected non-create action for {resource.get('address')}: {actions}")
+              changes.append(resource)
+          observed = collections.Counter(resource.get('type') for resource in changes)
+          expected = collections.Counter({
+              'scaleway_instance_ip': 6,
+              'scaleway_instance_security_group': 3,
+              'scaleway_instance_security_group_rules': 3,
+              'scaleway_instance_server': 3,
+          })
+          if observed != expected:
+              raise SystemExit(f"unexpected plan resource shape: {dict(observed)} != {dict(expected)}")
+          Path('runtime/evidence/scaleway-plan/PLAN_OK.txt').write_text(
+              'PASS: authenticated Scaleway plan contains exactly 15 create-only resources '
+              '(3 servers, 6 routed IPs, 3 security groups, 3 rule sets) and applies nothing.\n'
+          )
+          print(Path('runtime/evidence/scaleway-plan/PLAN_OK.txt').read_text(), end='')
+          PY
+      - name: Upload authenticated plan evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaleway-authenticated-plan-${{ github.run_id }}
+          path: runtime/evidence/scaleway-plan/
+          if-no-files-found: error
+          retention-days: 14
+
   provision:
     needs: validate
     if: github.event_name == 'workflow_dispatch' && inputs.operation != 'destroy'
