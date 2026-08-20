@@ -13,11 +13,10 @@ import (
 
 // TestRecoveryDrill executes the operator recovery runbook end to end:
 // compromise, peer-quorum revocation, replacement through an emergency
-// membership transition approved by the previous committee, erasure of the
-// retired material, and refusal to serve the retired epoch.
+// membership transition approved by the previous committee, durable erasure
+// acknowledgement of retired material, and refusal to serve the retired epoch.
 //
-// It is protocol-level. It does not establish that independent
-// administrators performed these steps on separate hosts (EB-2).
+// It is protocol-level. It does not establish independent administration.
 func TestRecoveryDrill(t *testing.T) {
 	const compromised = 4
 	outgoing := newNamedFixture(t, "drill-outgoing", 5)
@@ -49,7 +48,6 @@ func TestRecoveryDrill(t *testing.T) {
 		IdentityKey:   genesis.Topology.Document.Operators[compromised].IdentityKey,
 		EpochObserved: genesis.Epoch, Reason: ReasonCompromise,
 	}
-	// A single peer must not suffice.
 	single, err := SignRevocation(revocation, genesis.Topology.Document.Operators[0].ID, outgoing.Operators[0].Identity)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +99,6 @@ func TestRecoveryDrill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The revoked operator must not be able to approve its own replacement.
 	tainted, err := Approve(successor, genesis, genesis.Topology.Document.Operators[compromised], outgoing.Operators[compromised].Identity)
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +116,6 @@ func TestRecoveryDrill(t *testing.T) {
 		t.Fatal("drill: a revoked operator must not authorize a transition")
 	}
 
-	// A quorum of the surviving previous committee approves.
 	for _, index := range []int{0, 1, 2} {
 		approval, err := Approve(successor, genesis, genesis.Topology.Document.Operators[index], outgoing.Operators[index].Identity)
 		if err != nil {
@@ -127,13 +123,11 @@ func TestRecoveryDrill(t *testing.T) {
 		}
 		successor.Approvals = append(successor.Approvals, approval)
 	}
-	journals := make([]*Journal, len(network2.Document.Operators))
 	for index, member := range network2.Document.Operators {
 		journal, err := OpenJournal(t.TempDir())
 		if err != nil {
 			t.Fatal(err)
 		}
-		journals[index] = journal
 		activation, err := journal.ActivateWithJournal(successor, member, incoming.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
@@ -154,9 +148,25 @@ func TestRecoveryDrill(t *testing.T) {
 	if err := chain.ServesEpoch(2, probe); err != nil {
 		t.Fatalf("drill: the new epoch must serve: %v", err)
 	}
-	t.Log("step 4: retired epoch refused, successor serving")
+	policy := Policy{PrepareLead: time.Hour, RetryOffsets: []time.Duration{20 * time.Minute}, EscalateAfter: 40 * time.Minute}
+	outgoingPlan, err := chain.PlanAtForOperator(probe, policy, genesis.Topology.Document.Operators[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outgoingPlan.Action != ActionRetire || outgoingPlan.Epoch != genesis.Epoch {
+		t.Fatalf("drill: outgoing member must retire epoch 1 material, got %+v", outgoingPlan)
+	}
+	incomingReplacementID := network2.Document.Operators[compromised].ID
+	replacementPlan, err := chain.PlanAtForOperator(probe, policy, incomingReplacementID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacementPlan.Action == ActionRetire && replacementPlan.Epoch == genesis.Epoch {
+		t.Fatal("drill: replacement was asked to erase an epoch for which it never held material")
+	}
+	t.Log("step 4: retired epoch refused; only actual epoch-1 members owe retirement acknowledgements")
 
-	// --- Procedure 5: erase the retired epoch's material. ---
+	// --- Procedure 5: transactionally erase and acknowledge retired material. ---
 	directory := t.TempDir()
 	sharePaths := make([]string, 0, len(secrets1))
 	for index, secret := range secrets1 {
@@ -172,13 +182,23 @@ func TestRecoveryDrill(t *testing.T) {
 		sharePaths = append(sharePaths, path)
 	}
 	for index, path := range sharePaths {
-		statement, err := EraseEpochMaterial("nomad-test", genesis.Topology.Document.Operators[index].ID,
-			genesis, []string{path}, "tmpfs", outgoing.Operators[index].Identity, fixtureBase)
+		operatorID := genesis.Topology.Document.Operators[index].ID
+		intent, err := NewErasureIntent(genesis, operatorID, []string{path}, "tmpfs", outgoing.Operators[index].Identity, probe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		statement, err := ExecuteErasureIntent(intent, genesis, outgoing.Operators[index].Identity, probe.Add(time.Second))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := VerifyErasureStatement(statement, genesis); err != nil {
 			t.Fatalf("drill: erasure statement must verify: %v", err)
+		}
+		if err := chain.RecordErasureStatement(statement, operatorID); err != nil {
+			t.Fatalf("drill: erasure acknowledgement must persist: %v", err)
+		}
+		if recorded, err := chain.ErasureRecorded(genesis.Epoch, operatorID); err != nil || !recorded {
+			t.Fatalf("drill: operator %s retirement ack missing: recorded=%v err=%v", operatorID, recorded, err)
 		}
 	}
 	entries, err := os.ReadDir(directory)
@@ -188,14 +208,20 @@ func TestRecoveryDrill(t *testing.T) {
 	if len(entries) != 0 {
 		t.Fatalf("drill: retired material must not remain, found %d files", len(entries))
 	}
-	t.Log("step 5: retired epoch material erased with signed statements")
+	postAckPlan, err := chain.PlanAtForOperator(probe.Add(2*time.Second), policy, genesis.Topology.Document.Operators[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if postAckPlan.Action == ActionRetire && postAckPlan.Epoch == genesis.Epoch {
+		t.Fatalf("drill: acknowledged retirement still blocks lifecycle: %+v", postAckPlan)
+	}
+	t.Log("step 5: retired material erased and durably acknowledged")
 
 	// --- Procedure 1: an interrupted ceremony never resumes. ---
 	stateDirectory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(stateDirectory, "RUNNING"), []byte("interrupted"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// Exercise the real ceremony store, not a stand-in for it.
 	if _, err := dkgnet.NewStore(stateDirectory, genesis.Topology); err == nil {
 		t.Fatal("drill: an interrupted ceremony directory must refuse a fresh session")
 	}
