@@ -30,6 +30,9 @@ done
 [[ "$ttl_hours" =~ ^[0-9]+$ ]] && (( ttl_hours >= 1 && ttl_hours <= 72 )) || {
   echo "TTL_HOURS must be 1..72" >&2; exit 1;
 }
+(( ttl_hours * 3600 >= capture_seconds + 900 )) || {
+  echo "TTL_HOURS must leave at least 15 minutes beyond CAPTURE_SECONDS" >&2; exit 1;
+}
 
 mkdir -p "$evidence_dir"/{enrollments,attestations,dkg,pcap,health,logs,tls}
 work_dir=$(mktemp -d)
@@ -74,9 +77,9 @@ collect_root_file() {
 }
 
 wait_for_node() {
-  local operator=$1 deadline=$((SECONDS + 360))
+  local operator=$1 deadline=$((SECONDS + 600))
   while (( SECONDS < deadline )); do
-    if remote "$operator" 'test -f /var/lib/nomad/cloud-init-ready' >/dev/null 2>&1; then
+    if remote "$operator" 'sudo test -f /var/lib/nomad/cloud-init-ready' >/dev/null 2>&1; then
       return 0
     fi
     sleep 5
@@ -87,9 +90,8 @@ wait_for_node() {
 
 printf 'Waiting for Scaleway cloud-init on %s\n' "${operators[*]}"
 for operator in "${operators[@]}"; do
-  wait_for_node "$operator" &
+  wait_for_node "$operator"
 done
-wait
 
 # Install the exact workflow-built binaries. Operator private material is then
 # generated on each host and never copied back to the coordinator.
@@ -164,7 +166,7 @@ done
   --epoch 1 \
   --cell-interval-ms "$expected_interval_ms" \
   --valid-for "${ttl_hours}h" \
-  --dkg-start-delay 2m \
+  --dkg-start-delay 3m \
   --dkg-phase-duration 10s \
   --dkg-threshold 2 \
   --enrollments "$enrollments" \
@@ -292,7 +294,7 @@ UNIT
 sudo systemctl daemon-reload
 sudo systemctl disable --now nomad-node.service >/dev/null 2>&1 || true
 sudo rm -f /var/lib/nomad/evidence/$operator.pcap
-sudo sh -c 'nohup timeout ${capture_seconds}s tcpdump -i any -U -nn -s 0 -w /var/lib/nomad/evidence/$operator.pcap \"src host $ip and udp port 4200\" >/var/log/nomad/tcpdump.log 2>&1 &'
+sudo sh -c 'nohup timeout ${capture_seconds}s tcpdump -i any -U -nn -s 0 -w /var/lib/nomad/evidence/$operator.pcap \"udp port 4200\" >/var/log/nomad/tcpdump.log 2>&1 &'
 sudo systemctl start nomad-node.service"
 done
 
@@ -306,7 +308,7 @@ for operator in "${operators[@]}"; do
   remote "$operator" 'ip -j address show; printf "\n--- routes ---\n"; ip route; printf "\n--- routes6 ---\n"; ip -6 route' > "$evidence_dir/logs/$operator-network.txt" || true
 done
 
-python3 "$(dirname "$0")/analyze-captures.py" "$evidence_dir/pcap" "$expected_interval_ms" > "$evidence_dir/cadence.json"
+python3 "$(dirname "$0")/analyze-captures.py" "$evidence_dir/pcap" "$nodes_json" "$expected_interval_ms" > "$evidence_dir/cadence.json"
 
 cat > "$evidence_dir/CLAIM_BOUNDARY.txt" <<BOUNDARY
 Nomad Scaleway WAN lab
@@ -319,7 +321,7 @@ production_independence=false
 capture_seconds=$capture_seconds
 expected_cell_interval_ms=$expected_interval_ms
 
-This evidence demonstrates real public-WAN process/cadence behavior for one
+This evidence demonstrates real public-WAN emission and arrival cadence for one
 administrator across three Scaleway regions. It does NOT demonstrate independent
 operator governance, anonymous publication, a 72-hour campaign, or an external
 security assessment.
