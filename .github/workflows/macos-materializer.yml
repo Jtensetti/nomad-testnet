@@ -1,0 +1,48 @@
+name: macOS materializer boundary
+
+on:
+  push:
+    branches: [agent/macos-materializer-boundary]
+    paths:
+      - 'cmd/nomad-materializer/**'
+      - 'live/materialize/**'
+      - 'deploy/macos/materializer/**'
+      - '.github/workflows/macos-materializer.yml'
+  pull_request:
+    paths:
+      - 'cmd/nomad-materializer/**'
+      - 'live/materialize/**'
+      - 'deploy/macos/materializer/**'
+      - '.github/workflows/macos-materializer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-boundary:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.x'
+          check-latest: false
+
+      - name: Verify materializer has no network capability and bridges only the two cache domains
+        env:
+          NOMAD_BUILD_NUMBER: ${{ github.run_number }}
+        run: bash deploy/macos/materializer/build_materializer.sh
+
+      - name: Upload signed-boundary evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nomad-Materializer-macOS-boundary-${{ github.sha }}
+          path: |
+            dist-materializer/Nomad Materializer.app
+            dist-materializer/effective-entitlements.plist
+            dist-materializer/NomadMaterializer.sha256
+          if-no-files-found: error
+          retention-days: 30
