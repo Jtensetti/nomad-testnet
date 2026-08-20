@@ -46,7 +46,7 @@ func realDeposit(t *testing.T, committee mix.PublicKey, marker byte) ([32]byte, 
 	return id, payload, fragment
 }
 
-func openAirlock(t *testing.T, schedule Schedule, committee mix.PublicKey) (*Airlock, time.Time, time.Time) {
+func openAirlock(t *testing.T, schedule Schedule, committee mix.ThresholdCommittee) (*Airlock, time.Time, time.Time) {
 	t.Helper()
 	airlock, err := New(schedule, committee, 0)
 	if err != nil {
@@ -62,7 +62,7 @@ func openAirlock(t *testing.T, schedule Schedule, committee mix.PublicKey) (*Air
 func TestDepositIsIdempotentAndRefusesConflict(t *testing.T) {
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()
-	airlock, opens, _ := openAirlock(t, schedule, committee.PublicKey)
+	airlock, opens, _ := openAirlock(t, schedule, committee)
 	inside := opens.Add(time.Minute)
 
 	id, payload, _ := realDeposit(t, committee.PublicKey, 1)
@@ -91,7 +91,7 @@ func TestDepositIsIdempotentAndRefusesConflict(t *testing.T) {
 func TestDepositRefusedOutsideItsWindow(t *testing.T) {
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()
-	airlock, opens, closes := openAirlock(t, schedule, committee.PublicKey)
+	airlock, opens, closes := openAirlock(t, schedule, committee)
 
 	id, payload, _ := realDeposit(t, committee.PublicKey, 1)
 	if err := airlock.Deposit(id, payload, opens.Add(-time.Nanosecond)); !errors.Is(err, ErrWindowClosed) {
@@ -113,7 +113,7 @@ func TestDepositRefusedOutsideItsWindow(t *testing.T) {
 func TestFullEpochRefusesRatherThanGrowing(t *testing.T) {
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()
-	airlock, opens, _ := openAirlock(t, schedule, committee.PublicKey)
+	airlock, opens, _ := openAirlock(t, schedule, committee)
 	inside := opens.Add(time.Minute)
 
 	for index := 0; index < schedule.BatchSize; index++ {
@@ -136,7 +136,7 @@ func TestFullEpochRefusesRatherThanGrowing(t *testing.T) {
 func TestSealRefusesBeforeTheScheduledBoundary(t *testing.T) {
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()
-	airlock, opens, closes := openAirlock(t, schedule, committee.PublicKey)
+	airlock, opens, closes := openAirlock(t, schedule, committee)
 
 	for index := 0; index < schedule.BatchSize; index++ {
 		id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
@@ -144,16 +144,16 @@ func TestSealRefusesBeforeTheScheduledBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := airlock.Seal(opens.Add(time.Second)); !errors.Is(err, ErrWindowOpen) {
+	if _, err := airlock.Seal(opens.Add(time.Second)); !errors.Is(err, ErrWindowOpen) {
 		t.Errorf("a full batch sealed early with %v", err)
 	}
-	if _, _, err := airlock.Seal(closes.Add(-time.Nanosecond)); !errors.Is(err, ErrWindowOpen) {
+	if _, err := airlock.Seal(closes.Add(-time.Nanosecond)); !errors.Is(err, ErrWindowOpen) {
 		t.Errorf("sealed one instant before the boundary with %v", err)
 	}
-	if _, _, err := airlock.Seal(closes); err != nil {
+	if _, err := airlock.Seal(closes); err != nil {
 		t.Errorf("refused to seal at the boundary: %v", err)
 	}
-	if _, _, err := airlock.Seal(closes); !errors.Is(err, ErrSealed) {
+	if _, err := airlock.Seal(closes); !errors.Is(err, ErrSealed) {
 		t.Errorf("sealed twice with %v", err)
 	}
 	id, payload, _ := realDeposit(t, committee.PublicKey, 42)
@@ -171,26 +171,26 @@ func TestSealedBatchSizeAndShapeDoNotDependOnDepositCount(t *testing.T) {
 
 	var encodings [][]byte
 	for _, count := range []int{0, 1, schedule.BatchSize - 1, schedule.BatchSize} {
-		airlock, opens, closes := openAirlock(t, schedule, committee.PublicKey)
+		airlock, opens, closes := openAirlock(t, schedule, committee)
 		for index := 0; index < count; index++ {
 			id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
 			if err := airlock.Deposit(id, payload, opens.Add(time.Minute)); err != nil {
 				t.Fatal(err)
 			}
 		}
-		batch, columns, err := airlock.Seal(closes)
+		sealed, err := airlock.Seal(closes)
 		if err != nil {
 			t.Fatalf("%d deposits: seal: %v", count, err)
 		}
-		if batch.Len() != schedule.BatchSize {
+		if sealed.Batch().Len() != schedule.BatchSize {
 			t.Errorf("%d deposits produced a batch of %d, want %d",
-				count, batch.Len(), schedule.BatchSize)
+				count, sealed.Batch().Len(), schedule.BatchSize)
 		}
-		if len(columns) != schedule.BatchSize {
-			t.Errorf("%d deposits produced %d wire columns", count, len(columns))
+		if len(sealed.Columns) != schedule.BatchSize {
+			t.Errorf("%d deposits produced %d wire sealed.Columns", count, len(sealed.Columns))
 		}
-		flat := make([]byte, 0, len(columns)*DepositSize)
-		for _, column := range columns {
+		flat := make([]byte, 0, len(sealed.Columns)*DepositSize)
+		for _, column := range sealed.Columns {
 			flat = append(flat, column[:DepositSize]...)
 		}
 		encodings = append(encodings, flat)
@@ -200,13 +200,13 @@ func TestSealedBatchSizeAndShapeDoNotDependOnDepositCount(t *testing.T) {
 		// itself.
 		partials := make([]*mix.PartialDecryption, 0, len(secrets))
 		for _, secret := range secrets {
-			partial, err := mix.CreatePartialDecryption(committee, secret, batch)
+			partial, err := mix.CreatePartialDecryption(committee, secret, sealed.Batch())
 			if err != nil {
 				t.Fatal(err)
 			}
 			partials = append(partials, partial)
 		}
-		plaintexts, err := mix.ThresholdDecrypt(committee, batch, partials)
+		plaintexts, err := mix.ThresholdDecrypt(committee, sealed.Batch(), partials)
 		if err != nil {
 			t.Fatalf("%d deposits: decrypt sealed batch: %v", count, err)
 		}
@@ -241,17 +241,17 @@ func TestSealBoundaryIsIdenticalAtEveryOccupancy(t *testing.T) {
 	schedule.BatchSize = 4
 
 	for count := 0; count <= schedule.BatchSize; count++ {
-		airlock, opens, closes := openAirlock(t, schedule, committee.PublicKey)
+		airlock, opens, closes := openAirlock(t, schedule, committee)
 		for index := 0; index < count; index++ {
 			id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
 			if err := airlock.Deposit(id, payload, opens.Add(time.Second)); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if _, _, err := airlock.Seal(closes.Add(-time.Nanosecond)); !errors.Is(err, ErrWindowOpen) {
+		if _, err := airlock.Seal(closes.Add(-time.Nanosecond)); !errors.Is(err, ErrWindowOpen) {
 			t.Errorf("%d deposits: sealed before the boundary with %v", count, err)
 		}
-		if _, _, err := airlock.Seal(closes); err != nil {
+		if _, err := airlock.Seal(closes); err != nil {
 			t.Errorf("%d deposits: refused to seal at the boundary: %v", count, err)
 		}
 	}
@@ -264,7 +264,7 @@ func TestSealBoundaryIsIdenticalAtEveryOccupancy(t *testing.T) {
 func TestRestartRederivesTheSameWindowAndAcceptsTheResend(t *testing.T) {
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()
-	before, opens, closes := openAirlock(t, schedule, committee.PublicKey)
+	before, opens, closes := openAirlock(t, schedule, committee)
 	inside := opens.Add(time.Minute)
 
 	id, payload, _ := realDeposit(t, committee.PublicKey, 1)
@@ -276,7 +276,7 @@ func TestRestartRederivesTheSameWindowAndAcceptsTheResend(t *testing.T) {
 	// queued work is the intended trade -- the alternative is an operator
 	// that persists publication ciphertexts, and a recovery step whose
 	// existence depends on how much was queued.
-	after, restartOpens, restartCloses := openAirlock(t, schedule, committee.PublicKey)
+	after, restartOpens, restartCloses := openAirlock(t, schedule, committee)
 	if !restartOpens.Equal(opens) || !restartCloses.Equal(closes) {
 		t.Errorf("restart moved the window from [%s, %s) to [%s, %s)",
 			opens, closes, restartOpens, restartCloses)
@@ -319,18 +319,18 @@ func TestSealedPositionDoesNotEncodeArrivalOrder(t *testing.T) {
 	const trials = 8
 	positions := map[int]int{}
 	for trial := 0; trial < trials; trial++ {
-		airlock, opens, closes := openAirlock(t, schedule, committee.PublicKey)
+		airlock, opens, closes := openAirlock(t, schedule, committee)
 		for step, held := range deposits {
 			at := opens.Add(time.Duration(step+1) * time.Second)
 			if err := airlock.Deposit(held.id, held.payload, at); err != nil {
 				t.Fatal(err)
 			}
 		}
-		batch, _, err := airlock.Seal(closes)
+		sealed, err := airlock.Seal(closes)
 		if err != nil {
 			t.Fatal(err)
 		}
-		plaintexts := decryptAll(t, committee, secrets, batch)
+		plaintexts := decryptAll(t, committee, secrets, sealed.Batch())
 		found := -1
 		for index, plaintext := range plaintexts {
 			if plaintext[0] == 1 {
@@ -377,7 +377,7 @@ func TestShuffleColumnsPermutesEveryPosition(t *testing.T) {
 	// shuffle that cannot is not uniform.
 	for position, reached := range landed {
 		if len(reached) != size {
-			t.Errorf("position %d was only ever occupied by %d of %d columns",
+			t.Errorf("position %d was only ever occupied by %d of %d sealed.Columns",
 				position, len(reached), size)
 		}
 	}

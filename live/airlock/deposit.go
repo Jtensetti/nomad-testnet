@@ -3,6 +3,7 @@ package airlock
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"math/big"
@@ -33,6 +34,8 @@ var (
 	ErrDepositConflict = errors.New("deposit ID already holds a different payload")
 	// ErrSealed reports an operation on an already-sealed epoch.
 	ErrSealed = errors.New("release epoch is already sealed")
+	// ErrDepositMalformed reports a payload that is not a mix batch column.
+	ErrDepositMalformed = errors.New("deposit is not a well-formed committee ciphertext")
 )
 
 // Airlock accumulates one release epoch's deposits at one entry operator.
@@ -49,22 +52,52 @@ type Airlock struct {
 	opens     time.Time
 	closes    time.Time
 	deposits  map[[32]byte][DepositSize]byte
+	cover     []mix.WireCell
 	sealed    bool
 }
 
 // New opens the accumulator for one release epoch.
-func New(schedule Schedule, committee mix.PublicKey, epoch uint64) (*Airlock, error) {
+//
+// It takes the certified committee rather than a bare public key, so the key
+// that encrypts cover is by construction the key the shuffle chain and the
+// threshold decryption use. Taking a bare key meant an unvalidated one was
+// accepted: an all-zero key decodes to a point of order 4, which turns cover
+// into a four-way-masked plaintext that anybody recovers with no shares at
+// all, and any mismatch between the operator's configuration and the
+// certified committee was discovered only at release, after the window had
+// closed and every deposit was unrecoverable.
+//
+// All BatchSize cover columns are generated here, before the window opens.
+// Generating them in Seal made its runtime linear in the number of *empty*
+// slots -- 2.6 seconds at zero real deposits against 0.014 at a full batch --
+// so the release instant read out publication volume, and a concurrent
+// depositor could read the same signal by timing how long its own call
+// blocked on the lock. The cost is now paid once, at a public time, and is
+// identical whatever anybody publishes.
+func New(schedule Schedule, committee mix.ThresholdCommittee, epoch uint64) (*Airlock, error) {
 	if err := schedule.Validate(); err != nil {
 		return nil, err
+	}
+	if err := mix.ValidateThresholdCommittee(committee); err != nil {
+		return nil, fmt.Errorf("airlock committee is not certified: %w", err)
 	}
 	opens, closes, err := schedule.DepositWindow(epoch)
 	if err != nil {
 		return nil, err
 	}
+	cover := make([]mix.WireCell, 0, schedule.BatchSize)
+	for index := 0; index < schedule.BatchSize; index++ {
+		column, err := coverColumn(committee.PublicKey)
+		if err != nil {
+			return nil, err
+		}
+		cover = append(cover, column)
+	}
 	return &Airlock{
-		schedule: schedule, committee: committee, epoch: epoch,
+		schedule: schedule, committee: committee.PublicKey, epoch: epoch,
 		opens: opens, closes: closes,
 		deposits: make(map[[32]byte][DepositSize]byte, schedule.BatchSize),
+		cover:    cover,
 	}, nil
 }
 
@@ -92,7 +125,10 @@ func (airlock *Airlock) Deposit(id [32]byte, payload [DepositSize]byte, now time
 			airlock.opens.UTC().Format(time.RFC3339), airlock.closes.UTC().Format(time.RFC3339))
 	}
 	if existing, held := airlock.deposits[id]; held {
-		if !bytes.Equal(existing[:], payload[:]) {
+		// Constant time: this is the one comparison in the package whose
+		// operands are private publication material, and a byte-at-a-time
+		// early exit leaks a prefix of it through timing.
+		if subtle.ConstantTimeCompare(existing[:], payload[:]) != 1 {
 			return ErrDepositConflict
 		}
 		return nil
@@ -105,8 +141,28 @@ func (airlock *Airlock) Deposit(id [32]byte, payload [DepositSize]byte, now time
 		// visible on the wire.
 		return ErrEpochFull
 	}
+	// A payload whose points do not decode is accepted here and kills Seal
+	// for the whole epoch, deterministically and forever: one malformed
+	// deposit censors every other publisher, and Seal failing is itself an
+	// externally observable event caused entirely by deposit content. Roughly
+	// half of all random 32-byte strings are not valid curve points, so this
+	// costs an attacker nothing to produce. It is refused before it takes a
+	// slot.
+	if err := airlock.validatePayload(payload); err != nil {
+		return fmt.Errorf("%w: %v", ErrDepositMalformed, err)
+	}
 	airlock.deposits[id] = payload
 	return nil
+}
+
+// validatePayload checks that a deposit decodes as one mix batch column of
+// usable points. It is stricter than "does it parse": a column of identity or
+// small-order points parses fine and is exactly what an attacker submits to
+// occupy a slot with something that cannot decrypt.
+func (airlock *Airlock) validatePayload(payload [DepositSize]byte) error {
+	var column mix.WireCell
+	copy(column[:DepositSize], payload[:])
+	return mix.ValidateCiphertextColumn(column)
 }
 
 // Pending is the number of real deposits held. It is operator-local
@@ -132,15 +188,27 @@ func (airlock *Airlock) Sealed() bool {
 // window still waits for the boundary, because closing early is a signal that
 // the batch was full, and a batch being full is a fact about how much
 // publishing happened.
-func (airlock *Airlock) Seal(now time.Time) (*mix.Batch, []mix.WireCell, error) {
+func (airlock *Airlock) Seal(now time.Time) (Sealed, error) {
 	airlock.mutex.Lock()
 	defer airlock.mutex.Unlock()
 	if airlock.sealed {
-		return nil, nil, ErrSealed
+		return Sealed{}, ErrSealed
 	}
 	if now.Before(airlock.closes) {
-		return nil, nil, fmt.Errorf("%w: epoch %d closes at %s",
+		return Sealed{}, fmt.Errorf("%w: epoch %d closes at %s",
 			ErrWindowOpen, airlock.epoch, airlock.closes.UTC().Format(time.RFC3339))
+	}
+	// Sealing is also bounded above. Without an upper bound any instant at or
+	// after the cutoff sealed, so a late or replayed release was invisible
+	// here; the window between the cutoff and the release exists precisely
+	// because the chain and the decryption have to fit inside it.
+	release, err := airlock.schedule.ReleaseAt(airlock.epoch)
+	if err != nil {
+		return Sealed{}, err
+	}
+	if !now.Before(release) {
+		return Sealed{}, fmt.Errorf("%w: epoch %d released at %s",
+			ErrWindowClosed, airlock.epoch, release.UTC().Format(time.RFC3339))
 	}
 
 	// Ordered by deposit ID rather than by arrival, so the entry operator's
@@ -161,16 +229,13 @@ func (airlock *Airlock) Seal(now time.Time) (*mix.Batch, []mix.WireCell, error) 
 		columns = append(columns, column)
 	}
 
-	// Cover fills the rest. It is a real committee encryption of the reserved
-	// empty fragment on the identical path, not a random filler: a filler
-	// that is not a valid ciphertext would fail the shuffle proofs, and one
-	// that is distinguishable from a real deposit would publish the count.
+	// Cover fills the rest, from the set generated before the window opened.
+	// It is a real committee encryption of the reserved empty fragment, not a
+	// random filler: a filler that is not a valid ciphertext would fail the
+	// shuffle proofs, and one distinguishable from a real deposit would
+	// publish the count.
 	for len(columns) < airlock.schedule.BatchSize {
-		cover, err := coverColumn(airlock.committee)
-		if err != nil {
-			return nil, nil, err
-		}
-		columns = append(columns, cover)
+		columns = append(columns, airlock.cover[len(columns)])
 	}
 
 	// Cover is placed by a fresh uniform shuffle rather than appended at the
@@ -179,15 +244,44 @@ func (airlock *Airlock) Seal(now time.Time) (*mix.Batch, []mix.WireCell, error) 
 	// permutes the batch again, and the sealed order is seen only by the
 	// entry operator, which already knows its own deposits.
 	if err := shuffleColumns(columns); err != nil {
-		return nil, nil, err
+		return Sealed{}, err
 	}
 
 	batch, err := mix.ParseWire(columns)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sealed batch is not a valid mix batch: %w", err)
+		// Deposits are validated on arrival, so this is unreachable for
+		// deposit content; it stays as a hard failure rather than a warning.
+		return Sealed{}, fmt.Errorf("sealed batch is not a valid mix batch: %w", err)
+	}
+
+	// Re-derive the wire form from the parsed batch so every column, real and
+	// cover alike, gets its padding from one code path.
+	//
+	// A mix.WireCell is 1200 bytes and a deposit is 1152. Copying a deposit
+	// into a zero-valued cell left bytes 1152..1200 zero, while cover came
+	// through MarshalWire, which fills them from crypto/rand. That was a
+	// one-line classifier: it recovered not just the count of real deposits
+	// but exactly which columns were real, with no decryption at all, which
+	// is the opposite of what the fixed batch size exists to achieve.
+	columns, err = batch.MarshalWire()
+	if err != nil {
+		return Sealed{}, err
+	}
+
+	// The digest commits the chain to this epoch's batch. Without it a
+	// verifier has nothing that says which release epoch a chain belongs to,
+	// and a whole chain replays from one epoch into another.
+	digest, err := batch.Digest()
+	if err != nil {
+		return Sealed{}, err
 	}
 	airlock.sealed = true
-	return batch, columns, nil
+	return Sealed{
+		ReleaseEpoch: airlock.epoch,
+		Digest:       digest,
+		Columns:      columns,
+		batch:        batch,
+	}, nil
 }
 
 // EmptyFragment is the reserved plaintext that carries no publication. It is
