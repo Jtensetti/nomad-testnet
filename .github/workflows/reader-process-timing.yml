@@ -41,8 +41,23 @@ jobs:
             >"$evidence/go-test.log" 2>&1
           test_status=$?
 
+          # macOS hosted runners have occasionally left the sudo/tcpdump wrapper
+          # alive after SIGINT. Bound teardown so a completed 38-second privacy
+          # measurement cannot consume the remaining job timeout.
           sudo kill -INT "$tcpdump_pid" >/dev/null 2>&1 || true
+          for _ in $(seq 1 30); do
+            kill -0 "$tcpdump_pid" >/dev/null 2>&1 || break
+            sleep 0.1
+          done
+          if kill -0 "$tcpdump_pid" >/dev/null 2>&1; then
+            sudo kill -TERM "$tcpdump_pid" >/dev/null 2>&1 || true
+          fi
+          for _ in $(seq 1 20); do
+            kill -0 "$tcpdump_pid" >/dev/null 2>&1 || break
+            sleep 0.1
+          done
           wait "$tcpdump_pid" >/dev/null 2>&1 || true
+
           if test -s "$evidence/reader-loopback.pcap"; then
             tcpdump -tt -n -r "$evidence/reader-loopback.pcap" \
               >"$evidence/reader-loopback.txt" 2>"$evidence/pcap-read.log" || true
