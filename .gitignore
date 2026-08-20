@@ -3,3 +3,18 @@
 coverage.txt
 __pycache__/
 runtime/
+
+# Terraform working state is runtime material, never source.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+*.auto.tfvars
+.terraform.tfstate.lock.info
+
+# Local credential files must never be committed.
+.env
+.env.*
+!.env.example
