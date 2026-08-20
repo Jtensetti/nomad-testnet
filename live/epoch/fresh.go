@@ -1,8 +1,8 @@
 package epoch
 
 import (
+	"bytes"
 	"crypto/ed25519"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -120,7 +120,7 @@ func EraseEpochMaterialDurable(networkID, operatorID string, retired Verified, p
 	if err != nil {
 		return ErasureStatement{}, errors.New("retired epoch contains an invalid operator identity key")
 	}
-	if !ed25519.PublicKey(expected).Equal(public) {
+	if !bytes.Equal(expected, public) {
 		return ErasureStatement{}, errors.New("operator private key does not match the retired epoch identity")
 	}
 
@@ -177,8 +177,3 @@ func PathWithin(root, candidate string) (bool, error) {
 	}
 	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))), nil
 }
-
-// Keep base64 referenced here deliberately: this compile-time assertion makes
-// accidental changes to the public-key representation fail close during this
-// hardening layer's review rather than silently changing comparison semantics.
-var _ = base64.StdEncoding
