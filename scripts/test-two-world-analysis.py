@@ -52,6 +52,24 @@ check("parser reads the VLAN-tagged form",
       parsed_destinations[3] == "10.0.0.3.4200" and parsed_sources[3] == "10.0.0.2.4200")
 check("parser reads sizes", parsed_sizes == [1200] * 4)
 
+# Captures reach the rule two ways: as pcap files, and as text already in
+# tcpdump's format, which is what the in-process wire campaign writes. Running
+# tcpdump over the second kind fails, and that failure used to surface as a
+# rejection -- the rule reporting that two worlds differed when it had never
+# read them. The format is decided from the file's own first four bytes.
+with tempfile.TemporaryDirectory() as workspace:
+    text_path = pathlib.Path(workspace) / "already-rendered.txt"
+    text_path.write_text(CAPTURE)
+    check("a rendered text capture is not mistaken for a pcap",
+          not capture.is_pcap(str(text_path)))
+    times, sizes, _, _ = capture.read_capture(str(text_path))
+    check("a rendered text capture is read without tcpdump",
+          len(times) == 4 and sizes == [1200] * 4)
+
+    pcap_path = pathlib.Path(workspace) / "binary.pcap"
+    pcap_path.write_bytes(b"\xd4\xc3\xb2\xa1" + b"\x00" * 32)
+    check("a libpcap file is recognised as binary", capture.is_pcap(str(pcap_path)))
+
 # An unrecognised line must stop the run. Silently skipping it would drop
 # packets, and a dropped packet makes two worlds look more alike, not less.
 try:
@@ -186,6 +204,10 @@ with tempfile.TemporaryDirectory() as workspace:
     check("end to end: matching worlds exit 0", run("a", "b") == 0)
     check("end to end: a jittered world exits non-zero", run("a", "leaky") == 1)
     check("end to end: an off-size cell exits non-zero", run("a", "oversized") == 1)
+
+    # A capture the rule cannot read must not be reported as a rejection.
+    (root / "unreadable").write_text("this is not a capture at all\n")
+    check("end to end: an unreadable capture exits 2, not 1", run("a", "unreadable") == 2)
 
 if failures:
     print(f"\n{len(failures)} self-test(s) failed", file=sys.stderr)

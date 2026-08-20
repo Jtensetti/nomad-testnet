@@ -6,9 +6,11 @@ are mirrored here as constants. They are deliberately not command-line
 options: a threshold that can be passed in at analysis time is a threshold
 that can be chosen after seeing the answer.
 
-Exit status is 0 only when every registered test passes. Any failure, and
-any inability to evaluate a test, is a non-zero exit: a test that could not
-run has not passed.
+Exit status: 0 when every registered test passes, 1 when the rule ran and
+found a difference, 2 when the rule could not run at all. Those last two are
+kept apart deliberately -- a crash reported as a rejection is a crash
+recorded as a verdict, and a caller cannot tell the difference from the exit
+status alone.
 """
 
 import collections
@@ -174,8 +176,11 @@ def main():
         times_a, sizes_a, destinations_a, _ = read_capture(path_a)
         times_b, sizes_b, destinations_b, _ = read_capture(path_b)
     except CaptureError as error:
+        # Exit 2, not 1. A rejection means the rule ran and found a
+        # difference; this means the rule never ran, and reporting the two the
+        # same way is how a crash gets recorded as a verdict.
         print(f"capture could not be read in full: {error}", file=sys.stderr)
-        return 1
+        return 2
 
     failures = []
     report = {"preregistration_version": PREREGISTRATION_VERSION,

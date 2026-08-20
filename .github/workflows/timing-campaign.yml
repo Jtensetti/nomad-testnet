@@ -1,0 +1,79 @@
+name: timing campaign
+
+# The wall-clock timing campaigns: the two-world wire campaign, the
+# hostile-peer flood, and the airlock's sealing-duration measurements.
+#
+# They are not part of the per-push job. They take minutes under -race, and
+# more importantly they are statistical comparisons whose control spread is a
+# property of the host, so a busy shared runner makes them noisy in a way that
+# says nothing about the code. Running them on their own gives them a machine
+# to themselves and keeps the per-push job to checks that are deterministic.
+#
+# This is not a way of hiding a failing test. The campaign is currently
+# reporting a real finding -- private activity perturbs the inter-arrival
+# distribution -- and that finding is recorded in the protocol evidence index
+# whatever this workflow does.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Once a day, so a regression surfaces without waiting for someone to ask.
+    - cron: '17 4 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  campaign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NOMAD_TIMING_CAMPAIGN: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.25.x'}
+
+      # Without -race: these tests measure wall-clock timing, and the race
+      # detector's own overhead is exactly the kind of ambient cost that
+      # widens the control spread until nothing is decidable. Race coverage
+      # for these packages comes from the per-push job.
+      - name: Wire two-world campaign and hostile-peer flood
+        run: go test -count=1 -v -run 'TestWire|TestFlood|TestHostile' ./live/node/
+
+      - name: Airlock timing and permutation-uniformity measurements
+        run: |
+          go test -count=1 -v -timeout 30m \
+            -run 'TestSealDuration|TestConcurrentDeposit|TestPermutationIsUniform' \
+            ./live/airlock/
+
+      - name: Apply the preregistered rule to the campaign captures
+        if: always()
+        run: |
+          directory=runtime/evidence/wire-campaign
+          test -d "$directory" || { echo "no captures were produced"; exit 0; }
+          status=0
+          for stressor in baseline cpu-starvation disk-pressure; do
+            control="$directory/$stressor-control-a.txt"
+            test -f "$control" || continue
+            echo "== $stressor: idle vs idle (control) =="
+            python3 scripts/two-world-analysis.py "$control" \
+              "$directory/$stressor-control-b.txt" 1200 20 || status=$?
+            echo "== $stressor: idle vs active =="
+            python3 scripts/two-world-analysis.py "$control" \
+              "$directory/$stressor-active.txt" 1200 20 || status=$?
+            # Exit 2 means the rule could not run at all, which is a broken
+            # step rather than a verdict.
+            if [ "$status" -eq 2 ]; then
+              echo "the analysis could not read these captures"
+              exit 1
+            fi
+          done
+
+      - name: Upload campaign captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timing-campaign-captures
+          path: runtime/evidence/wire-campaign/
+          if-no-files-found: warn
