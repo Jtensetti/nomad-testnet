@@ -1,0 +1,80 @@
+name: reader-process-timing
+
+on:
+  pull_request:
+    paths:
+      - 'testnet/reader_process_boundary_test.go'
+      - '.github/workflows/reader-process-timing.yml'
+      - 'cmd/nomad-partial-fetch/**'
+      - 'live/partialfetch/**'
+      - 'live/fetchplan/**'
+      - 'live/topology/**'
+  push:
+    branches: [agent/reader-process-timing]
+    paths:
+      - 'testnet/reader_process_boundary_test.go'
+      - '.github/workflows/reader-process-timing.yml'
+      - 'cmd/nomad-partial-fetch/**'
+      - 'live/partialfetch/**'
+      - 'live/fetchplan/**'
+      - 'live/topology/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reader-boundary:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.x'
+          check-latest: false
+
+      - name: Build the real public fetch process
+        run: |
+          set -euo pipefail
+          go build -trimpath -o "$RUNNER_TEMP/nomad-partial-fetch" ./cmd/nomad-partial-fetch
+          file "$RUNNER_TEMP/nomad-partial-fetch"
+
+      - name: Run separate-process timing gate with host packet capture
+        env:
+          NOMAD_PARTIAL_FETCH_BIN: ${{ runner.temp }}/nomad-partial-fetch
+        run: |
+          set -uo pipefail
+          evidence=runtime/evidence/reader-process-boundary
+          mkdir -p "$evidence"
+
+          # Capture outside the fetcher and private-workload processes. The
+          # fixed loopback ports are test-only public endpoints from the signed
+          # fixture. tcpdump observes the host network boundary, not Go timing.
+          sudo tcpdump -i lo0 -n -U -w "$evidence/reader-loopback.pcap" \
+            '(tcp port 49301 or tcp port 49302 or tcp port 49303)' \
+            >"$evidence/tcpdump.log" 2>&1 &
+          tcpdump_pid=$!
+          sleep 1
+
+          go test -count=1 -run '^TestReaderFetchProcessTimingBoundary$' ./testnet -v \
+            >"$evidence/go-test.log" 2>&1
+          test_status=$?
+
+          sudo kill -INT "$tcpdump_pid" >/dev/null 2>&1 || true
+          wait "$tcpdump_pid" >/dev/null 2>&1 || true
+          if test -s "$evidence/reader-loopback.pcap"; then
+            tcpdump -tt -n -r "$evidence/reader-loopback.pcap" \
+              >"$evidence/reader-loopback.txt" 2>"$evidence/pcap-read.log" || true
+          fi
+          cat "$evidence/go-test.log"
+          exit "$test_status"
+
+      - name: Upload reader process evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader-process-boundary-${{ github.run_id }}
+          path: runtime/evidence/reader-process-boundary/
+          if-no-files-found: error
+          retention-days: 90
