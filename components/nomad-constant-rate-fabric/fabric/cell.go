@@ -31,38 +31,51 @@ var ErrNoWork = errors.New("no protocol work available")
 
 // QueueSource is filled by public replication and cache-maintenance policy.
 // It has no query or reader-state API.
+//
+// The queue is a preallocated ring. This is security-relevant rather than a
+// throughput micro-optimization: the scheduler calls NextCell on its emission
+// path, so producer activity must not make that call perform work proportional
+// to queue depth. The previous slice implementation shifted every remaining
+// 1200-byte cell on each dequeue while holding the producer mutex; a busy
+// producer could therefore measurably change scheduler timing.
 type QueueSource struct {
-	mu       sync.Mutex
-	capacity int
-	cells    []Cell
+	mu    sync.Mutex
+	cells []Cell
+	head  int
+	size  int
 }
 
 func NewQueueSource(capacity int) (*QueueSource, error) {
 	if capacity < 1 {
 		return nil, errors.New("queue capacity must be positive")
 	}
-	return &QueueSource{capacity: capacity}, nil
+	return &QueueSource{cells: make([]Cell, capacity)}, nil
 }
 
 func (q *QueueSource) Enqueue(cell Cell) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if len(q.cells) == q.capacity {
+	if q.size == len(q.cells) {
 		return false
 	}
-	q.cells = append(q.cells, cell)
+	tail := (q.head + q.size) % len(q.cells)
+	q.cells[tail] = cell
+	q.size++
 	return true
 }
 
 func (q *QueueSource) NextCell(context.Context) (Cell, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if len(q.cells) == 0 {
+	if q.size == 0 {
 		return Cell{}, ErrNoWork
 	}
-	cell := q.cells[0]
-	copy(q.cells, q.cells[1:])
-	q.cells = q.cells[:len(q.cells)-1]
+	cell := q.cells[q.head]
+	q.head++
+	if q.head == len(q.cells) {
+		q.head = 0
+	}
+	q.size--
 	return cell, nil
 }
 
