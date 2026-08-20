@@ -502,6 +502,22 @@ func (chain *Chain) StateOf(epochNumber uint64, now time.Time) (State, error) {
 	return StateRetired, fmt.Errorf("epoch %d is not stored", epochNumber)
 }
 
+// ServesEpoch reports whether threshold work for an epoch may still be
+// performed. It fails closed: a halted chain, an unknown epoch, or any
+// state other than ACTIVE refuses the work. This is what stops a retired
+// epoch's share from being used even though it remains cryptographically
+// valid for that epoch's ciphertext.
+func (chain *Chain) ServesEpoch(epochNumber uint64, now time.Time) error {
+	state, err := chain.StateOf(epochNumber, now)
+	if err != nil {
+		return err
+	}
+	if state != StateActive {
+		return fmt.Errorf("epoch %d is %s, not ACTIVE", epochNumber, state)
+	}
+	return nil
+}
+
 // HighestRetired returns the highest epoch number whose chain-level state is
 // RETIRED at the given instant, or zero.
 func (chain *Chain) HighestRetired(now time.Time) uint64 {

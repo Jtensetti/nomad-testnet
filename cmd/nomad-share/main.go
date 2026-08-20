@@ -63,9 +63,13 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Threshold work is refused outside the epoch's signed validity window,
+	// so a retired epoch's share stops being usable at a public boundary
+	// rather than remaining usable for as long as the file exists.
 	service := share.Service{
 		Cache: cache, Descriptor: descriptor, Secret: secret, OutputDir: *outputPath,
 		Interval: *interval, ListenAddress: *listen,
+		Guard: share.TopologyWindowGuard{Network: network},
 	}
 	if err := service.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err

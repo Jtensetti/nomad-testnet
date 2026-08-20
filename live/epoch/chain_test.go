@@ -549,3 +549,36 @@ func TestConcurrentAppendAndReadsAreRaceFree(t *testing.T) {
 		t.Fatal("concurrent appends of the same descriptors must not look like equivocation")
 	}
 }
+
+// TestServesEpochRefusesEverythingButActive is the chain-backed retirement
+// guard used by the share service: a retired epoch's share stays
+// cryptographically valid for its own ciphertext, so refusal has to come
+// from policy, and that policy must fail closed.
+func TestServesEpochRefusesEverythingButActive(t *testing.T) {
+	f, genesisEncoded, genesis, successorEncoded, successor := buildTwoEpochChain(t)
+	chain, err := OpenChain(t.TempDir(), "nomad-test", f.AuthorityPublic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chain.Append(genesisEncoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chain.Append(successorEncoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.ServesEpoch(genesis.Epoch, genesis.ActivateAt); err != nil {
+		t.Fatalf("an active epoch must be served: %v", err)
+	}
+	if err := chain.ServesEpoch(genesis.Epoch, genesis.ActivateAt.Add(-time.Second)); err == nil {
+		t.Fatal("a READY epoch must not be served")
+	}
+	if err := chain.ServesEpoch(genesis.Epoch, successor.ActivateAt); err == nil {
+		t.Fatal("a retired epoch must not be served")
+	}
+	if err := chain.ServesEpoch(9999, genesis.ActivateAt); err == nil {
+		t.Fatal("an unknown epoch must not be served")
+	}
+	if err := chain.ServesEpoch(successor.Epoch, successor.RetireAt); err == nil {
+		t.Fatal("an epoch past its retirement must not be served")
+	}
+}

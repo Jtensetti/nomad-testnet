@@ -20,6 +20,14 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/rawcache"
 )
 
+// EpochGuard reports whether an epoch may still be served. The share
+// service consults it before every partial decryption so that a retired
+// epoch's share cannot be used even though it remains cryptographically
+// valid for that epoch's ciphertext. live/epoch.Chain satisfies this.
+type EpochGuard interface {
+	ServesEpoch(epochNumber uint64, now time.Time) error
+}
+
 type Service struct {
 	Cache         *rawcache.Store
 	Descriptor    batch.VerifiedDescriptor
@@ -27,6 +35,18 @@ type Service struct {
 	OutputDir     string
 	Interval      time.Duration
 	ListenAddress string
+	// Guard is required. A nil guard is refused rather than treated as
+	// "always allowed": retirement must fail closed.
+	Guard EpochGuard
+	// Now supplies the clock, injectable for tests. Defaults to time.Now.
+	Now func() time.Time
+}
+
+func (service Service) now() time.Time {
+	if service.Now != nil {
+		return service.Now()
+	}
+	return time.Now().UTC()
 }
 
 func (service Service) Run(ctx context.Context) error {
@@ -35,6 +55,9 @@ func (service Service) Run(ctx context.Context) error {
 	}
 	if service.Cache == nil || service.OutputDir == "" || service.Interval <= 0 || service.ListenAddress == "" {
 		return errors.New("share service requires cache, output directory, fixed interval and listen address")
+	}
+	if service.Guard == nil {
+		return errors.New("share service requires an epoch guard")
 	}
 	if err := ensureOutputDirectory(service.OutputDir); err != nil {
 		return err
@@ -101,6 +124,12 @@ func (service Service) handler() http.Handler {
 func (service Service) ProcessOnce() (bool, error) {
 	if service.Cache == nil || service.OutputDir == "" {
 		return false, errors.New("share service requires cache and output directory")
+	}
+	if service.Guard == nil {
+		return false, errors.New("share service requires an epoch guard")
+	}
+	if err := service.Guard.ServesEpoch(service.Descriptor.Committee.Epoch, service.now()); err != nil {
+		return false, fmt.Errorf("refusing threshold work for epoch %d: %w", service.Descriptor.Committee.Epoch, err)
 	}
 	if err := ensureOutputDirectory(service.OutputDir); err != nil {
 		return false, err
