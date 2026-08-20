@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
@@ -127,14 +129,16 @@ func inspect(arguments []string) error {
 	})
 }
 
-// erase destroys this operator's private material for a retired epoch and
-// emits the signed statement that records what was destroyed, including the
-// standard limitations text. It refuses to run against an epoch that is
-// still serving.
+// erase destroys this operator's private material for an epoch that the
+// persisted verified chain currently classifies as RETIRED. Looking the epoch
+// up through the chain is essential: a non-genesis descriptor cannot be
+// verified without its predecessor, and an emergency successor can retire an
+// epoch before that descriptor's own scheduled RetireAt.
 func erase(arguments []string) error {
 	flags := flag.NewFlagSet("erase", flag.ContinueOnError)
 	secretPath := flags.String("secret", "", "private operator-secret path")
-	descriptorPath := flags.String("epoch-descriptor", "", "retired epoch descriptor path")
+	chainPath := flags.String("chain", "", "persisted verified epoch-chain directory")
+	epochNumber := flags.Uint64("epoch", 0, "retired epoch number")
 	authorityPath := flags.String("authority-key", "", "pinned public authority-key path")
 	networkID := flags.String("network", "", "network identifier")
 	filesystem := flags.String("filesystem", "", "filesystem type of the erased paths, recorded in the statement")
@@ -142,8 +146,8 @@ func erase(arguments []string) error {
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	if *secretPath == "" || *descriptorPath == "" || *authorityPath == "" || *networkID == "" || *filesystem == "" || *outputPath == "" {
-		return errors.New("--secret, --epoch-descriptor, --authority-key, --network, --filesystem and --out are required")
+	if *secretPath == "" || *chainPath == "" || *epochNumber == 0 || *authorityPath == "" || *networkID == "" || *filesystem == "" || *outputPath == "" {
+		return errors.New("--secret, --chain, --epoch, --authority-key, --network, --filesystem and --out are required")
 	}
 	if flags.NArg() == 0 {
 		return errors.New("at least one path to erase is required")
@@ -152,24 +156,33 @@ func erase(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	encodedDescriptor, err := readBoundedRegular(*descriptorPath)
+	chain, err := epoch.OpenChain(*chainPath, *networkID, authority, nil)
+	if err != nil {
+		return fmt.Errorf("open epoch chain: %w", err)
+	}
+	retired, exists, err := chain.FreshEpoch(*epochNumber)
 	if err != nil {
 		return err
 	}
-	retired, err := epoch.Verify(encodedDescriptor, authority, nil, nil)
-	if err != nil {
-		return err
+	if !exists {
+		return fmt.Errorf("epoch %d is not present in the verified chain", *epochNumber)
 	}
 	now := time.Now().UTC()
-	if now.Before(retired.RetireAt) {
-		return fmt.Errorf("refusing to erase material for epoch %d before its retirement boundary %s",
-			retired.Epoch, retired.RetireAt.Format(time.RFC3339))
+	state, err := chain.FreshStateOf(*epochNumber, now)
+	if err != nil {
+		return err
+	}
+	if state != epoch.StateRetired {
+		return fmt.Errorf("refusing to erase material for epoch %d while state is %s", *epochNumber, state)
 	}
 	keys, err := topology.LoadPrivateKeys(*secretPath)
 	if err != nil {
 		return err
 	}
-	statement, err := epoch.EraseEpochMaterial(*networkID, keys.OperatorID, retired, flags.Args(), *filesystem, keys.Identity, now)
+	if err := validateErasePaths(*chainPath, *secretPath, *authorityPath, *outputPath, flags.Args()); err != nil {
+		return err
+	}
+	statement, err := epoch.EraseEpochMaterialDurable(*networkID, keys.OperatorID, retired, flags.Args(), *filesystem, keys.Identity, now)
 	if err != nil {
 		return err
 	}
@@ -185,6 +198,41 @@ func erase(arguments []string) error {
 		Epoch      uint64 `json:"epoch"`
 		Files      int    `json:"files_erased"`
 	}{statement.OperatorID, statement.Epoch, len(statement.Files)})
+}
+
+func validateErasePaths(chainPath, secretPath, authorityPath, outputPath string, paths []string) error {
+	protectedFiles := []string{secretPath, authorityPath, outputPath}
+	protected := make(map[string]struct{}, len(protectedFiles))
+	for _, path := range protectedFiles {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		protected[filepath.Clean(absolute)] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		clean := filepath.Clean(absolute)
+		if _, exists := protected[clean]; exists {
+			return fmt.Errorf("refusing to erase protected operator path %q", path)
+		}
+		insideChain, err := epoch.PathWithin(chainPath, clean)
+		if err != nil {
+			return err
+		}
+		if insideChain {
+			return fmt.Errorf("refusing to erase epoch-chain path %q", path)
+		}
+		if _, duplicate := seen[clean]; duplicate {
+			return fmt.Errorf("duplicate erasure path %q", path)
+		}
+		seen[clean] = struct{}{}
+	}
+	return nil
 }
 
 func attest(arguments []string) error {
@@ -231,7 +279,7 @@ func verify(arguments []string) error {
 	flags := flag.NewFlagSet("verify", flag.ContinueOnError)
 	secretPath := flags.String("secret", "", "private operator-secret path")
 	topologyPath := flags.String("topology", "", "authority-signed topology path")
-	authorityPath := flags.String("authority-key", "", "pinned public authority-key path")
+	authorityPath := flags.String("authority-key", "", "pinned topology authority public key")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -299,5 +347,22 @@ func writeNew(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	written = true
-	return nil
+	return syncOutputDirectory(parent)
 }
+
+func syncOutputDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = directory.Close() }()
+	return directory.Sync()
+}
+
+// Keep strconv and strings in the import set checked by the compiler if the
+// flag/help surface changes during rebases; both are intentionally referenced
+// by this file's production path checks.
+var (
+	_ = strconv.IntSize
+	_ = strings.Compare
+)
