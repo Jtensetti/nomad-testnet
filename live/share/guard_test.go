@@ -2,9 +2,13 @@ package share
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
+	"github.com/Jtensetti/nomad-testnet/live/batch"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -60,5 +64,24 @@ func TestProcessOnceRefusesWithoutGuardAndWhenRetired(t *testing.T) {
 	guarded := Service{OutputDir: t.TempDir(), Guard: denyingGuard{err: retired}}
 	if _, err := guarded.ProcessOnce(); err == nil {
 		t.Fatal("a refused epoch must stop threshold work")
+	}
+}
+
+func TestHTTPHandlerRefusesPreviouslyGeneratedPartialAfterRetirement(t *testing.T) {
+	service := Service{
+		Descriptor: batch.VerifiedDescriptor{
+			Descriptor: batch.Descriptor{StreamID: "test-stream"},
+			Committee:  mix.ThresholdCommittee{Epoch: 7},
+		},
+		Secret:    mix.MemberSecret{Index: 1},
+		OutputDir: t.TempDir(),
+		Guard:     denyingGuard{err: errors.New("epoch is retired")},
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/partial/test-stream/1", nil)
+	response := httptest.NewRecorder()
+	service.handler().ServeHTTP(response, request)
+	if response.Code != http.StatusGone {
+		t.Fatalf("retired partial endpoint must fail closed with 410, got %d", response.Code)
 	}
 }
