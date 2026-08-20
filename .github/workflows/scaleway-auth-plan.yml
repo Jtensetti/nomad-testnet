@@ -1,6 +1,12 @@
 name: scaleway-auth-plan
 
 on:
+  push:
+    branches: [agent/scaleway-wan]
+    paths:
+      - 'deploy/scaleway/**'
+      - '.github/workflows/scaleway-auth-plan.yml'
+      - '.github/workflows/scaleway-wan.yml'
   pull_request:
     paths:
       - 'deploy/scaleway/**'
@@ -9,11 +15,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   plan:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # PR validation must never receive cloud credentials. The authenticated
+    # provider plan runs only on a trusted branch push or explicit dispatch.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -26,6 +34,8 @@ jobs:
       TF_VAR_project_id: ${{ secrets.SCW_PROJECT_ID }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: agent/scaleway-wan
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: '1.14.6'
@@ -103,3 +113,19 @@ jobs:
           path: runtime/evidence/scaleway-plan/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish non-secret plan verdict to review branch
+        run: |
+          set -euo pipefail
+          mkdir -p docs/testing
+          cp runtime/evidence/scaleway-plan/PLAN_OK.txt docs/testing/SCW_PLAN_OK.txt
+          {
+            echo "source_commit=$GITHUB_SHA"
+            echo "workflow_run=$GITHUB_RUN_ID"
+          } >> docs/testing/SCW_PLAN_OK.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- docs/testing/SCW_PLAN_OK.txt
+          git diff --cached --quiet && exit 0
+          git commit -m "docs: record authenticated Scaleway plan [skip ci]"
+          git push origin HEAD:agent/scaleway-wan
