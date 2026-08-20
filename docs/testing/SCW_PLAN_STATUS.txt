@@ -1,0 +1,8 @@
+authenticated_plan_only=true
+resources_applied=false
+credentials=failure
+inputs=skipped
+terraform_plan=skipped
+exact_resource_assertion=skipped
+source_commit=1a8f7c99b6d175768df15c0c5ec09fe9c76d13cb
+workflow_run=32391359589
