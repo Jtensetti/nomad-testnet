@@ -17,5 +17,6 @@ func main() {
 	fmt.Printf("hash=%s\n", hex.EncodeToString(r.ContentHash[:]))
 	fmt.Printf("query_basin=%016x object_basin=%016x distance=%d\n", r.QueryBasin, r.ObjectBasin, r.HammingDistance)
 	fmt.Printf("symbols=%d mixed=%d reconstructed=%v\n", r.SymbolsGenerated, r.MixedBatch, r.Reconstructed)
-	fmt.Printf("reader_trace_identical=%v bytes_per_epoch=%d\n", r.ReaderTraceIdentical, r.ConstantBytesPerEpoch)
+	fmt.Printf("mix_rounds=%d proofs_verified=%v wire_cells=%d wire_size=%d\n", r.MixRounds, r.ShuffleProofsVerified, r.WireCellsObserved, r.WireCellSize)
+	fmt.Printf("reader_trace_identical=%v idle_cadence=%v active_cadence=%v bytes_per_epoch=%d\n", r.ReaderTraceIdentical, r.IdleCadenceValid, r.ActiveCadenceValid, r.ConstantBytesPerEpoch)
 }

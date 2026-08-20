@@ -1,0 +1,336 @@
+name: nomad-live
+
+x-locked-service: &locked-service
+  build:
+    context: ..
+  image: nomad-live:testnet
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 128
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=32m
+  restart: unless-stopped
+
+services:
+  bootstrap:
+    <<: *locked-service
+    restart: "no"
+    network_mode: none
+    command:
+      - nomad-bootstrap
+      - --out=/runtime
+      - --envelope=/fixture/demo.nomadobject
+      - --cell-interval-ms=50
+      - --dkg-start-delay=60s
+      - --dkg-phase-duration=3s
+      - --authority-private-out=/authority/authority.key
+      - --emit-dkg-test-tls
+    volumes:
+      - ./fixture/demo.nomadobject:/fixture/demo.nomadobject:ro
+      - public-config:/runtime/public
+      - operator-a-secret:/runtime/operators/operator-a
+      - operator-b-secret:/runtime/operators/operator-b
+      - operator-c-secret:/runtime/operators/operator-c
+      - authority-secret:/authority
+
+  dkg-a:
+    <<: *locked-service
+    restart: "no"
+    command:
+      - nomad-dkg
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --secrets=/operator/node-secrets.json
+      - --listen=:4400
+      - --state=/dkg
+      - --share-out=/operator/distributed-threshold-share.json
+      - --certificate-out=/certificate/dkg-certificate.json
+      - --tls-certificate=/operator/dkg-tls.crt
+      - --tls-private-key=/operator/dkg-tls.key
+    environment:
+      SSL_CERT_FILE: /config/dkg-test-ca.pem
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+    networks: [fabric]
+    volumes:
+      - public-config:/config:ro
+      - operator-a-secret:/operator
+      - dkg-state-a:/dkg
+      - dkg-certificate-a:/certificate
+
+  dkg-b:
+    <<: *locked-service
+    restart: "no"
+    command:
+      - nomad-dkg
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --secrets=/operator/node-secrets.json
+      - --listen=:4400
+      - --state=/dkg
+      - --share-out=/operator/distributed-threshold-share.json
+      - --certificate-out=/certificate/dkg-certificate.json
+      - --tls-certificate=/operator/dkg-tls.crt
+      - --tls-private-key=/operator/dkg-tls.key
+    environment:
+      SSL_CERT_FILE: /config/dkg-test-ca.pem
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+    networks: [fabric]
+    volumes:
+      - public-config:/config:ro
+      - operator-b-secret:/operator
+      - dkg-state-b:/dkg
+      - dkg-certificate-b:/certificate
+
+  dkg-c:
+    <<: *locked-service
+    restart: "no"
+    command:
+      - nomad-dkg
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --secrets=/operator/node-secrets.json
+      - --listen=:4400
+      - --state=/dkg
+      - --share-out=/operator/distributed-threshold-share.json
+      - --certificate-out=/certificate/dkg-certificate.json
+      - --tls-certificate=/operator/dkg-tls.crt
+      - --tls-private-key=/operator/dkg-tls.key
+    environment:
+      SSL_CERT_FILE: /config/dkg-test-ca.pem
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+    networks: [fabric]
+    volumes:
+      - public-config:/config:ro
+      - operator-c-secret:/operator
+      - dkg-state-c:/dkg
+      - dkg-certificate-c:/certificate
+
+  fixture-publisher:
+    <<: *locked-service
+    restart: "no"
+    network_mode: none
+    command:
+      - nomad-fixture-publisher
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --authority-private=/authority/authority.key
+      - --dkg-certificate=/certificate/dkg-certificate.json
+      - --envelope=/fixture/demo.nomadobject
+      - --mixer-secrets=/operators/a/node-secrets.json,/operators/b/node-secrets.json,/operators/c/node-secrets.json
+      - --out=/published
+    depends_on:
+      dkg-a: {condition: service_completed_successfully}
+      dkg-b: {condition: service_completed_successfully}
+      dkg-c: {condition: service_completed_successfully}
+    volumes:
+      - ./fixture/demo.nomadobject:/fixture/demo.nomadobject:ro
+      - public-config:/config:ro
+      - authority-secret:/authority:ro
+      - operator-a-secret:/operators/a:ro
+      - operator-b-secret:/operators/b:ro
+      - operator-c-secret:/operators/c:ro
+      - dkg-certificate-a:/certificate:ro
+      - published-config:/published
+
+  operator-a:
+    <<: *locked-service
+    command:
+      - nomad-node
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --secrets=/operator/node-secrets.json
+      - --listen=:4200
+      - --cache=/cache
+      - --state=/state/sequence
+      - --health=/state/health.json
+      - --seed=/published/seed.json
+      - --cache-sweep=10s
+    depends_on:
+      fixture-publisher: {condition: service_completed_successfully}
+    networks: [fabric]
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - operator-a-secret:/operator:ro
+      - raw-a:/cache
+      - state-a:/state
+    healthcheck:
+      test: [CMD, test, -s, /state/health.json]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+
+  operator-b:
+    <<: *locked-service
+    command:
+      - nomad-node
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --secrets=/operator/node-secrets.json
+      - --listen=:4200
+      - --cache=/cache
+      - --state=/state/sequence
+      - --health=/state/health.json
+      - --cache-sweep=10s
+    depends_on:
+      fixture-publisher: {condition: service_completed_successfully}
+    networks: [fabric]
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - operator-b-secret:/operator:ro
+      - raw-b:/cache
+      - state-b:/state
+    healthcheck:
+      test: [CMD, test, -s, /state/health.json]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+
+  operator-c:
+    <<: *locked-service
+    command:
+      - nomad-node
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --secrets=/operator/node-secrets.json
+      - --listen=:4200
+      - --cache=/cache
+      - --state=/state/sequence
+      - --health=/state/health.json
+      - --cache-sweep=10s
+    depends_on:
+      fixture-publisher: {condition: service_completed_successfully}
+    networks: [fabric]
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - operator-c-secret:/operator:ro
+      - raw-c:/cache
+      - state-c:/state
+    healthcheck:
+      test: [CMD, test, -s, /state/health.json]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+
+  share-a:
+    <<: *locked-service
+    command: &share-command
+      - nomad-share
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --descriptor=/published/descriptor.json
+      - --share=/operator/distributed-threshold-share.json
+      - --cache=/cache
+      - --out=/partials
+      - --interval=1s
+      - --listen=:4300
+    depends_on:
+      operator-a: {condition: service_healthy}
+    networks: [fabric]
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - operator-a-secret:/operator:ro
+      - raw-a:/cache:ro
+      - partial-a:/partials
+
+  share-b:
+    <<: *locked-service
+    command: *share-command
+    depends_on:
+      operator-b: {condition: service_healthy}
+    networks: [fabric]
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - operator-b-secret:/operator:ro
+      - raw-b:/cache:ro
+      - partial-b:/partials
+
+  share-c:
+    <<: *locked-service
+    command: *share-command
+    depends_on:
+      operator-c: {condition: service_healthy}
+    networks: [fabric]
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - operator-c-secret:/operator:ro
+      - raw-c:/cache:ro
+      - partial-c:/partials
+
+  partial-fetcher:
+    <<: *locked-service
+    command:
+      - nomad-partial-fetch
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --plan=/published/fetch-plan.json
+      - --out=/partials
+      - --interval=1s
+    depends_on:
+      share-a: {condition: service_started}
+      share-b: {condition: service_started}
+      share-c: {condition: service_started}
+    networks: [fabric]
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - partials-local:/partials
+
+  materializer:
+    <<: *locked-service
+    command:
+      - nomad-materializer
+      - --topology=/config/topology.json
+      - --authority-key=/config/authority.pub
+      - --descriptor=/published/descriptor.json
+      - --cache=/cache
+      - --partials=/partials
+      - --out=/verified
+      - --interval=1s
+    network_mode: none
+    depends_on:
+      operator-c: {condition: service_healthy}
+      partial-fetcher: {condition: service_started}
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - raw-c:/cache:ro
+      - partials-local:/partials:ro
+      - ${NOMAD_VERIFIED_CACHE:-./runtime/verified}:/verified
+
+networks:
+  fabric:
+    internal: true
+
+volumes:
+  public-config:
+  published-config:
+  authority-secret:
+  operator-a-secret:
+  operator-b-secret:
+  operator-c-secret:
+  dkg-state-a:
+  dkg-state-b:
+  dkg-state-c:
+  dkg-certificate-a:
+  dkg-certificate-b:
+  dkg-certificate-c:
+  raw-a:
+  raw-b:
+  raw-c:
+  state-a:
+  state-b:
+  state-c:
+  partial-a:
+  partial-b:
+  partial-c:
+  partials-local:

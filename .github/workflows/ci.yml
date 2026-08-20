@@ -1,16 +1,147 @@
 name: ci
-on:
-  workflow_dispatch:
-  pull_request:
-  push:
-    branches: [main]
+on: [push, pull_request]
+permissions:
+  contents: read
+
 jobs:
-  test:
+  unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Explain private sibling requirement
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.25.x'}
+      - name: Verify pinned component snapshots
+        run: sha256sum --check --quiet COMPONENTS.sha256
+      - name: Verify generated formatting and module graph
         run: |
-          echo "nomad-testnet composes private sibling repositories."
-          echo "Configure a NOMAD_CI_TOKEN with read access before enabling multi-repo checkout CI."
-      - name: Static workflow guard
-        run: test -n "${{ github.repository }}"
+          unformatted="$(gofmt -l cmd live testnet)"
+          if test -n "$unformatted"; then
+            printf 'unformatted Go files:\n%s\n' "$unformatted"
+            gofmt -d cmd live testnet
+            exit 1
+          fi
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - name: Enforce Selection Firewall dependency direction
+        run: |
+          network_deps="$(go list -deps \
+            github.com/Jtensetti/nomad-testnet/cmd/nomad-node \
+            github.com/Jtensetti/nomad-testnet/cmd/nomad-dkg \
+            github.com/Jtensetti/nomad-testnet/cmd/nomad-operator \
+            github.com/Jtensetti/nomad-testnet/cmd/nomad-partial-fetch \
+            github.com/Jtensetti/nomad-testnet/cmd/nomad-topology \
+            github.com/Jtensetti/nomad-testnet/live/node \
+            github.com/Jtensetti/nomad-testnet/live/hop \
+            github.com/Jtensetti/nomad-testnet/live/bundle \
+            github.com/Jtensetti/nomad-testnet/live/ceremony \
+            github.com/Jtensetti/nomad-testnet/live/committee \
+            github.com/Jtensetti/nomad-testnet/live/dkg \
+            github.com/Jtensetti/nomad-testnet/live/fetchplan \
+            github.com/Jtensetti/nomad-testnet/live/partialfetch \
+            github.com/Jtensetti/nomad-testnet/live/rawcache \
+            github.com/Jtensetti/nomad-testnet/live/topology)"
+          if printf '%s\n' "$network_deps" | grep -Eq 'nomad-(semantic-basins|local-reconstruction)'; then
+            echo "network domain imports private selection or reconstruction code"
+            exit 1
+          fi
+          materializer_imports="$(go list -f '{{join .Imports "\n"}}' github.com/Jtensetti/nomad-testnet/live/materialize)"
+          if printf '%s\n' "$materializer_imports" | grep -Eq '(^net$|nomad-testnet/live/node|nomad-constant-rate-fabric|nomad-selection-firewall|nomad-semantic-basins)'; then
+            echo "materializer directly imports network control or query code"
+            exit 1
+          fi
+      - run: go test -race ./...
+      - name: Run independent operator ceremony
+        env:
+          NOMAD_CEREMONY_EVIDENCE: runtime/evidence/operator-ceremony.json
+        run: ./scripts/ceremony-e2e.sh
+      - run: go vet ./...
+      - name: Upload operator ceremony evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operator-ceremony-evidence
+          path: runtime/evidence/operator-ceremony.json
+          if-no-files-found: warn
+
+  live-compose:
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install packet-capture verifier
+        run: command -v tcpdump >/dev/null || (sudo apt-get update && sudo apt-get install -y tcpdump)
+      - name: Run isolated multi-process fabric-to-cache network
+        run: ./scripts/compose-e2e.sh
+      - name: Upload packet and process evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-fabric-evidence
+          path: runtime/evidence/
+          if-no-files-found: warn
+
+  release:
+    needs: [unit, live-compose]
+    if: >-
+      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify release commit marker
+        id: eligibility
+        run: |
+          subject="$(git log -1 --pretty=%s)"
+          if printf '%s\n' "$subject" | grep -q '^release:'; then
+            echo 'release=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'release=false' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@v7
+        if: steps.eligibility.outputs.release == 'true'
+        with: {go-version: '1.25.x'}
+      - uses: actions/download-artifact@v4
+        if: steps.eligibility.outputs.release == 'true'
+        with:
+          name: live-fabric-evidence
+          path: evidence/fabric
+      - uses: actions/download-artifact@v4
+        if: steps.eligibility.outputs.release == 'true'
+        with:
+          name: operator-ceremony-evidence
+          path: evidence/ceremony
+      - name: Build commit-addressed operator bundle
+        if: steps.eligibility.outputs.release == 'true'
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          for command in nomad-bootstrap nomad-dkg nomad-fixture-publisher nomad-node nomad-operator nomad-topology nomad-share nomad-partial-fetch nomad-materializer; do
+            go build -trimpath -ldflags='-s -w' -o "dist/$command" "./cmd/$command"
+          done
+          tar -C dist -czf nomad-live-linux-amd64.tgz .
+          zip -qr live-fabric-evidence.zip evidence
+          sha256sum nomad-live-linux-amd64.tgz live-fabric-evidence.zip > SHA256SUMS
+      - name: Publish gated live-testnet prerelease
+        if: steps.eligibility.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          target_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          tag="nomad-live-testnet-${short_sha}"
+          gh release create "$tag" \
+            nomad-live-linux-amd64.tgz live-fabric-evidence.zip SHA256SUMS \
+            --target "$target_sha" \
+            --prerelease \
+            --title "Nomad live fabric testnet (${short_sha})" \
+            --notes "Reader-side live testnet with offline operator enrollment/attestation, dedicated DKG identities, a three-process TLS Pedersen DKG, unanimous committee activation, descriptor-v2 certificate binding, locally derived X25519+HKDF hop keys, fixed-cadence authenticated UDP, distributed threshold partials, networkless materialization, packet/DKG/process evidence, and browser-compatible verified output. This is not an audited production anonymity network; see LIVE_DOD.md for external gates."
