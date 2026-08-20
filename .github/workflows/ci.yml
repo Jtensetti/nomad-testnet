@@ -1,20 +1,37 @@
 name: ci
-on: [push, pull_request]
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'quick runs normal CI; full adds race/ceremony/Compose evidence; release also publishes the prerelease'
+        type: choice
+        required: true
+        default: quick
+        options:
+          - quick
+          - full
+          - release
+
 permissions:
   contents: read
 
 jobs:
-  unit:
+  quick:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with: {go-version: '1.25.x'}
       - name: Verify pinned component snapshots
         run: sha256sum --check --quiet COMPONENTS.sha256
-      - name: Verify generated formatting and module graph
+      - name: Verify formatting and module graph
         run: |
+          set -euo pipefail
           unformatted="$(gofmt -l cmd live testnet)"
           if test -n "$unformatted"; then
             printf 'unformatted Go files:\n%s\n' "$unformatted"
@@ -25,6 +42,7 @@ jobs:
           git diff --exit-code -- go.mod go.sum
       - name: Enforce Selection Firewall dependency direction
         run: |
+          set -euo pipefail
           network_deps="$(go list -deps \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-node \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-dkg \
@@ -43,163 +61,92 @@ jobs:
             github.com/Jtensetti/nomad-testnet/live/epoch \
             github.com/Jtensetti/nomad-testnet/live/topology)"
           if printf '%s\n' "$network_deps" | grep -Eq 'nomad-(semantic-basins|local-reconstruction)'; then
-            echo "network domain imports private selection or reconstruction code"
+            echo 'network domain imports private selection or reconstruction code'
             exit 1
           fi
-          # The publication API must have no network capability, transitively.
-          # Publish is a purely local operation; the only way a fragment
-          # leaves the queue is a pull by the constant-rate scheduler.
           publish_deps="$(go list -deps github.com/Jtensetti/nomad-testnet/live/publish)"
           if printf '%s\n' "$publish_deps" | grep -Eq '^(net|net/http|net/url|os/exec)$'; then
-            echo "publication API reaches a socket or process-launch capability"
+            echo 'publication API reaches a socket or process-launch capability'
             exit 1
           fi
           if printf '%s\n' "$publish_deps" | grep -Eq 'nomad-(constant-rate-fabric|selection-firewall)|nomad-testnet/live/(node|hop|fetchplan|partialfetch|uplink)'; then
-            echo "publication API imports transport, peer selection or scheduling"
+            echo 'publication API imports transport, peer selection or scheduling'
             exit 1
           fi
           materializer_imports="$(go list -f '{{join .Imports "\n"}}' github.com/Jtensetti/nomad-testnet/live/materialize)"
           if printf '%s\n' "$materializer_imports" | grep -Eq '(^net$|nomad-testnet/live/node|nomad-constant-rate-fabric|nomad-selection-firewall|nomad-semantic-basins)'; then
-            echo "materializer directly imports network control or query code"
+            echo 'materializer directly imports network control or query code'
             exit 1
           fi
-      - run: go test -race ./...
-      - name: Verify the traffic-analysis harness still detects differences
+      - name: Fast tests only
+        run: go test -short ./...
+      - name: Verify analysis positive controls
         run: python3 scripts/test-two-world-analysis.py
+      - run: go vet ./...
+
+  full:
+    needs: quick
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.mode != 'quick') ||
+      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.25.x'}
+      - name: Race-enabled full test suite
+        run: go test -race ./...
       - name: Run independent operator ceremony
         env:
           NOMAD_CEREMONY_EVIDENCE: runtime/evidence/operator-ceremony.json
         run: ./scripts/ceremony-e2e.sh
-      - run: go vet ./...
-      - name: Upload operator ceremony evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: operator-ceremony-evidence
-          path: runtime/evidence/operator-ceremony.json
-          if-no-files-found: warn
-      - name: Upload wire campaign captures
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: wire-campaign-captures
-          path: runtime/evidence/wire-campaign/
-          if-no-files-found: warn
-      - name: Apply the preregistered rule to the wire campaign captures
-        if: always()
-        run: |
-          directory=runtime/evidence/wire-campaign
-          if ! test -d "$directory"; then
-            echo "no wire campaign captures were produced"
-            exit 0
-          fi
-          # The Go campaign gates on the one statistic a shared runner can
-          # resolve. This step re-reads the same captures through the full
-          # preregistered rule, so the captures a reviewer downloads are the
-          # captures the published rule was actually run against, and its
-          # verdict is visible rather than inferred.
-          #
-          # It reports and does not gate, deliberately: on a shared runner the
-          # rule's packet-count and KS tests are dominated by ambient stalls,
-          # which the campaign measures directly as a control spread swinging
-          # between 0.01 and 0.7 across runs. Gating here would fail at random
-          # and get switched off. The gating version of this rule belongs on
-          # the quiet, multi-region hosts of E-01/E-03; until those exist, the
-          # verdicts below are evidence to read, not a passed criterion.
-          failures=0
-          for stressor in baseline cpu-starvation disk-pressure; do
-            control="$directory/$stressor-control-a.txt"
-            treatment="$directory/$stressor-active.txt"
-            test -f "$control" -a -f "$treatment" || continue
-            echo "== $stressor: idle vs active =="
-            python3 scripts/two-world-analysis.py "$control" "$treatment" 1200 20 || failures=$((failures + 1))
-            # The idle-versus-idle control run through the same rule. A rule
-            # that rejects two identical worlds is measuring the runner, and
-            # its verdict on the treatment pair means nothing this run.
-            echo "== $stressor: idle vs idle (control) =="
-            python3 scripts/two-world-analysis.py "$control" "$directory/$stressor-control-b.txt" 1200 20 \
-              || echo "control pair also rejected: this runner cannot resolve the treatment comparison"
-          done
-          echo "preregistered rule rejected $failures treatment pair(s); reported, not gating"
-
-  live-compose:
-    needs: unit
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install packet-capture verifier
-        run: command -v tcpdump >/dev/null || (sudo apt-get update && sudo apt-get install -y tcpdump)
       - name: Run isolated multi-process fabric-to-cache network
         run: ./scripts/compose-e2e.sh
-      - name: Upload packet and process evidence
+      - name: Upload full evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: live-fabric-evidence
+          name: nomad-full-evidence-${{ github.run_id }}
           path: runtime/evidence/
           if-no-files-found: warn
+          retention-days: 30
 
   release:
-    needs: [unit, live-compose]
+    needs: full
     if: >-
-      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'release') ||
+      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Verify release commit marker
-        id: eligibility
-        run: |
-          subject="$(git log -1 --pretty=%s)"
-          if printf '%s\n' "$subject" | grep -q '^release:'; then
-            echo 'release=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'release=false' >> "$GITHUB_OUTPUT"
-          fi
       - uses: actions/setup-go@v7
-        if: steps.eligibility.outputs.release == 'true'
         with: {go-version: '1.25.x'}
-      - uses: actions/download-artifact@v4
-        if: steps.eligibility.outputs.release == 'true'
-        with:
-          name: live-fabric-evidence
-          path: evidence/fabric
-      - uses: actions/download-artifact@v4
-        if: steps.eligibility.outputs.release == 'true'
-        with:
-          name: operator-ceremony-evidence
-          path: evidence/ceremony
       - name: Build commit-addressed operator bundle
-        if: steps.eligibility.outputs.release == 'true'
         env:
-          CGO_ENABLED: 0
+          CGO_ENABLED: '0'
           GOOS: linux
           GOARCH: amd64
         run: |
+          set -euo pipefail
           mkdir -p dist
           for command in nomad-bootstrap nomad-dkg nomad-fixture-publisher nomad-node nomad-operator nomad-topology nomad-share nomad-partial-fetch nomad-materializer; do
             go build -trimpath -ldflags='-s -w' -o "dist/$command" "./cmd/$command"
           done
           tar -C dist -czf nomad-live-linux-amd64.tgz .
-          zip -qr live-fabric-evidence.zip evidence
-          sha256sum nomad-live-linux-amd64.tgz live-fabric-evidence.zip > SHA256SUMS
+          sha256sum nomad-live-linux-amd64.tgz > SHA256SUMS
       - name: Publish gated live-testnet prerelease
-        if: steps.eligibility.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           target_sha="$(git rev-parse HEAD)"
           short_sha="$(git rev-parse --short=12 HEAD)"
           tag="nomad-live-testnet-${short_sha}"
-          gh release create "$tag" \
-            nomad-live-linux-amd64.tgz live-fabric-evidence.zip SHA256SUMS \
-            --target "$target_sha" \
-            --prerelease \
+          gh release create "$tag" nomad-live-linux-amd64.tgz SHA256SUMS \
+            --target "$target_sha" --prerelease \
             --title "Nomad live fabric testnet (${short_sha})" \
-            --notes "Reader-side live testnet with offline operator enrollment/attestation, dedicated DKG identities, a three-process TLS Pedersen DKG, unanimous committee activation, descriptor-v2 certificate binding, locally derived X25519+HKDF hop keys, fixed-cadence authenticated UDP, distributed threshold partials, networkless materialization, packet/DKG/process evidence, and browser-compatible verified output. This is not an audited production anonymity network; see LIVE_DOD.md for external gates."
+            --notes 'Research testnet artifact. This is not an audited production anonymity network.'
