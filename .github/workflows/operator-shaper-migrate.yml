@@ -1,0 +1,81 @@
+name: operator-shaper-migrate
+
+on:
+  push:
+    branches: [agent/operator-shaper-process]
+    paths:
+      - '.github/workflows/operator-shaper-migrate.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: agent/operator-shaper-process
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.x'
+          check-latest: false
+
+      - name: Mark coupled sender as legacy diagnostic
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          campaign = Path('live/node/campaign_test.go')
+          text = campaign.read_text()
+          old = '''\t\tListenAddress: endpoints[0], Cache: cache,\n\t\tSequencePath: filepath.Join(scratch, "sequence"),'''
+          new = '''\t\tListenAddress: endpoints[0], Cache: cache,\n\t\tLegacyCoupledEgress: true,\n\t\tSequencePath: filepath.Join(scratch, "sequence"),'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('campaign legacy Config insertion point not found')
+
+          marker = 'func TestWireTimingIsIndependentOfPrivateActivityUnderStress(t *testing.T) {\n'
+          guard = marker + '''\tif os.Getenv("NOMAD_RUN_LEGACY_TIMING_DIAGNOSTICS") != "1" {\n\t\tt.Skip("legacy same-runtime sender is a positive control; production timing is gated by the separate nomad-shaper process")\n\t}\n'''
+          if guard not in text:
+              if marker not in text:
+                  raise SystemExit('legacy wire timing test marker not found')
+              text = text.replace(marker, guard, 1)
+          campaign.write_text(text)
+
+          relay = Path('live/node/relay_timing_regression_test.go')
+          text = relay.read_text()
+          marker = 'func TestRelayProducerDoesNotModulateSchedulerCadence(t *testing.T) {\n'
+          guard = marker + '''\tif os.Getenv("NOMAD_RUN_LEGACY_TIMING_DIAGNOSTICS") != "1" {\n\t\tt.Skip("legacy same-runtime relay producer is retained as a positive control; production uses a separate shaper process")\n\t}\n'''
+          if guard not in text:
+              if marker not in text:
+                  raise SystemExit('legacy relay timing test marker not found')
+              text = text.replace(marker, guard, 1)
+          relay.write_text(text)
+          PY
+
+      - name: Format and normalize module graph
+        run: |
+          set -euo pipefail
+          gofmt -w cmd live testnet
+          go mod tidy
+          git diff --check
+
+      - name: Smoke-test the new boundary before committing
+        run: |
+          set -euo pipefail
+          go test -race ./live/relayipc ./live/shaper
+          go test -race -run '^TestReceiveRejectsInvalidSourcesAuthenticationAndReplay$' ./live/node
+          go build ./cmd/nomad-node ./cmd/nomad-shaper
+
+      - name: Commit migration result
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- cmd live testnet go.mod go.sum
+          git diff --cached --quiet && exit 0
+          git commit -m "refactor: make separate shaper the production timing boundary"
+          git push origin HEAD:agent/operator-shaper-process

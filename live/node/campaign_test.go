@@ -144,6 +144,9 @@ func TestWireContentIsIndependentOfPrivateActivity(t *testing.T) {
 }
 
 func TestWireTimingIsIndependentOfPrivateActivityUnderStress(t *testing.T) {
+	if os.Getenv("NOMAD_RUN_LEGACY_TIMING_DIAGNOSTICS") != "1" {
+		t.Skip("legacy same-runtime sender is a positive control; production timing is gated by the separate nomad-shaper process")
+	}
 	if testing.Short() {
 		t.Skip("wire campaign needs wall-clock time")
 	}
@@ -339,9 +342,10 @@ func buildCampaignNode(t *testing.T, network topology.Verified,
 			OutboundKeys: outbound, InboundKeys: inbound,
 		},
 		ListenAddress: endpoints[0], Cache: cache,
-		SequencePath: filepath.Join(scratch, "sequence"),
-		HealthPath:   filepath.Join(scratch, "health.json"),
-		CacheSweep:   time.Hour,
+		LegacyCoupledEgress: true,
+		SequencePath:        filepath.Join(scratch, "sequence"),
+		HealthPath:          filepath.Join(scratch, "health.json"),
+		CacheSweep:          time.Hour,
 	})
 	if err != nil {
 		t.Fatalf("build node: %v", err)

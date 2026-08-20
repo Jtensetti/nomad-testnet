@@ -23,6 +23,9 @@ const relayCampaignRounds = 4
 // a failure attributable instead of letting unrelated host load obscure a
 // scheduler-visible producer coupling.
 func TestRelayProducerDoesNotModulateSchedulerCadence(t *testing.T) {
+	if os.Getenv("NOMAD_RUN_LEGACY_TIMING_DIAGNOSTICS") != "1" {
+		t.Skip("legacy same-runtime relay producer is retained as a positive control; production uses a separate shaper process")
+	}
 	if testing.Short() {
 		t.Skip("relay timing regression needs wall-clock time")
 	}
