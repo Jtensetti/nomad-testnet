@@ -372,14 +372,20 @@ func fillWorkQueue(t *testing.T, worker *Node, count int) {
 	}
 }
 
+func resolveCampaignAddress(t *testing.T, address string) *net.UDPAddr {
+	t.Helper()
+	resolved, err := net.ResolveUDPAddr("udp", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
 func bindObservers(t *testing.T, endpoints []string, indexes []int) []*net.UDPConn {
 	t.Helper()
 	observers := make([]*net.UDPConn, 0, len(indexes))
 	for _, index := range indexes {
-		address, err := net.ResolveUDPAddr("udp", endpoints[index])
-		if err != nil {
-			t.Fatal(err)
-		}
+		address := resolveCampaignAddress(t, endpoints[index])
 		observer, err := net.ListenUDP("udp", address)
 		if err != nil {
 			t.Fatalf("bind observer on %s: %v", endpoints[index], err)
