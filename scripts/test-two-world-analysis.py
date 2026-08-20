@@ -81,6 +81,20 @@ gaps = twa.interarrivals(sample_times)
 check("Go-rendered captures carry a usable cadence",
       len(gaps) == 7 and all(abs(gap - 0.020) < 1e-6 for gap in gaps))
 
+# Regression: the shared read_capture() path must recognize this as the Go
+# campaign's UTF-8 tcpdump rendering rather than hand it to `tcpdump -r` as if
+# it were a binary pcap. That exact mismatch previously made CI's post-run
+# evidence analysis emit CalledProcessError tracebacks for every campaign.
+read_times, read_sizes, read_destinations, _ = capture.read_capture(GO_SAMPLE)
+check("capture reader accepts Go-rendered text directly",
+      read_times == sample_times and read_sizes == sample_sizes
+      and read_destinations == sample_destinations)
+try:
+    capture.read_capture(GO_SAMPLE, "udp port 4200")
+    check("text capture rejects a second filtering implementation", False)
+except capture.CaptureError:
+    check("text capture rejects a second filtering implementation", True)
+
 # Kolmogorov-Smirnov runs over inter-arrivals, not raw timestamps, so the
 # tests below feed it what the harness feeds it.
 steady_times = [0.05 * index for index in range(400)]
