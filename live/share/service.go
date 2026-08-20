@@ -21,9 +21,10 @@ import (
 )
 
 // EpochGuard reports whether an epoch may still be served. The share
-// service consults it before every partial decryption so that a retired
-// epoch's share cannot be used even though it remains cryptographically
-// valid for that epoch's ciphertext. live/epoch.Chain satisfies this.
+// service consults it before every partial decryption and before every HTTP
+// response so that a retired epoch cannot remain usable merely because a
+// partial-decryption file already exists. live/epoch.FreshGuard is the
+// production implementation.
 type EpochGuard interface {
 	ServesEpoch(epochNumber uint64, now time.Time) error
 }
@@ -58,6 +59,12 @@ func (service Service) Run(ctx context.Context) error {
 	}
 	if service.Guard == nil {
 		return errors.New("share service requires an epoch guard")
+	}
+	// Fail before opening a network listener if the epoch is not ACTIVE.
+	// This decision depends only on public epoch state and therefore may
+	// deliberately change at a signed public transition boundary.
+	if err := service.Guard.ServesEpoch(service.Descriptor.Committee.Epoch, service.now()); err != nil {
+		return fmt.Errorf("refusing to start threshold service for epoch %d: %w", service.Descriptor.Committee.Epoch, err)
 	}
 	if err := ensureOutputDirectory(service.OutputDir); err != nil {
 		return err
@@ -102,6 +109,16 @@ func (service Service) handler() http.Handler {
 		response.Header().Set("X-Content-Type-Options", "nosniff")
 		if request.Method != http.MethodGet || request.URL.Path != expectedPath || request.URL.RawQuery != "" {
 			http.NotFound(response, request)
+			return
+		}
+		if service.Guard == nil {
+			http.Error(response, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		// Existing partials are still epoch-scoped outputs. Do not serve one
+		// after retirement merely because its file remains on disk.
+		if err := service.Guard.ServesEpoch(service.Descriptor.Committee.Epoch, service.now()); err != nil {
+			http.Error(response, "retired", http.StatusGone)
 			return
 		}
 		info, err := os.Lstat(filePath)
