@@ -46,6 +46,7 @@ jobs:
           terraform_wrapper: false
 
       - name: Verify credentials exist
+        id: credentials
         run: |
           set -euo pipefail
           test -n "$SCW_ACCESS_KEY"
@@ -55,6 +56,7 @@ jobs:
           test -n "$TF_VAR_project_id"
 
       - name: Prepare ephemeral plan inputs
+        id: inputs
         run: |
           set -euo pipefail
           ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/nomad-wan-plan" -C "github-plan-${GITHUB_RUN_ID}"
@@ -68,6 +70,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Plan against real Scaleway API
+        id: terraform_plan
         run: |
           set -euo pipefail
           mkdir -p runtime/evidence/scaleway-plan
@@ -78,6 +81,7 @@ jobs:
           terraform -chdir=deploy/scaleway show -json "$RUNNER_TEMP/nomad-wan.tfplan" > runtime/evidence/scaleway-plan/terraform-plan.json
 
       - name: Assert exact create-only plan
+        id: exact_plan
         run: |
           python3 - <<'PY'
           import collections, json
@@ -113,6 +117,7 @@ jobs:
           PY
 
       - name: Upload plan evidence
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: scaleway-authenticated-plan-${{ github.run_id }}
@@ -120,18 +125,44 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish non-secret plan verdict to review branch
+      - name: Publish non-secret plan stage status to review branch
+        if: always()
+        env:
+          CREDENTIALS_OUTCOME: ${{ steps.credentials.outcome }}
+          INPUTS_OUTCOME: ${{ steps.inputs.outcome }}
+          PLAN_OUTCOME: ${{ steps.terraform_plan.outcome }}
+          ASSERT_OUTCOME: ${{ steps.exact_plan.outcome }}
         run: |
           set -euo pipefail
           mkdir -p docs/testing
-          cp runtime/evidence/scaleway-plan/PLAN_OK.txt docs/testing/SCW_PLAN_OK.txt
+          status=docs/testing/SCW_PLAN_STATUS.txt
           {
+            echo "authenticated_plan_only=true"
+            echo "resources_applied=false"
+            echo "credentials=${CREDENTIALS_OUTCOME:-not_run}"
+            echo "inputs=${INPUTS_OUTCOME:-not_run}"
+            echo "terraform_plan=${PLAN_OUTCOME:-not_run}"
+            echo "exact_resource_assertion=${ASSERT_OUTCOME:-not_run}"
             echo "source_commit=$GITHUB_SHA"
             echo "workflow_run=$GITHUB_RUN_ID"
-          } >> docs/testing/SCW_PLAN_OK.txt
+          } > "$status"
+          if [[ -f runtime/evidence/scaleway-plan/PLAN_OK.txt ]]; then
+            cp runtime/evidence/scaleway-plan/PLAN_OK.txt docs/testing/SCW_PLAN_OK.txt
+            {
+              echo "source_commit=$GITHUB_SHA"
+              echo "workflow_run=$GITHUB_RUN_ID"
+            } >> docs/testing/SCW_PLAN_OK.txt
+          else
+            rm -f docs/testing/SCW_PLAN_OK.txt
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- docs/testing/SCW_PLAN_OK.txt
+          git add -- docs/testing/SCW_PLAN_STATUS.txt
+          if [[ -f docs/testing/SCW_PLAN_OK.txt ]]; then
+            git add -- docs/testing/SCW_PLAN_OK.txt
+          else
+            git add -u -- docs/testing/SCW_PLAN_OK.txt || true
+          fi
           git diff --cached --quiet && exit 0
-          git commit -m "docs: record authenticated Scaleway plan [skip ci]"
+          git commit -m "docs: record authenticated Scaleway plan status [skip ci]"
           git push origin HEAD:agent/scaleway-wan
