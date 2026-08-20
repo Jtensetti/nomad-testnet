@@ -3,7 +3,9 @@ package airlock
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"
@@ -28,8 +30,6 @@ var (
 	ErrWindowClosed = errors.New("deposit window is closed for this epoch")
 	// ErrWindowOpen reports an attempt to seal before the scheduled time.
 	ErrWindowOpen = errors.New("deposit window has not closed yet")
-	// ErrEpochFull reports an epoch that has no remaining slots.
-	ErrEpochFull = errors.New("release epoch has no free slots")
 	// ErrDepositConflict reports two different payloads under one deposit ID.
 	ErrDepositConflict = errors.New("deposit ID already holds a different payload")
 	// ErrSealed reports an operation on an already-sealed epoch.
@@ -52,8 +52,14 @@ type Airlock struct {
 	opens     time.Time
 	closes    time.Time
 	deposits  map[[32]byte][DepositSize]byte
+	sessions  map[[32]byte]int
 	cover     []mix.WireCell
 	sealed    bool
+
+	// Operator-local drop accounting. It never reaches a depositor and must
+	// never be published: it is a count of how much publishing happened.
+	droppedFull    int
+	droppedSession int
 }
 
 // New opens the accumulator for one release epoch.
@@ -97,23 +103,62 @@ func New(schedule Schedule, committee mix.ThresholdCommittee, epoch uint64) (*Ai
 		schedule: schedule, committee: committee.PublicKey, epoch: epoch,
 		opens: opens, closes: closes,
 		deposits: make(map[[32]byte][DepositSize]byte, schedule.BatchSize),
+		sessions: make(map[[32]byte]int, schedule.BatchSize),
 		cover:    cover,
 	}, nil
 }
 
 func (airlock *Airlock) Epoch() uint64 { return airlock.epoch }
 
-// Deposit accepts one client-sealed fragment.
+// DepositID derives the slot name for one uplink session's sequence number.
 //
-// It is idempotent by deposit ID: re-offering the identical payload succeeds
-// without consuming a second slot, so a client that cannot tell whether its
-// uplink cell arrived can safely resend. Offering a different payload under
-// an ID already held is refused rather than overwriting, because whichever
-// one an overwrite dropped would be a publication silently lost.
+// The ID is derived here rather than taken from the caller. When callers named
+// their own slots, the 32-byte namespace was unauthenticated: anyone could
+// probe whether an ID was held -- which, for IDs derived from content or from
+// a publisher, is a "did X publish this epoch?" oracle -- and could
+// permanently block a publisher by squatting its ID, since a conflicting
+// payload is refused by design and there is no override.
+//
+// session is an opaque per-client value the entry operator holds from the
+// uplink key agreement; it is never the session key itself. Deriving from it
+// means one depositor cannot name another's slot at all.
+func DepositID(session [32]byte, sequence uint64) [32]byte {
+	h := sha256.New()
+	_, _ = h.Write([]byte("nomad-airlock-deposit-id-v1"))
+	_, _ = h.Write(session[:])
+	var counter [8]byte
+	binary.BigEndian.PutUint64(counter[:], sequence)
+	_, _ = h.Write(counter[:])
+	var id [32]byte
+	copy(id[:], h.Sum(nil))
+	return id
+}
+
+// Deposit accepts one client-sealed fragment for an uplink session's sequence
+// number.
+//
+// It is idempotent: re-offering the identical payload for the same sequence
+// succeeds without consuming a second slot, so a client that cannot tell
+// whether its uplink cell arrived -- and it cannot, because the uplink
+// carries no acknowledgement that would distinguish work from cover -- can
+// safely resend. A different payload for a sequence already held is refused
+// rather than overwriting, because whichever one an overwrite dropped would
+// be a publication silently lost. That refusal is safe to report: with
+// derived IDs a caller can only collide with its own earlier deposit.
+//
+// A full epoch is NOT reported. Returning a distinguishable "epoch full"
+// told any depositor the exact number of real deposits in the batch, which is
+// the one number the fixed batch size exists to hide, and probing for it
+// consumed every remaining slot. The deposit is dropped and counted
+// operator-locally instead: losing work is preferable to emitting a
+// private-dependent signal, and the client keeps emitting uplink cover either
+// way, so nothing on the wire changes.
 //
 // Deposit never triggers a release and never moves a deadline. Filling the
 // last slot is not an event.
-func (airlock *Airlock) Deposit(id [32]byte, payload [DepositSize]byte, now time.Time) error {
+func (airlock *Airlock) Deposit(session [32]byte, sequence uint64,
+	payload [DepositSize]byte, now time.Time) error {
+	id := DepositID(session, sequence)
 	airlock.mutex.Lock()
 	defer airlock.mutex.Unlock()
 	if airlock.sealed {
@@ -133,13 +178,17 @@ func (airlock *Airlock) Deposit(id [32]byte, payload [DepositSize]byte, now time
 		}
 		return nil
 	}
+	// Per-session capacity is checked before batch capacity, and both are
+	// silent: neither may tell a depositor anything about the epoch's
+	// occupancy. Capacity is public and fixed; growing the batch would
+	// publish the real-deposit count in the batch size itself.
+	if airlock.sessions[session] >= airlock.schedule.MaxDepositsPerSession {
+		airlock.droppedSession++
+		return nil
+	}
 	if len(airlock.deposits) >= airlock.schedule.BatchSize {
-		// Capacity is public and fixed. The alternative -- growing the batch
-		// -- would publish the number of real deposits in the batch size
-		// itself, so a refused deposit waits for the next epoch instead. The
-		// client keeps emitting uplink cover either way, so refusal is not
-		// visible on the wire.
-		return ErrEpochFull
+		airlock.droppedFull++
+		return nil
 	}
 	// A payload whose points do not decode is accepted here and kills Seal
 	// for the whole epoch, deterministically and forever: one malformed
@@ -152,6 +201,7 @@ func (airlock *Airlock) Deposit(id [32]byte, payload [DepositSize]byte, now time
 		return fmt.Errorf("%w: %v", ErrDepositMalformed, err)
 	}
 	airlock.deposits[id] = payload
+	airlock.sessions[session]++
 	return nil
 }
 
@@ -172,6 +222,15 @@ func (airlock *Airlock) Pending() int {
 	airlock.mutex.Lock()
 	defer airlock.mutex.Unlock()
 	return len(airlock.deposits)
+}
+
+// Dropped reports deposits refused for want of capacity, split by cause. Like
+// Pending it is operator-local and must never reach a depositor or a
+// published record.
+func (airlock *Airlock) Dropped() (batchFull int, sessionQuota int) {
+	airlock.mutex.Lock()
+	defer airlock.mutex.Unlock()
+	return airlock.droppedFull, airlock.droppedSession
 }
 
 // Sealed reports whether this epoch's batch has been produced.

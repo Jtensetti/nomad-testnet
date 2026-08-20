@@ -42,6 +42,13 @@ type Schedule struct {
 	// BatchSize is the fixed number of slots mixed in every release epoch,
 	// real deposits and cover together.
 	BatchSize int
+	// MaxDepositsPerSession bounds how many slots one uplink session may
+	// hold in an epoch. Without a per-session bound, one client fills the
+	// whole batch with cheap encryptions and denies the epoch to everyone
+	// else at no cost. It does not solve Sybil -- an attacker with many
+	// authenticated sessions still competes for slots -- which is an
+	// admission question (G-05..G-09), not one this boundary can answer.
+	MaxDepositsPerSession int
 }
 
 // ErrScheduleInvalid reports a schedule that could not be used as public
@@ -63,6 +70,10 @@ func (schedule Schedule) Validate() error {
 	// recommendation; deployments carry a far larger BatchSize.
 	if schedule.BatchSize < 2 {
 		return fmt.Errorf("%w: batch size must be at least 2", ErrScheduleInvalid)
+	}
+	if schedule.MaxDepositsPerSession < 1 || schedule.MaxDepositsPerSession > schedule.BatchSize {
+		return fmt.Errorf("%w: per-session deposit bound must be between 1 and the batch size",
+			ErrScheduleInvalid)
 	}
 	return nil
 }

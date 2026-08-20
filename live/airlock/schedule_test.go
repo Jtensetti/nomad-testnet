@@ -8,10 +8,11 @@ import (
 
 func testSchedule() Schedule {
 	return Schedule{
-		Genesis:       time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		Period:        10 * time.Minute,
-		DepositCutoff: 2 * time.Minute,
-		BatchSize:     8,
+		Genesis:               time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Period:                10 * time.Minute,
+		DepositCutoff:         2 * time.Minute,
+		BatchSize:             8,
+		MaxDepositsPerSession: 8,
 	}
 }
 
@@ -30,6 +31,8 @@ func TestScheduleRejectsPolicyThatCouldNotBePublic(t *testing.T) {
 		{"cutoff exceeds period", func(s *Schedule) { s.DepositCutoff = s.Period + time.Second }, "cutoff"},
 		{"batch of one", func(s *Schedule) { s.BatchSize = 1 }, "batch size"},
 		{"batch of zero", func(s *Schedule) { s.BatchSize = 0 }, "batch size"},
+		{"no per-session bound", func(s *Schedule) { s.MaxDepositsPerSession = 0 }, "per-session"},
+		{"per-session bound above the batch", func(s *Schedule) { s.MaxDepositsPerSession = s.BatchSize + 1 }, "per-session"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

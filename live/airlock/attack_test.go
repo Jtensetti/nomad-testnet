@@ -23,12 +23,13 @@ func TestSealedPaddingDoesNotIdentifyCoverColumns(t *testing.T) {
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()
 	schedule.BatchSize = 8
+	schedule.MaxDepositsPerSession = 8
 
 	for _, count := range []int{0, 1, 3, 7, 8} {
 		airlock, opens, closes := openAirlock(t, schedule, committee)
 		for index := 0; index < count; index++ {
-			id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
-			if err := airlock.Deposit(id, payload, opens.Add(time.Minute)); err != nil {
+			session, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
+			if err := airlock.Deposit(session, 0, payload, opens.Add(time.Minute)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -65,12 +66,13 @@ func TestSealedBatchIsUniformAcrossItsWholeWireForm(t *testing.T) {
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()
 	schedule.BatchSize = 6
+	schedule.MaxDepositsPerSession = 6
 
 	seal := func(count int) []mix.WireCell {
 		airlock, opens, closes := openAirlock(t, schedule, committee)
 		for index := 0; index < count; index++ {
-			id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
-			if err := airlock.Deposit(id, payload, opens.Add(time.Minute)); err != nil {
+			session, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
+			if err := airlock.Deposit(session, 0, payload, opens.Add(time.Minute)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -113,12 +115,13 @@ func TestSealDurationDoesNotDependOnOccupancy(t *testing.T) {
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()
 	schedule.BatchSize = 16
+	schedule.MaxDepositsPerSession = 16
 
 	measure := func(count int) time.Duration {
 		airlock, opens, closes := openAirlock(t, schedule, committee)
 		for index := 0; index < count; index++ {
-			id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
-			if err := airlock.Deposit(id, payload, opens.Add(time.Minute)); err != nil {
+			session, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
+			if err := airlock.Deposit(session, 0, payload, opens.Add(time.Minute)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -158,22 +161,23 @@ func TestConcurrentDepositIsNotBlockedByCoverGeneration(t *testing.T) {
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()
 	schedule.BatchSize = 16
+	schedule.MaxDepositsPerSession = 16
 
 	blockedFor := func(count int) time.Duration {
 		airlock, opens, closes := openAirlock(t, schedule, committee)
 		for index := 0; index < count; index++ {
-			id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
-			if err := airlock.Deposit(id, payload, opens.Add(time.Minute)); err != nil {
+			session, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
+			if err := airlock.Deposit(session, 0, payload, opens.Add(time.Minute)); err != nil {
 				t.Fatal(err)
 			}
 		}
-		id, payload, _ := realDeposit(t, committee.PublicKey, 200)
+		session, payload, _ := realDeposit(t, committee.PublicKey, 200)
 		done := make(chan time.Duration, 1)
 		go func() {
 			start := time.Now()
 			// After the window closes this is refused, but only after
 			// acquiring the lock, which is what makes the wait observable.
-			_ = airlock.Deposit(id, payload, closes.Add(time.Second))
+			_ = airlock.Deposit(session, 0, payload, closes.Add(time.Second))
 			done <- time.Since(start)
 		}()
 		if _, err := airlock.Seal(closes); err != nil {
@@ -201,15 +205,15 @@ func TestMalformedDepositIsRefusedBeforeItTakesASlot(t *testing.T) {
 
 	// Random bytes: roughly half of all 32-byte strings are not curve points,
 	// so 36 of them are malformed with overwhelming probability.
-	var id [32]byte
+	var session [32]byte
 	var payload [DepositSize]byte
-	if _, err := rand.Read(id[:]); err != nil {
+	if _, err := rand.Read(session[:]); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := rand.Read(payload[:]); err != nil {
 		t.Fatal(err)
 	}
-	if err := airlock.Deposit(id, payload, inside); !errors.Is(err, ErrDepositMalformed) {
+	if err := airlock.Deposit(session, 0, payload, inside); !errors.Is(err, ErrDepositMalformed) {
 		t.Fatalf("a malformed deposit gave %v, want ErrDepositMalformed", err)
 	}
 	if pending := airlock.Pending(); pending != 0 {
@@ -217,12 +221,12 @@ func TestMalformedDepositIsRefusedBeforeItTakesASlot(t *testing.T) {
 	}
 	// An all-zero payload is not a valid point either.
 	var zero [DepositSize]byte
-	if err := airlock.Deposit(id, zero, inside); !errors.Is(err, ErrDepositMalformed) {
+	if err := airlock.Deposit(session, 0, zero, inside); !errors.Is(err, ErrDepositMalformed) {
 		t.Errorf("an all-zero deposit gave %v, want ErrDepositMalformed", err)
 	}
 	// The epoch still seals for everyone else.
 	good, goodPayload, _ := realDeposit(t, committee.PublicKey, 1)
-	if err := airlock.Deposit(good, goodPayload, inside); err != nil {
+	if err := airlock.Deposit(good, 0, goodPayload, inside); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := airlock.Seal(closes); err != nil {
@@ -327,18 +331,18 @@ func TestConstantTimeIdempotencyPreservesBehaviour(t *testing.T) {
 	airlock, opens, _ := openAirlock(t, schedule, committee)
 	inside := opens.Add(time.Minute)
 
-	id, payload, _ := realDeposit(t, committee.PublicKey, 1)
-	if err := airlock.Deposit(id, payload, inside); err != nil {
+	session, payload, _ := realDeposit(t, committee.PublicKey, 1)
+	if err := airlock.Deposit(session, 0, payload, inside); err != nil {
 		t.Fatal(err)
 	}
-	if err := airlock.Deposit(id, payload, inside); err != nil {
+	if err := airlock.Deposit(session, 0, payload, inside); err != nil {
 		t.Errorf("the identical payload was refused: %v", err)
 	}
 	// Differing in the first byte and in the last must both conflict.
 	for _, position := range []int{0, DepositSize / 2, DepositSize - 1} {
 		altered := payload
 		altered[position] ^= 0x01
-		if err := airlock.Deposit(id, altered, inside); !errors.Is(err, ErrDepositConflict) {
+		if err := airlock.Deposit(session, 0, altered, inside); !errors.Is(err, ErrDepositConflict) {
 			t.Errorf("a payload differing at byte %d gave %v, want ErrDepositConflict",
 				position, err)
 		}

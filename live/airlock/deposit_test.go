@@ -65,13 +65,13 @@ func TestDepositIsIdempotentAndRefusesConflict(t *testing.T) {
 	airlock, opens, _ := openAirlock(t, schedule, committee)
 	inside := opens.Add(time.Minute)
 
-	id, payload, _ := realDeposit(t, committee.PublicKey, 1)
-	if err := airlock.Deposit(id, payload, inside); err != nil {
+	session, payload, _ := realDeposit(t, committee.PublicKey, 1)
+	if err := airlock.Deposit(session, 0, payload, inside); err != nil {
 		t.Fatal(err)
 	}
 	// A client that cannot tell whether its uplink cell arrived resends.
 	for attempt := 0; attempt < 3; attempt++ {
-		if err := airlock.Deposit(id, payload, inside); err != nil {
+		if err := airlock.Deposit(session, 0, payload, inside); err != nil {
 			t.Fatalf("resend %d rejected: %v", attempt, err)
 		}
 	}
@@ -80,7 +80,7 @@ func TestDepositIsIdempotentAndRefusesConflict(t *testing.T) {
 	}
 
 	_, other, _ := realDeposit(t, committee.PublicKey, 2)
-	if err := airlock.Deposit(id, other, inside); !errors.Is(err, ErrDepositConflict) {
+	if err := airlock.Deposit(session, 0, other, inside); !errors.Is(err, ErrDepositConflict) {
 		t.Errorf("a different payload under a held ID gave %v, want ErrDepositConflict", err)
 	}
 	if pending := airlock.Pending(); pending != 1 {
@@ -93,16 +93,16 @@ func TestDepositRefusedOutsideItsWindow(t *testing.T) {
 	schedule := testSchedule()
 	airlock, opens, closes := openAirlock(t, schedule, committee)
 
-	id, payload, _ := realDeposit(t, committee.PublicKey, 1)
-	if err := airlock.Deposit(id, payload, opens.Add(-time.Nanosecond)); !errors.Is(err, ErrWindowClosed) {
+	session, payload, _ := realDeposit(t, committee.PublicKey, 1)
+	if err := airlock.Deposit(session, 0, payload, opens.Add(-time.Nanosecond)); !errors.Is(err, ErrWindowClosed) {
 		t.Errorf("a deposit before the window gave %v", err)
 	}
 	// The closing instant is outside the window: the boundary belongs to the
 	// mix, not to depositors.
-	if err := airlock.Deposit(id, payload, closes); !errors.Is(err, ErrWindowClosed) {
+	if err := airlock.Deposit(session, 0, payload, closes); !errors.Is(err, ErrWindowClosed) {
 		t.Errorf("a deposit at the closing instant gave %v", err)
 	}
-	if err := airlock.Deposit(id, payload, closes.Add(time.Second)); !errors.Is(err, ErrWindowClosed) {
+	if err := airlock.Deposit(session, 0, payload, closes.Add(time.Second)); !errors.Is(err, ErrWindowClosed) {
 		t.Errorf("a deposit after the window gave %v", err)
 	}
 	if pending := airlock.Pending(); pending != 0 {
@@ -110,24 +110,115 @@ func TestDepositRefusedOutsideItsWindow(t *testing.T) {
 	}
 }
 
-func TestFullEpochRefusesRatherThanGrowing(t *testing.T) {
+// A full epoch drops silently. Returning a distinguishable "epoch full" told
+// any depositor the exact number of real deposits in the batch -- the one
+// number the fixed batch size exists to hide -- and probing for it consumed
+// every remaining slot.
+func TestFullEpochDropsSilentlyRatherThanGrowingOrTelling(t *testing.T) {
+	committee, _ := testCommittee(t)
+	schedule := testSchedule()
+	schedule.MaxDepositsPerSession = schedule.BatchSize
+	airlock, opens, _ := openAirlock(t, schedule, committee)
+	inside := opens.Add(time.Minute)
+
+	var session [32]byte
+	session[0] = 9
+	for index := 0; index < schedule.BatchSize; index++ {
+		_, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
+		if err := airlock.Deposit(session, uint64(index), payload, inside); err != nil {
+			t.Fatalf("deposit %d: %v", index, err)
+		}
+	}
+	// The attacker probes past capacity. Every outcome must be identical to a
+	// successful deposit from its point of view.
+	for probe := 0; probe < 5; probe++ {
+		_, payload, _ := realDeposit(t, committee.PublicKey, byte(100+probe))
+		var attacker [32]byte
+		attacker[0] = byte(probe + 20)
+		if err := airlock.Deposit(attacker, 0, payload, inside); err != nil {
+			t.Errorf("a deposit past capacity reported %v; the outcome must be "+
+				"indistinguishable from acceptance", err)
+		}
+	}
+	if pending := airlock.Pending(); pending != schedule.BatchSize {
+		t.Errorf("capacity grew to %d, want %d", pending, schedule.BatchSize)
+	}
+	if full, _ := airlock.Dropped(); full != 5 {
+		t.Errorf("operator-local accounting recorded %d full-batch drops, want 5", full)
+	}
+}
+
+// One session must not be able to take the whole batch.
+func TestOneSessionCannotOccupyTheWholeBatch(t *testing.T) {
+	committee, _ := testCommittee(t)
+	schedule := testSchedule()
+	schedule.BatchSize = 8
+	schedule.MaxDepositsPerSession = 2
+	airlock, opens, _ := openAirlock(t, schedule, committee)
+	inside := opens.Add(time.Minute)
+
+	var greedy [32]byte
+	greedy[0] = 1
+	for index := 0; index < schedule.BatchSize; index++ {
+		_, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
+		if err := airlock.Deposit(greedy, uint64(index), payload, inside); err != nil {
+			t.Errorf("a quota drop reported %v; it must be silent", err)
+		}
+	}
+	if pending := airlock.Pending(); pending != schedule.MaxDepositsPerSession {
+		t.Errorf("one session took %d slots, want at most %d",
+			pending, schedule.MaxDepositsPerSession)
+	}
+	if _, quota := airlock.Dropped(); quota != schedule.BatchSize-schedule.MaxDepositsPerSession {
+		t.Errorf("recorded %d quota drops, want %d",
+			quota, schedule.BatchSize-schedule.MaxDepositsPerSession)
+	}
+	// Another session is unaffected.
+	var other [32]byte
+	other[0] = 2
+	_, payload, _ := realDeposit(t, committee.PublicKey, 50)
+	if err := airlock.Deposit(other, 0, payload, inside); err != nil {
+		t.Fatal(err)
+	}
+	if pending := airlock.Pending(); pending != schedule.MaxDepositsPerSession+1 {
+		t.Errorf("a second session was blocked by the first: %d slots held", pending)
+	}
+}
+
+// A depositor can only name its own slots, so it cannot probe whether another
+// publisher deposited, nor squat their ID.
+func TestDepositIDsAreScopedToTheirSession(t *testing.T) {
+	var alice, mallory [32]byte
+	alice[0], mallory[0] = 1, 2
+	if DepositID(alice, 7) == DepositID(mallory, 7) {
+		t.Error("two sessions derive the same deposit ID for the same sequence")
+	}
+	if DepositID(alice, 7) == DepositID(alice, 8) {
+		t.Error("one session derives the same deposit ID for two sequences")
+	}
+	if DepositID(alice, 7) != DepositID(alice, 7) {
+		t.Error("derivation is not deterministic")
+	}
+
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()
 	airlock, opens, _ := openAirlock(t, schedule, committee)
 	inside := opens.Add(time.Minute)
 
-	for index := 0; index < schedule.BatchSize; index++ {
-		id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
-		if err := airlock.Deposit(id, payload, inside); err != nil {
-			t.Fatalf("deposit %d: %v", index, err)
+	_, payload, _ := realDeposit(t, committee.PublicKey, 1)
+	if err := airlock.Deposit(alice, 7, payload, inside); err != nil {
+		t.Fatal(err)
+	}
+	// Mallory cannot collide with Alice's slot whatever sequence it uses.
+	_, other, _ := realDeposit(t, committee.PublicKey, 2)
+	for sequence := uint64(0); sequence < 16; sequence++ {
+		if err := airlock.Deposit(mallory, sequence, other, inside); err != nil {
+			t.Fatalf("mallory's own deposit at sequence %d was refused: %v", sequence, err)
 		}
 	}
-	id, payload, _ := realDeposit(t, committee.PublicKey, 99)
-	if err := airlock.Deposit(id, payload, inside); !errors.Is(err, ErrEpochFull) {
-		t.Errorf("deposit past capacity gave %v, want ErrEpochFull", err)
-	}
-	if pending := airlock.Pending(); pending != schedule.BatchSize {
-		t.Errorf("capacity grew to %d, want %d", pending, schedule.BatchSize)
+	// Alice's slot still holds Alice's payload.
+	if held, present := airlock.deposits[DepositID(alice, 7)]; !present || held != payload {
+		t.Error("another session overwrote or blocked Alice's slot")
 	}
 }
 
@@ -139,8 +230,8 @@ func TestSealRefusesBeforeTheScheduledBoundary(t *testing.T) {
 	airlock, opens, closes := openAirlock(t, schedule, committee)
 
 	for index := 0; index < schedule.BatchSize; index++ {
-		id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
-		if err := airlock.Deposit(id, payload, opens.Add(time.Second)); err != nil {
+		session, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
+		if err := airlock.Deposit(session, 0, payload, opens.Add(time.Second)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -156,8 +247,8 @@ func TestSealRefusesBeforeTheScheduledBoundary(t *testing.T) {
 	if _, err := airlock.Seal(closes); !errors.Is(err, ErrSealed) {
 		t.Errorf("sealed twice with %v", err)
 	}
-	id, payload, _ := realDeposit(t, committee.PublicKey, 42)
-	if err := airlock.Deposit(id, payload, closes); !errors.Is(err, ErrSealed) {
+	session, payload, _ := realDeposit(t, committee.PublicKey, 42)
+	if err := airlock.Deposit(session, 0, payload, closes); !errors.Is(err, ErrSealed) {
 		t.Errorf("accepted a deposit after sealing: %v", err)
 	}
 }
@@ -173,8 +264,8 @@ func TestSealedBatchSizeAndShapeDoNotDependOnDepositCount(t *testing.T) {
 	for _, count := range []int{0, 1, schedule.BatchSize - 1, schedule.BatchSize} {
 		airlock, opens, closes := openAirlock(t, schedule, committee)
 		for index := 0; index < count; index++ {
-			id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
-			if err := airlock.Deposit(id, payload, opens.Add(time.Minute)); err != nil {
+			session, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
+			if err := airlock.Deposit(session, 0, payload, opens.Add(time.Minute)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -239,12 +330,13 @@ func TestSealBoundaryIsIdenticalAtEveryOccupancy(t *testing.T) {
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()
 	schedule.BatchSize = 4
+	schedule.MaxDepositsPerSession = 4
 
 	for count := 0; count <= schedule.BatchSize; count++ {
 		airlock, opens, closes := openAirlock(t, schedule, committee)
 		for index := 0; index < count; index++ {
-			id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
-			if err := airlock.Deposit(id, payload, opens.Add(time.Second)); err != nil {
+			session, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
+			if err := airlock.Deposit(session, 0, payload, opens.Add(time.Second)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -267,8 +359,8 @@ func TestRestartRederivesTheSameWindowAndAcceptsTheResend(t *testing.T) {
 	before, opens, closes := openAirlock(t, schedule, committee)
 	inside := opens.Add(time.Minute)
 
-	id, payload, _ := realDeposit(t, committee.PublicKey, 1)
-	if err := before.Deposit(id, payload, inside); err != nil {
+	session, payload, _ := realDeposit(t, committee.PublicKey, 1)
+	if err := before.Deposit(session, 0, payload, inside); err != nil {
 		t.Fatal(err)
 	}
 
@@ -284,10 +376,10 @@ func TestRestartRederivesTheSameWindowAndAcceptsTheResend(t *testing.T) {
 	if pending := after.Pending(); pending != 0 {
 		t.Errorf("a restarted accumulator held %d deposits", pending)
 	}
-	if err := after.Deposit(id, payload, inside.Add(time.Second)); err != nil {
+	if err := after.Deposit(session, 0, payload, inside.Add(time.Second)); err != nil {
 		t.Errorf("the client's resend was rejected after a restart: %v", err)
 	}
-	if err := after.Deposit(id, payload, inside.Add(2*time.Second)); err != nil {
+	if err := after.Deposit(session, 0, payload, inside.Add(2*time.Second)); err != nil {
 		t.Errorf("a second resend was rejected: %v", err)
 	}
 	if pending := after.Pending(); pending != 1 {
@@ -303,6 +395,7 @@ func TestSealedPositionDoesNotEncodeArrivalOrder(t *testing.T) {
 	committee, secrets := testCommittee(t)
 	schedule := testSchedule()
 	schedule.BatchSize = 4
+	schedule.MaxDepositsPerSession = 4
 
 	type deposit struct {
 		id      [32]byte
@@ -310,8 +403,8 @@ func TestSealedPositionDoesNotEncodeArrivalOrder(t *testing.T) {
 	}
 	deposits := make([]deposit, 0, schedule.BatchSize)
 	for index := 0; index < schedule.BatchSize; index++ {
-		id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
-		deposits = append(deposits, deposit{id: id, payload: payload})
+		session, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
+		deposits = append(deposits, deposit{id: session, payload: payload})
 	}
 
 	// Marker 1 always arrives first. If placement encoded arrival, it would
@@ -322,7 +415,7 @@ func TestSealedPositionDoesNotEncodeArrivalOrder(t *testing.T) {
 		airlock, opens, closes := openAirlock(t, schedule, committee)
 		for step, held := range deposits {
 			at := opens.Add(time.Duration(step+1) * time.Second)
-			if err := airlock.Deposit(held.id, held.payload, at); err != nil {
+			if err := airlock.Deposit(held.id, 0, held.payload, at); err != nil {
 				t.Fatal(err)
 			}
 		}

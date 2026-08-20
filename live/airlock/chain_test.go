@@ -32,8 +32,8 @@ func sealedEpoch(t *testing.T, committee mix.ThresholdCommittee, schedule Schedu
 	t.Helper()
 	airlock, opens, closes := openAirlock(t, schedule, committee)
 	for index := 0; index < schedule.BatchSize; index++ {
-		id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
-		if err := airlock.Deposit(id, payload, opens.Add(time.Minute)); err != nil {
+		session, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
+		if err := airlock.Deposit(session, 0, payload, opens.Add(time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -89,12 +89,13 @@ func TestChainRoundTripsAndReleasesOnlyRealFragments(t *testing.T) {
 	mixers, identities := mixerIdentities(t, len(committee.Members))
 	schedule := testSchedule()
 	schedule.BatchSize = 6
+	schedule.MaxDepositsPerSession = 6
 
 	airlock, opens, closes := openAirlock(t, schedule, committee)
 	wanted := map[byte]struct{}{}
 	for index := 0; index < 2; index++ {
-		id, payload, fragment := realDeposit(t, committee.PublicKey, byte(index+1))
-		if err := airlock.Deposit(id, payload, opens.Add(time.Minute)); err != nil {
+		session, payload, fragment := realDeposit(t, committee.PublicKey, byte(index+1))
+		if err := airlock.Deposit(session, 0, payload, opens.Add(time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 		wanted[fragment[0]] = struct{}{}
@@ -139,6 +140,7 @@ func TestAForgedChainFromANonMemberIsRefused(t *testing.T) {
 	mixers, _ := mixerIdentities(t, len(committee.Members))
 	schedule := testSchedule()
 	schedule.BatchSize = 4
+	schedule.MaxDepositsPerSession = 4
 	sealed := sealedEpoch(t, committee, schedule)
 
 	// The forger holds one key of its own and uses it for every round.
@@ -179,6 +181,7 @@ func TestARoundThatDoesNotRerandomiseIsRefused(t *testing.T) {
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()
 	schedule.BatchSize = 4
+	schedule.MaxDepositsPerSession = 4
 	sealed := sealedEpoch(t, committee, schedule)
 
 	// A pure permutation: the same ciphertexts, reordered.
@@ -213,6 +216,7 @@ func TestAChainDoesNotReplayIntoAnotherEpochOrCommittee(t *testing.T) {
 	mixers, identities := mixerIdentities(t, len(committee.Members))
 	schedule := testSchedule()
 	schedule.BatchSize = 4
+	schedule.MaxDepositsPerSession = 4
 	sealed := sealedEpoch(t, committee, schedule)
 	rounds, _ := runChain(t, committee, identities, sealed)
 
@@ -247,6 +251,7 @@ func TestChainFailsClosedOnEveryDeviation(t *testing.T) {
 	mixers, identities := mixerIdentities(t, len(committee.Members))
 	schedule := testSchedule()
 	schedule.BatchSize = 4
+	schedule.MaxDepositsPerSession = 4
 	sealed := sealedEpoch(t, committee, schedule)
 	rounds, _ := runChain(t, committee, identities, sealed)
 
@@ -359,6 +364,7 @@ func TestPermutationIsUniform(t *testing.T) {
 	_, identities := mixerIdentities(t, len(committee.Members))
 	schedule := testSchedule()
 	schedule.BatchSize = 4
+	schedule.MaxDepositsPerSession = 4
 
 	const trials = 24
 	// landings[i][j] counts how often the deposit marked i+1 came out at
@@ -422,11 +428,12 @@ func TestAPoisonedColumnDoesNotCensorTheEpoch(t *testing.T) {
 	mixers, identities := mixerIdentities(t, len(committee.Members))
 	schedule := testSchedule()
 	schedule.BatchSize = 4
+	schedule.MaxDepositsPerSession = 4
 
 	airlock, opens, closes := openAirlock(t, schedule, committee)
 	for index := 0; index < 2; index++ {
-		id, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
-		if err := airlock.Deposit(id, payload, opens.Add(time.Minute)); err != nil {
+		session, payload, _ := realDeposit(t, committee.PublicKey, byte(index+1))
+		if err := airlock.Deposit(session, 0, payload, opens.Add(time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -443,7 +450,7 @@ func TestAPoisonedColumnDoesNotCensorTheEpoch(t *testing.T) {
 	if _, err := rand.Read(poisonID[:]); err != nil {
 		t.Fatal(err)
 	}
-	if err := airlock.Deposit(poisonID, poison, opens.Add(time.Minute)); err != nil {
+	if err := airlock.Deposit(poisonID, 0, poison, opens.Add(time.Minute)); err != nil {
 		t.Fatalf("the poisoned deposit was refused at deposit time, so this test no longer "+
 			"exercises release-time tolerance: %v", err)
 	}
