@@ -136,9 +136,20 @@ jobs:
           set -euo pipefail
           mkdir -p docs/testing
           status=docs/testing/SCW_PLAN_STATUS.txt
+          present() {
+            if [[ -n "${!1:-}" ]]; then
+              printf true
+            else
+              printf false
+            fi
+          }
           {
             echo "authenticated_plan_only=true"
             echo "resources_applied=false"
+            echo "access_key_present=$(present SCW_ACCESS_KEY)"
+            echo "secret_key_present=$(present SCW_SECRET_KEY)"
+            echo "project_id_present=$(present SCW_PROJECT_ID)"
+            echo "organization_id_present=$(present SCW_ORGANIZATION_ID)"
             echo "credentials=${CREDENTIALS_OUTCOME:-not_run}"
             echo "inputs=${INPUTS_OUTCOME:-not_run}"
             echo "terraform_plan=${PLAN_OUTCOME:-not_run}"
