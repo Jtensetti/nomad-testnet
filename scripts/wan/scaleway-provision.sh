@@ -19,7 +19,7 @@ expected_interval_ms=${EXPECTED_INTERVAL_MS:-50}
 for command in jq ssh scp openssl sha256sum; do
   command -v "$command" >/dev/null || { echo "missing required command: $command" >&2; exit 1; }
 done
-for binary in nomad-operator nomad-topology nomad-dkg nomad-node; do
+for binary in nomad-operator nomad-topology nomad-dkg nomad-node nomad-shaper; do
   [[ -x "$bin_dir/$binary" ]] || { echo "missing executable $bin_dir/$binary" >&2; exit 1; }
 done
 [[ -s "$nodes_json" ]] || { echo "nodes JSON missing: $nodes_json" >&2; exit 1; }
@@ -97,7 +97,7 @@ done
 # generated on each host and never copied back to the coordinator.
 for operator in "${operators[@]}"; do
   remote "$operator" 'rm -rf /tmp/nomad-bin && mkdir -m 0700 /tmp/nomad-bin'
-  for binary in nomad-operator nomad-dkg nomad-node; do
+  for binary in nomad-operator nomad-dkg nomad-node nomad-shaper; do
     copy_to "$operator" "$bin_dir/$binary" "/tmp/nomad-bin/$binary"
   done
   remote "$operator" 'sudo install -o root -g root -m 0755 /tmp/nomad-bin/* /usr/local/bin/ && rm -rf /tmp/nomad-bin'
@@ -258,14 +258,15 @@ for operator in "${operators[@]}"; do
 done
 printf '%s  dkg-certificate.json\n' "$first_digest" > "$evidence_dir/dkg/CERTIFICATE_SHA256"
 
-# Start one fail-closed node per region. Automatic restart is deliberately
-# disabled: a cadence failure should remain visible in evidence rather than be
-# hidden behind an operational retry loop.
+# Production WAN timing uses two OS processes. nomad-shaper owns the public
+# fixed-rate scheduler/sequence/UDP egress. nomad-node owns receive/cache/relay
+# production and gets exactly one nonblocking Unix-datagram enqueue attempt per
+# work opportunity. Shaper starts first so node can only attach to an existing
+# local timing boundary.
 for operator in "${operators[@]}"; do
-  ip=${ipv4[$operator]}
-  remote "$operator" "sudo tee /etc/systemd/system/nomad-node.service >/dev/null <<'UNIT'
+  remote "$operator" "sudo tee /etc/systemd/system/nomad-shaper.service >/dev/null <<'UNIT'
 [Unit]
-Description=Nomad fixed-cadence WAN lab node
+Description=Nomad fixed-cadence WAN shaper
 After=network-online.target
 Wants=network-online.target
 
@@ -273,7 +274,9 @@ Wants=network-online.target
 Type=simple
 User=nomad
 Group=nomad
-ExecStart=/usr/local/bin/nomad-node --topology /etc/nomad/topology.json --authority-key /etc/nomad/authority.pub --secrets /etc/nomad/private/operator-secret.json --listen :4200 --cache /var/lib/nomad/raw --state /var/lib/nomad/sequence/state.json --health /var/lib/nomad/health.json
+RuntimeDirectory=nomad
+RuntimeDirectoryMode=0700
+ExecStart=/usr/local/bin/nomad-shaper --topology /etc/nomad/topology.json --authority-key /etc/nomad/authority.pub --secrets /etc/nomad/private/operator-secret.json --bind :0 --work-socket /run/nomad/shaper.sock --state /var/lib/nomad/sequence/state --stats-out /var/lib/nomad/shaper-stats.json
 Restart=no
 NoNewPrivileges=true
 PrivateTmp=true
@@ -285,26 +288,71 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
-ReadWritePaths=/var/lib/nomad /var/log/nomad
-RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths=/run/nomad /var/lib/nomad /var/log/nomad
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo tee /etc/systemd/system/nomad-node.service >/dev/null <<'UNIT'
+[Unit]
+Description=Nomad WAN receive/cache/relay node
+After=network-online.target nomad-shaper.service
+Wants=network-online.target
+Requires=nomad-shaper.service
+
+[Service]
+Type=simple
+User=nomad
+Group=nomad
+ExecStart=/usr/local/bin/nomad-node --topology /etc/nomad/topology.json --authority-key /etc/nomad/authority.pub --secrets /etc/nomad/private/operator-secret.json --listen :4200 --cache /var/lib/nomad/raw --relay-socket /run/nomad/shaper.sock --health /var/lib/nomad/health.json
+Restart=no
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/run/nomad /var/lib/nomad /var/log/nomad
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]
 WantedBy=multi-user.target
 UNIT
 sudo systemctl daemon-reload
-sudo systemctl disable --now nomad-node.service >/dev/null 2>&1 || true
-sudo rm -f /var/lib/nomad/evidence/$operator.pcap
+sudo systemctl disable --now nomad-node.service nomad-shaper.service >/dev/null 2>&1 || true
+sudo rm -f /var/lib/nomad/evidence/$operator.pcap /var/lib/nomad/shaper-stats.json
 sudo sh -c 'nohup timeout ${capture_seconds}s tcpdump -i any -U -nn -s 0 -w /var/lib/nomad/evidence/$operator.pcap \"udp port 4200\" >/var/log/nomad/tcpdump.log 2>&1 &'
+sudo systemctl start nomad-shaper.service
+for attempt in \$(seq 1 50); do
+  sudo test -S /run/nomad/shaper.sock && break
+  sleep 0.1
+done
+sudo test -S /run/nomad/shaper.sock
 sudo systemctl start nomad-node.service"
 done
 
 sleep $((capture_seconds + 5))
 
+# Stop cleanly after the capture. The shaper writes final local stats on SIGTERM;
+# keeping services alive after the measurement would add cost without improving
+# this baseline evidence run.
+for operator in "${operators[@]}"; do
+  remote "$operator" 'sudo systemctl stop nomad-node.service nomad-shaper.service || true'
+done
+
 for operator in "${operators[@]}"; do
   collect_root_file "$operator" "/var/lib/nomad/evidence/$operator.pcap" "$evidence_dir/pcap/$operator.pcap"
   remote "$operator" 'sudo cat /var/lib/nomad/health.json || true' > "$evidence_dir/health/$operator.json" || true
+  remote "$operator" 'sudo cat /var/lib/nomad/shaper-stats.json || true' > "$evidence_dir/health/$operator-shaper.json" || true
   remote "$operator" 'sudo systemctl status --no-pager --full nomad-node.service || true' > "$evidence_dir/logs/$operator-node-status.txt" || true
   remote "$operator" 'sudo journalctl -u nomad-node.service --no-pager --since "10 minutes ago" || true' > "$evidence_dir/logs/$operator-node-journal.txt" || true
+  remote "$operator" 'sudo systemctl status --no-pager --full nomad-shaper.service || true' > "$evidence_dir/logs/$operator-shaper-status.txt" || true
+  remote "$operator" 'sudo journalctl -u nomad-shaper.service --no-pager --since "10 minutes ago" || true' > "$evidence_dir/logs/$operator-shaper-journal.txt" || true
   remote "$operator" 'ip -j address show; printf "\n--- routes ---\n"; ip route; printf "\n--- routes6 ---\n"; ip -6 route' > "$evidence_dir/logs/$operator-network.txt" || true
 done
 
@@ -318,13 +366,15 @@ operators=3
 regions=fr-par-1,nl-ams-1,pl-waw-2
 administrative_domains=1
 production_independence=false
+transport_boundary=separate-nomad-shaper-process
 capture_seconds=$capture_seconds
 expected_cell_interval_ms=$expected_interval_ms
 
 This evidence demonstrates real public-WAN emission and arrival cadence for one
-administrator across three Scaleway regions. It does NOT demonstrate independent
-operator governance, anonymous publication, a 72-hour campaign, or an external
-security assessment.
+administrator across three Scaleway regions using a dedicated fixed-rate shaper
+process separated from receive/cache/relay production by bounded one-way local
+IPC. It does NOT demonstrate independent operator governance, anonymous
+publication, a 72-hour campaign, or an external security assessment.
 BOUNDARY
 
 cp "$nodes_json" "$evidence_dir/nodes.json"
@@ -337,5 +387,5 @@ cp "$nodes_json" "$evidence_dir/nodes.json"
 # persisted in evidence. They are ephemeral lab coordination material.
 rm -f "$work_dir/dkg-ca.key" "$work_dir/authority/authority.key"
 
-printf 'Nomad WAN lab is live. Evidence: %s\n' "$evidence_dir"
-printf 'IMPORTANT: run the destroy workflow when finished; powered-off flexible IPv4 addresses remain billable.\n'
+printf 'Nomad WAN baseline campaign complete. Evidence: %s\n' "$evidence_dir"
+printf 'IMPORTANT: destroy the Terraform lab when no immediate follow-up campaign needs these hosts; powered-off routed IPv4 addresses remain billable.\n'
