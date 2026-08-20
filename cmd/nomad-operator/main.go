@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
@@ -358,11 +356,3 @@ func syncOutputDirectory(path string) error {
 	defer func() { _ = directory.Close() }()
 	return directory.Sync()
 }
-
-// Keep strconv and strings in the import set checked by the compiler if the
-// flag/help surface changes during rebases; both are intentionally referenced
-// by this file's production path checks.
-var (
-	_ = strconv.IntSize
-	_ = strings.Compare
-)
