@@ -1,0 +1,79 @@
+name: c2-review-check
+
+on:
+  push:
+    branches: [agent/c2-lifecycle-review]
+    paths:
+      - '.github/workflows/c2-review-check.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: agent/c2-lifecycle-review
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.x'
+          check-latest: false
+
+      - name: Targeted compile, tests and vet
+        id: targeted
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p runtime/evidence/c2-review
+          exec > >(tee runtime/evidence/c2-review/check.log) 2>&1
+          files=(
+            live/epoch/fresh.go
+            live/epoch/c2_review_test.go
+            live/share/service.go
+            live/share/guard_test.go
+            cmd/nomad-share/main.go
+            cmd/nomad-operator/main.go
+            cmd/nomad-operator/main_test.go
+            cmd/nomad-fixture-publisher/main.go
+          )
+          unformatted="$(gofmt -l "${files[@]}")"
+          if test -n "$unformatted"; then
+            printf 'unformatted files:\n%s\n' "$unformatted"
+            gofmt -d "${files[@]}"
+            exit 1
+          fi
+          go test ./live/epoch ./live/share ./cmd/nomad-share ./cmd/nomad-operator ./cmd/nomad-fixture-publisher
+          go vet ./live/epoch ./live/share ./cmd/nomad-share ./cmd/nomad-operator ./cmd/nomad-fixture-publisher
+
+      - name: Record review-check status on branch
+        if: always()
+        env:
+          CHECK_OUTCOME: ${{ steps.targeted.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p docs/testing
+          {
+            echo "c2_review_check=${CHECK_OUTCOME}"
+            echo "source_commit=${GITHUB_SHA}"
+            echo "workflow_run=${GITHUB_RUN_ID}"
+            echo "scope=live/epoch,live/share,cmd/nomad-share,cmd/nomad-operator,cmd/nomad-fixture-publisher"
+            echo "race=false"
+            echo "compose=false"
+            echo "wan=false"
+          } > docs/testing/C2_REVIEW_CHECK.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/testing/C2_REVIEW_CHECK.txt
+          git diff --cached --quiet || {
+            git commit -m 'docs: record targeted C2 review check [skip ci]'
+            git push origin HEAD:agent/c2-lifecycle-review
+          }
+
+      - name: Enforce targeted result
+        if: steps.targeted.outcome != 'success'
+        run: exit 1
