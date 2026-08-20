@@ -29,13 +29,12 @@ jobs:
       TF_INPUT: 'false'
       SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
       SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
-      # Current standardized Scaleway names. The legacy DEFAULT aliases are
-      # also exported because the Terraform provider still documents them.
-      SCW_PROJECT_ID: ${{ secrets.SCW_PROJECT_ID }}
-      SCW_ORGANIZATION_ID: ${{ secrets.SCW_ORGANIZATION_ID }}
-      SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_PROJECT_ID }}
-      SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_ORGANIZATION_ID }}
-      TF_VAR_project_id: ${{ secrets.SCW_PROJECT_ID }}
+      # Optional overrides. When PROJECT_ID is absent, the workflow resolves
+      # the API key's own default_project_id through Scaleway's read-only IAM
+      # endpoint. Organization ID is audit metadata only; Terraform uses the
+      # resolved Project ID.
+      SCW_PROJECT_ID_SECRET: ${{ secrets.SCW_PROJECT_ID }}
+      SCW_ORGANIZATION_ID_SECRET: ${{ secrets.SCW_ORGANIZATION_ID }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -45,15 +44,84 @@ jobs:
           terraform_version: '1.14.6'
           terraform_wrapper: false
 
-      - name: Verify credentials exist
+      - name: Verify API credentials exist
         id: credentials
         run: |
           set -euo pipefail
           test -n "$SCW_ACCESS_KEY"
           test -n "$SCW_SECRET_KEY"
-          test -n "$SCW_PROJECT_ID"
-          test -n "$SCW_ORGANIZATION_ID"
-          test -n "$TF_VAR_project_id"
+
+      - name: Resolve Project scope without creating resources
+        id: scope
+        run: |
+          set -euo pipefail
+          project_id="$SCW_PROJECT_ID_SECRET"
+          organization_id="$SCW_ORGANIZATION_ID_SECRET"
+          project_source=secret
+          organization_source=secret
+
+          if [[ -z "$project_id" ]]; then
+            key_json="$RUNNER_TEMP/scw-api-key.json"
+            curl --fail --silent --show-error --max-time 15 \
+              -H "X-Auth-Token: $SCW_SECRET_KEY" \
+              -H 'Accept: application/json' \
+              "https://api.scaleway.com/iam/v1alpha1/api-keys/$SCW_ACCESS_KEY" \
+              -o "$key_json"
+            project_id="$(python3 - "$key_json" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding='utf-8') as handle:
+              data = json.load(handle)
+          value = data.get('default_project_id') or ''
+          print(value)
+          PY
+            )"
+            project_source=api-key-default
+          fi
+
+          if [[ ! "$project_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+            echo 'No valid Scaleway Project ID could be resolved from the secret or API key default_project_id.' >&2
+            exit 1
+          fi
+
+          # Project and Organization IDs are not passwords, but masking keeps
+          # account metadata out of logs and makes the evidence package easier
+          # to share with external reviewers.
+          echo "::add-mask::$project_id"
+
+          if [[ -z "$organization_id" ]]; then
+            project_json="$RUNNER_TEMP/scw-project.json"
+            if curl --fail --silent --show-error --max-time 15 \
+              -H "X-Auth-Token: $SCW_SECRET_KEY" \
+              -H 'Accept: application/json' \
+              "https://api.scaleway.com/account/v3/projects/$project_id" \
+              -o "$project_json"; then
+              organization_id="$(python3 - "$project_json" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding='utf-8') as handle:
+              data = json.load(handle)
+          print(data.get('organization_id') or '')
+          PY
+              )"
+              organization_source=project-lookup
+            else
+              organization_source=unavailable-non-gating
+            fi
+          fi
+
+          {
+            echo "SCW_PROJECT_ID=$project_id"
+            echo "SCW_DEFAULT_PROJECT_ID=$project_id"
+            echo "TF_VAR_project_id=$project_id"
+          } >> "$GITHUB_ENV"
+          if [[ -n "$organization_id" ]]; then
+            echo "::add-mask::$organization_id"
+            {
+              echo "SCW_ORGANIZATION_ID=$organization_id"
+              echo "SCW_DEFAULT_ORGANIZATION_ID=$organization_id"
+            } >> "$GITHUB_ENV"
+          fi
+          echo "project_source=$project_source" >> "$GITHUB_OUTPUT"
+          echo "organization_source=$organization_source" >> "$GITHUB_OUTPUT"
 
       - name: Prepare ephemeral plan inputs
         id: inputs
@@ -129,6 +197,9 @@ jobs:
         if: always()
         env:
           CREDENTIALS_OUTCOME: ${{ steps.credentials.outcome }}
+          SCOPE_OUTCOME: ${{ steps.scope.outcome }}
+          PROJECT_SOURCE: ${{ steps.scope.outputs.project_source }}
+          ORGANIZATION_SOURCE: ${{ steps.scope.outputs.organization_source }}
           INPUTS_OUTCOME: ${{ steps.inputs.outcome }}
           PLAN_OUTCOME: ${{ steps.terraform_plan.outcome }}
           ASSERT_OUTCOME: ${{ steps.exact_plan.outcome }}
@@ -136,21 +207,15 @@ jobs:
           set -euo pipefail
           mkdir -p docs/testing
           status=docs/testing/SCW_PLAN_STATUS.txt
-          present() {
-            if [[ -n "${!1:-}" ]]; then
-              printf true
-            else
-              printf false
-            fi
-          }
           {
             echo "authenticated_plan_only=true"
             echo "resources_applied=false"
-            echo "access_key_present=$(present SCW_ACCESS_KEY)"
-            echo "secret_key_present=$(present SCW_SECRET_KEY)"
-            echo "project_id_present=$(present SCW_PROJECT_ID)"
-            echo "organization_id_present=$(present SCW_ORGANIZATION_ID)"
+            echo "access_key_present=$([[ -n "$SCW_ACCESS_KEY" ]] && echo true || echo false)"
+            echo "secret_key_present=$([[ -n "$SCW_SECRET_KEY" ]] && echo true || echo false)"
             echo "credentials=${CREDENTIALS_OUTCOME:-not_run}"
+            echo "scope_resolution=${SCOPE_OUTCOME:-not_run}"
+            echo "project_source=${PROJECT_SOURCE:-not_run}"
+            echo "organization_source=${ORGANIZATION_SOURCE:-not_run}"
             echo "inputs=${INPUTS_OUTCOME:-not_run}"
             echo "terraform_plan=${PLAN_OUTCOME:-not_run}"
             echo "exact_resource_assertion=${ASSERT_OUTCOME:-not_run}"
