@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
 // FreshStateOf reports an epoch's state after first synchronizing this process
@@ -108,8 +110,8 @@ func EraseEpochMaterialDurable(networkID, operatorID string, retired Verified, p
 	if networkID != retired.NetworkID {
 		return ErasureStatement{}, errors.New("erasure network does not match the retired epoch")
 	}
-	operator, err := retired.Topology.OperatorByID(operatorID)
-	if err != nil {
+	operator, found := operatorByID(retired.Topology, operatorID)
+	if !found {
 		return ErasureStatement{}, fmt.Errorf("erasure operator %q is not in the retired epoch", operatorID)
 	}
 	if len(identity) != ed25519.PrivateKeySize {
@@ -157,6 +159,15 @@ func EraseEpochMaterialDurable(networkID, operatorID string, retired Verified, p
 		}
 	}
 	return statement, nil
+}
+
+func operatorByID(network topology.Verified, operatorID string) (topology.Operator, bool) {
+	for _, operator := range network.Document.Operators {
+		if operator.ID == operatorID {
+			return operator, true
+		}
+	}
+	return topology.Operator{}, false
 }
 
 // PathWithin reports whether candidate is equal to root or is contained by it
