@@ -49,7 +49,6 @@ resource "scaleway_instance_ip" "ipv4" {
   project_id = var.project_id
   zone       = each.value.zone
   type       = "routed_ipv4"
-  tags       = concat(local.tags, [each.key, "ipv4"])
 }
 
 resource "scaleway_instance_ip" "ipv6" {
@@ -57,7 +56,6 @@ resource "scaleway_instance_ip" "ipv6" {
   project_id = var.project_id
   zone       = each.value.zone
   type       = "routed_ipv6"
-  tags       = concat(local.tags, [each.key, "ipv6"])
 }
 
 resource "scaleway_instance_security_group" "node" {
@@ -75,7 +73,6 @@ resource "scaleway_instance_security_group" "node" {
 
 resource "scaleway_instance_security_group_rules" "node" {
   for_each          = local.nodes
-  zone              = each.value.zone
   security_group_id = scaleway_instance_security_group.node[each.key].id
 
   # The GitHub runner creates an ephemeral SSH key for every apply. Only the
@@ -120,15 +117,36 @@ resource "scaleway_instance_security_group_rules" "node" {
     }
   }
 
-  # IPv6 is always allocated so dual-stack campaigns do not require replacing
-  # hosts. Inbound IPv6 remains closed unless a campaign explicitly enables it.
+  # IPv6 is allocated on every host but remains closed by default. When an
+  # explicit dual-stack campaign enables it, rules are still peer-restricted;
+  # they never fall back to ::/0.
   dynamic "inbound_rule" {
-    for_each = var.enable_ipv6_wan ? toset([4200, 4400, 51820]) : toset([])
+    for_each = var.enable_ipv6_wan ? local.nodes : {}
     content {
       action   = "accept"
-      protocol = inbound_rule.value == 4400 ? "TCP" : "UDP"
-      port     = inbound_rule.value
-      ip_range = "::/0"
+      protocol = "UDP"
+      port     = 4200
+      ip_range = "${one([for address in scaleway_instance_server.node[inbound_rule.key].public_ips : address.address if address.family == "inet6"])}/128"
+    }
+  }
+
+  dynamic "inbound_rule" {
+    for_each = var.enable_ipv6_wan ? local.nodes : {}
+    content {
+      action   = "accept"
+      protocol = "TCP"
+      port     = 4400
+      ip_range = "${one([for address in scaleway_instance_server.node[inbound_rule.key].public_ips : address.address if address.family == "inet6"])}/128"
+    }
+  }
+
+  dynamic "inbound_rule" {
+    for_each = var.enable_ipv6_wan ? local.nodes : {}
+    content {
+      action   = "accept"
+      protocol = "UDP"
+      port     = 51820
+      ip_range = "${one([for address in scaleway_instance_server.node[inbound_rule.key].public_ips : address.address if address.family == "inet6"])}/128"
     }
   }
 }
