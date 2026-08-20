@@ -37,10 +37,6 @@ func (chain *Chain) retirementPath(epochNumber uint64, operatorID string) string
 // RecordErasureStatement is the durable completion acknowledgement for one
 // operator's retirement work. The statement is accepted only if it verifies
 // against the exact stored epoch and that epoch was RETIRED at ErasedAt.
-//
-// The caller must first durably persist its external evidence copy. This
-// method then stores an independently verifiable copy inside the chain store;
-// once this returns success PlanAtForOperator may move past that retirement.
 func (chain *Chain) RecordErasureStatement(statement ErasureStatement, operatorID string) error {
 	if operatorID == "" || statement.OperatorID != operatorID {
 		return errors.New("erasure statement does not belong to the local operator")
@@ -61,6 +57,9 @@ func (chain *Chain) RecordErasureStatement(statement ErasureStatement, operatorI
 	retired, found := chain.epochLocked(statement.Epoch)
 	if !found {
 		return fmt.Errorf("epoch %d is not stored", statement.Epoch)
+	}
+	if _, member := operatorByID(retired.Topology, operatorID); !member {
+		return fmt.Errorf("operator %q did not hold material for epoch %d", operatorID, statement.Epoch)
 	}
 	if err := VerifyErasureStatement(statement, retired); err != nil {
 		return err
@@ -99,9 +98,9 @@ func (chain *Chain) RecordErasureStatement(statement ErasureStatement, operatorI
 	return syncDir(directory)
 }
 
-// ErasureRecorded reports whether the local operator has a valid, durable
-// erasure acknowledgement for the epoch. Invalid on-disk evidence fails
-// closed with an error instead of being treated as completion.
+// ErasureRecorded reports whether a member operator has a valid, durable
+// erasure acknowledgement for the epoch. An operator that was not a member
+// had no private epoch material and therefore has nothing to acknowledge.
 func (chain *Chain) ErasureRecorded(epochNumber uint64, operatorID string) (bool, error) {
 	chain.mu.Lock()
 	defer chain.mu.Unlock()
@@ -112,6 +111,13 @@ func (chain *Chain) ErasureRecorded(epochNumber uint64, operatorID string) (bool
 	defer func() { _ = lock.release() }()
 	if err := chain.refreshLocked(); err != nil {
 		return false, err
+	}
+	retired, found := chain.epochLocked(epochNumber)
+	if !found {
+		return false, fmt.Errorf("epoch %d is not stored", epochNumber)
+	}
+	if _, member := operatorByID(retired.Topology, operatorID); !member {
+		return true, nil
 	}
 	return chain.erasureRecordedLocked(epochNumber, operatorID)
 }
@@ -151,8 +157,8 @@ func (chain *Chain) epochLocked(epochNumber uint64) (Verified, bool) {
 }
 
 // PlanAtForOperator is the production lifecycle planner. Before it plans any
-// future ceremony work it returns the oldest RETIRED epoch for which this
-// operator has not durably recorded a valid erasure statement.
+// future ceremony work it returns the oldest RETIRED epoch in which this
+// operator was a member and for which it lacks a durable erasure statement.
 func (chain *Chain) PlanAtForOperator(now time.Time, policy Policy, operatorID string) (Plan, error) {
 	if operatorID == "" {
 		return Plan{}, errors.New("operator ID is required")
@@ -174,6 +180,9 @@ func (chain *Chain) PlanAtForOperator(now time.Time, policy Policy, operatorID s
 		return Plan{Action: ActionHalted, Reason: "chain halted on recorded equivocation"}, nil
 	}
 	for index, stored := range chain.epochs {
+		if _, member := operatorByID(stored.Topology, operatorID); !member {
+			continue
+		}
 		state, err := chain.stateOfLocked(stored.Epoch, now)
 		if err != nil {
 			return Plan{}, err
