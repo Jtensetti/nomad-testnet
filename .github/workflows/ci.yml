@@ -58,6 +58,19 @@ jobs:
             echo "publication API imports transport, peer selection or scheduling"
             exit 1
           fi
+          # The airlock decides when a batch closes and what goes in it. If it
+          # could reach a socket or a scheduler, the release boundary could be
+          # made to depend on what is in the queue, which is the one thing the
+          # fixed schedule exists to prevent.
+          airlock_deps="$(go list -deps github.com/Jtensetti/nomad-testnet/live/airlock)"
+          if printf '%s\n' "$airlock_deps" | grep -Eq '^(net|net/http|net/url|os/exec)$'; then
+            echo "publication airlock reaches a socket or process-launch capability"
+            exit 1
+          fi
+          if printf '%s\n' "$airlock_deps" | grep -Eq 'nomad-(constant-rate-fabric|selection-firewall)|nomad-testnet/live/(node|hop|fetchplan|partialfetch|uplink)'; then
+            echo "publication airlock imports transport, peer selection or scheduling"
+            exit 1
+          fi
           materializer_imports="$(go list -f '{{join .Imports "\n"}}' github.com/Jtensetti/nomad-testnet/live/materialize)"
           if printf '%s\n' "$materializer_imports" | grep -Eq '(^net$|nomad-testnet/live/node|nomad-constant-rate-fabric|nomad-selection-firewall|nomad-semantic-basins)'; then
             echo "materializer directly imports network control or query code"
