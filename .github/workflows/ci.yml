@@ -76,6 +76,11 @@ jobs:
             echo "materializer directly imports network control or query code"
             exit 1
           fi
+      - name: Enforce the telemetry allowlist has a reason for every field
+        run: |
+          # A field may only be emitted if someone wrote down why it is
+          # public. This fails the build rather than a review comment.
+          go test ./live/telemetry/ ./live/node/ -run 'Telemetry|telemetry|SecretScan|OperationalOutput' -count=1
       - run: go test -race ./...
       - name: Verify the published conformance corpus matches its encoders
         run: go run ./cmd/nomad-conformance -check conformance/wire-vectors.json
