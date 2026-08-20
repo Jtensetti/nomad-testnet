@@ -1,0 +1,63 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+users:
+  - default
+  - name: nomad-admin
+    gecos: Nomad WAN lab orchestrator
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+  - name: nomad
+    gecos: Nomad unprivileged service account
+    system: true
+    shell: /usr/sbin/nologin
+    lock_passwd: true
+
+ssh_pwauth: false
+disable_root: true
+
+packages:
+  - ca-certificates
+  - curl
+  - jq
+  - openssl
+  - tcpdump
+  - wireguard
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-nomad-wan.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+      AllowUsers nomad-admin
+  - path: /etc/nomad/LAB_BOUNDARY
+    owner: root:root
+    permissions: "0644"
+    content: |
+      operator=${operator_id}
+      trust_domain=single-administrator-scaleway-wan-lab
+      production_independence=false
+      ttl_hours=${ttl_hours}
+      This host is measurement infrastructure, not evidence of independent governance.
+
+runcmd:
+  - [install, -d, -m, "0755", /etc/nomad]
+  - [install, -d, -o, nomad, -g, nomad, -m, "0700", /etc/nomad/private]
+  - [install, -d, -o, nomad, -g, nomad, -m, "0700", /etc/nomad/tls]
+  - [install, -d, -o, nomad, -g, nomad, -m, "0700", /var/lib/nomad]
+  - [install, -d, -o, nomad, -g, nomad, -m, "0700", /var/lib/nomad/dkg]
+  - [install, -d, -o, nomad, -g, nomad, -m, "0700", /var/lib/nomad/raw]
+  - [install, -d, -o, nomad, -g, nomad, -m, "0700", /var/lib/nomad/sequence]
+  - [install, -d, -o, nomad, -g, nomad, -m, "0700", /var/lib/nomad/evidence]
+  - [install, -d, -o, nomad, -g, nomad, -m, "0700", /var/log/nomad]
+  - [systemctl, restart, ssh]
+  - [systemd-run, "--unit=nomad-wan-autostop", "--on-active=${ttl_hours}h", /usr/sbin/poweroff]
+  - [touch, /var/lib/nomad/cloud-init-ready]
