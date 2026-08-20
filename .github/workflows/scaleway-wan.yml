@@ -71,7 +71,7 @@ jobs:
       - name: Script syntax
         run: |
           bash -n scripts/wan/scaleway-provision.sh
-          python3 -m py_compile scripts/wan/analyze-captures.py scripts/capture.py
+          python3 -m py_compile scripts/wan/analyze-captures.py scripts/wan/summarize-result.py scripts/capture.py
 
   provision:
     needs: validate
@@ -157,6 +157,7 @@ jobs:
           DEPLOYMENT_ID=${TF_VAR_deployment_id}
           ADMIN_IPV4_CIDR=${TF_VAR_admin_ipv4_cidr}
           TTL_HOURS=${TF_VAR_ttl_hours}
+          CAPTURE_SECONDS=${{ inputs.capture_seconds }}
           APPLY_RUN_ID=${GITHUB_RUN_ID}
           EOF
 
@@ -175,6 +176,13 @@ jobs:
             "$RUNNER_TEMP/nomad-wan" \
             dist/wan \
             runtime/evidence/scaleway-wan
+
+      - name: Render human-readable result
+        if: success() && inputs.operation == 'apply'
+        run: |
+          set -euo pipefail
+          python3 scripts/wan/summarize-result.py runtime/evidence/scaleway-wan
+          cat runtime/evidence/scaleway-wan/RESULT.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package Terraform state for explicit destroy
         if: success() && inputs.operation == 'apply'
