@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Jtensetti/nomad-testnet/live/batch"
+	"github.com/Jtensetti/nomad-testnet/live/epoch"
 	"github.com/Jtensetti/nomad-testnet/live/rawcache"
 	"github.com/Jtensetti/nomad-testnet/live/share"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
@@ -26,6 +27,8 @@ func main() {
 func run() error {
 	topologyPath := flag.String("topology", "", "signed public topology JSON")
 	authorityPath := flag.String("authority-key", "", "pinned topology authority public key")
+	epochDescriptorPath := flag.String("epoch-descriptor", "", "verified epoch descriptor to import into the local chain")
+	epochChainPath := flag.String("epoch-chain", "", "persisted verified epoch-chain directory")
 	descriptorPath := flag.String("descriptor", "", "signed batch descriptor")
 	sharePath := flag.String("share", "", "operator threshold share")
 	cachePath := flag.String("cache", "", "operator raw cache")
@@ -34,8 +37,10 @@ func run() error {
 	interval := flag.Duration("interval", time.Second, "fixed local cache scan interval")
 	flag.Parse()
 	for name, value := range map[string]string{
-		"--topology": *topologyPath, "--authority-key": *authorityPath, "--descriptor": *descriptorPath,
-		"--share": *sharePath, "--cache": *cachePath, "--out": *outputPath, "--listen": *listen,
+		"--topology": *topologyPath, "--authority-key": *authorityPath,
+		"--epoch-descriptor": *epochDescriptorPath, "--epoch-chain": *epochChainPath,
+		"--descriptor": *descriptorPath, "--share": *sharePath, "--cache": *cachePath,
+		"--out": *outputPath, "--listen": *listen,
 	} {
 		if value == "" {
 			return fmt.Errorf("%s is required", name)
@@ -48,6 +53,25 @@ func run() error {
 	network, err := topology.Load(*topologyPath, authority, time.Now().UTC())
 	if err != nil {
 		return err
+	}
+	chain, err := epoch.OpenChain(*epochChainPath, network.Document.NetworkID, authority, nil)
+	if err != nil {
+		return fmt.Errorf("open epoch chain: %w", err)
+	}
+	epochDescriptor, err := readEpochDescriptor(*epochDescriptorPath)
+	if err != nil {
+		return err
+	}
+	imported, err := chain.Append(epochDescriptor)
+	if err != nil {
+		return fmt.Errorf("import epoch descriptor: %w", err)
+	}
+	if imported.Epoch != network.Document.Epoch || imported.Topology.Digest != network.Digest {
+		return errors.New("epoch descriptor does not authorize the configured topology")
+	}
+	guard := epoch.FreshGuard{Chain: chain}
+	if err := guard.ServesEpoch(network.Document.Epoch, time.Now().UTC()); err != nil {
+		return fmt.Errorf("epoch chain does not authorize threshold service: %w", err)
 	}
 	descriptor, err := batch.LoadDescriptor(*descriptorPath, authority, network)
 	if err != nil {
@@ -63,16 +87,23 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// Threshold work is refused outside the epoch's signed validity window,
-	// so a retired epoch's share stops being usable at a public boundary
-	// rather than remaining usable for as long as the file exists.
 	service := share.Service{
 		Cache: cache, Descriptor: descriptor, Secret: secret, OutputDir: *outputPath,
-		Interval: *interval, ListenAddress: *listen,
-		Guard: share.TopologyWindowGuard{Network: network},
+		Interval: *interval, ListenAddress: *listen, Guard: guard,
 	}
 	if err := service.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	return nil
+}
+
+func readEpochDescriptor(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > epoch.MaximumFileBytes {
+		return nil, errors.New("epoch descriptor must be a non-empty bounded regular file")
+	}
+	return os.ReadFile(path)
 }
