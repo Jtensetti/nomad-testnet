@@ -13,6 +13,7 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/bundle"
 	"github.com/Jtensetti/nomad-testnet/live/node"
 	"github.com/Jtensetti/nomad-testnet/live/rawcache"
+	"github.com/Jtensetti/nomad-testnet/live/relayipc"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -27,9 +28,9 @@ func run() error {
 	topologyPath := flag.String("topology", "", "signed public topology JSON")
 	authorityPath := flag.String("authority-key", "", "pinned topology authority public key")
 	secretsPath := flag.String("secrets", "", "operator secret JSON")
-	listen := flag.String("listen", "", "local UDP listen address")
+	listen := flag.String("listen", "", "stable signed UDP receive address")
 	cachePath := flag.String("cache", "", "raw ciphertext cache directory")
-	statePath := flag.String("state", "", "persistent sequence state file")
+	relaySocket := flag.String("relay-socket", "", "absolute Unix datagram socket owned by nomad-shaper")
 	healthPath := flag.String("health", "", "local health JSON path")
 	seedPath := flag.String("seed", "", "optional public encrypted seed bundle")
 	cacheStreams := flag.Int("cache-streams", 64, "maximum immutable raw-cache streams")
@@ -37,7 +38,7 @@ func run() error {
 	flag.Parse()
 	for name, value := range map[string]string{
 		"--topology": *topologyPath, "--authority-key": *authorityPath, "--secrets": *secretsPath,
-		"--listen": *listen, "--cache": *cachePath, "--state": *statePath, "--health": *healthPath,
+		"--listen": *listen, "--cache": *cachePath, "--relay-socket": *relaySocket, "--health": *healthPath,
 	} {
 		if value == "" {
 			return fmt.Errorf("%s is required", name)
@@ -59,6 +60,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	relay, err := relayipc.Dial(*relaySocket)
+	if err != nil {
+		return fmt.Errorf("connect to fixed-rate shaper: %w", err)
+	}
+	defer relay.Close()
+
 	var seed *bundle.Verified
 	if *seedPath != "" {
 		loaded, err := bundle.Load(*seedPath)
@@ -69,7 +76,7 @@ func run() error {
 	}
 	liveNode, err := node.New(node.Config{
 		Topology: verifiedTopology, Secrets: secrets, ListenAddress: *listen,
-		Cache: cache, SequencePath: *statePath, HealthPath: *healthPath,
+		Cache: cache, Relay: relay, HealthPath: *healthPath,
 		CacheSweep: *cacheSweep, Seed: seed,
 	})
 	if err != nil {
