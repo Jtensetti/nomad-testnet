@@ -21,6 +21,7 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/batch"
 	"github.com/Jtensetti/nomad-testnet/live/bundle"
 	"github.com/Jtensetti/nomad-testnet/live/committee"
+	"github.com/Jtensetti/nomad-testnet/live/epoch"
 	"github.com/Jtensetti/nomad-testnet/live/fetchplan"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
@@ -60,7 +61,11 @@ func run() error {
 	if !bytes.Equal(authorityPrivate.Public().(ed25519.PublicKey), authority) {
 		return errors.New("authority private key does not match pinned public key")
 	}
-	network, err := topology.Load(*topologyPath, authority, time.Now().UTC())
+	topologyBytes, err := readBounded(*topologyPath, committee.MaximumFileBytes)
+	if err != nil {
+		return err
+	}
+	network, err := topology.Verify(topologyBytes, authority, time.Now().UTC())
 	if err != nil {
 		return err
 	}
@@ -86,6 +91,24 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	// The fixture must exercise the same epoch boundary the production share
+	// service consumes. Build genesis only after the real distributed DKG
+	// certificate exists, then have every configured operator activate that
+	// exact descriptor. No synthetic/in-memory committee can become the chain
+	// root for a service that actually uses another DKG result.
+	epochDescriptor, err := buildGenesisEpochDescriptor(network, topologyBytes, certificateBytes, identities)
+	if err != nil {
+		return err
+	}
+	epochDescriptorBytes, err := epoch.Encode(epochDescriptor)
+	if err != nil {
+		return err
+	}
+	if _, err := epoch.Verify(epochDescriptorBytes, authority, nil, nil); err != nil {
+		return fmt.Errorf("self-verify fixture epoch descriptor: %w", err)
+	}
+
 	envelopeBytes, err := readBounded(*envelopePath, batch.MaximumFileBytes)
 	if err != nil {
 		return err
@@ -121,9 +144,10 @@ func run() error {
 		return err
 	}
 	for name, content := range map[string][]byte{
-		"descriptor.json": descriptorBytes,
-		"seed.json":       seedBytes,
-		"fetch-plan.json": planBytes,
+		"descriptor.json":       descriptorBytes,
+		"epoch-descriptor.json": epochDescriptorBytes,
+		"seed.json":             seedBytes,
+		"fetch-plan.json":       planBytes,
 	} {
 		if err := writeNew(filepath.Join(*output, name), content, 0o644); err != nil {
 			return err
@@ -134,6 +158,32 @@ func run() error {
 		StreamID             string `json:"stream_id"`
 		DKGCertificateDigest string `json:"dkg_certificate_digest"`
 	}{network.Document.NetworkID, generated.Descriptor.StreamID, fmt.Sprintf("%x", certified.Digest)})
+}
+
+func buildGenesisEpochDescriptor(network topology.Verified, topologyBytes, certificateBytes []byte, identities map[string]ed25519.PrivateKey) (epoch.Descriptor, error) {
+	dkgStart, err := time.Parse(time.RFC3339, network.Document.DKG.StartAt)
+	if err != nil {
+		return epoch.Descriptor{}, err
+	}
+	phase := time.Duration(network.Document.DKG.PhaseDurationMillis) * time.Millisecond
+	activateAt := dkgStart.Add(4 * phase).UTC().Format(time.RFC3339)
+	retireAt := network.Document.NotAfter
+	descriptor, err := epoch.New(nil, epoch.TransitionGenesis, activateAt, retireAt, topologyBytes, certificateBytes)
+	if err != nil {
+		return epoch.Descriptor{}, err
+	}
+	for _, operator := range network.Document.Operators {
+		identity, exists := identities[operator.ID]
+		if !exists {
+			return epoch.Descriptor{}, fmt.Errorf("missing fixture identity for epoch activation by %s", operator.ID)
+		}
+		activation, err := epoch.Activate(descriptor, operator, identity)
+		if err != nil {
+			return epoch.Descriptor{}, err
+		}
+		descriptor.Activations = append(descriptor.Activations, activation)
+	}
+	return descriptor, nil
 }
 
 func splitList(value string) []string {
