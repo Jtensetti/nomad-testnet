@@ -2,9 +2,11 @@
 
 The original baseline timing gate reported an idle-vs-active cadence difference of about **3.2-3.3%** against a fixed **2.0%** tolerance. The tolerance has not been changed.
 
-A decomposition experiment (`TestTimingShiftDiagnosis`) separated the original active treatment into five worlds while keeping the same production `Node`, scheduler, UDP sink, observer and decision metric.
+This document records hypotheses that were later falsified as well as fixes that survived further testing. A green intermediate run is not treated as a final conclusion.
 
-## Before any queue fix
+## Initial decomposition
+
+`TestTimingShiftDiagnosis` separated the original active treatment into five worlds while keeping the same production `Node`, scheduler, UDP sink, observer and decision metric.
 
 | Treatment | control spread | signal | 2% finding? |
 |---|---:|---:|---|
@@ -14,7 +16,9 @@ A decomposition experiment (`TestTimingShiftDiagnosis`) separated the original a
 | disk-only | 0.039% | 0.567% | no |
 | full-active | 0.190% | **2.951%** | **yes** |
 
-Evidence: Actions run `32377363558`, artifact `wire-campaign-captures/TIMING_DIAGNOSIS.json`.
+Evidence: Actions run `32377363558`, `wire-campaign-captures/TIMING_DIAGNOSIS.json`.
+
+The static queue result ruled out work-vs-cover encoding as the main timing mechanism. Concurrent producer activity was the strongest isolated treatment.
 
 ## Hypothesis 1: slice compaction
 
@@ -22,85 +26,118 @@ The original `fabric.QueueSource.NextCell` used one producer/consumer mutex and,
 
 A preallocated O(1) ring buffer initially appeared to fix the problem: one run measured `queue-only` at 0.251%. A later run with the same ring buffer reproduced approximately **3.87%**.
 
-That falsified the first hypothesis as a complete explanation. Slice compaction was an amplifier, not the fundamental coupling. The producer and scheduler still shared the same mutex, so producer scheduling could still delay the scheduler's work-source path.
+That falsified slice compaction as a complete explanation. It was an amplifier, but producer and scheduler still shared the same mutex.
 
-## Root cause and architectural fix
+## Queue architecture fix
 
-The scheduler must not wait for useful work. `QueueSource` therefore no longer has a producer/consumer mutex.
-
-The current bounded non-blocking queue works as follows:
+`QueueSource` was changed to a bounded non-blocking producer/consumer queue with no producer-held mutex on the scheduler path:
 
 1. a producer atomically reserves a FIFO position;
-2. it copies the complete fixed-size cell outside the scheduler path;
-3. it atomically publishes that slot as ready;
-4. the single scheduler-side consumer reads only the oldest position when it is already published;
-5. if the queue is empty, or the oldest reserved producer has not published yet, `NextCell` returns `ErrNoWork` immediately;
-6. `CoverSource` then supplies cover for the already-public emission slot.
+2. it copies the complete fixed-size cell;
+3. it atomically publishes the slot as ready;
+4. the single scheduler consumer reads only the oldest position when already published;
+5. if the queue is empty or the oldest reservation is not yet published, `NextCell` returns `ErrNoWork` immediately;
+6. `CoverSource` supplies cover for the already-public emission slot.
 
-The consumer does not spin, sleep, acquire a producer-held lock, retry, or skip ahead. A stalled producer may reduce useful throughput, but it cannot hold a scheduled slot waiting for work. This is the intended failure direction: availability yields to the fixed observable schedule.
+The consumer does not spin, sleep, wait on the producer, retry, or skip ahead. A stalled producer can reduce useful throughput but cannot deliberately hold the scheduler waiting for useful work.
 
-Component regressions cover FIFO order, bounded capacity, concurrent producers/consumer and a deliberately stalled reserved slot. The component passes race/unit CI.
+Component regressions cover FIFO order, bounded capacity, concurrent producers/consumer and a deliberately stalled reserved slot. Component race/unit CI passes.
 
-## Lock-free post-fix evidence
+## Early lock-free evidence
 
-The exact lock-free implementation was copied into the pinned testnet snapshot and exercised by the normal integration path.
+Two independent diagnosis executions after the lock-free change measured the isolated concurrent-queue signal at:
 
-### Execution 1
+- **0.434%**, control 0.042%;
+- **0.323%**, control 0.041%.
 
-| Treatment | control spread | signal | 2% finding? |
+Both were far below the unchanged 2.0% threshold. In the same executions, unrelated same-runtime CPU/disk treatments sometimes still exceeded 2%, showing that removing a queue lock does not provide general host/runtime resource isolation.
+
+A first permanent relay regression also passed at approximately 0.437% signal with about 0.025% control spread.
+
+Those observations supported closing issue #6 for the queue/scheduler channel at that time.
+
+## Reopening: later falsifying run
+
+A later independent shared runner falsified the claim that the relay-producer gate was already stable across executions:
+
+- permanent relay-producer signal: **2.47%**;
+- relay control spread: **0.29%**;
+- composite baseline signal: **2.43%**;
+- composite baseline control spread: **0.07%**;
+- threshold: **2.00%**, unchanged.
+
+Because the controls were below the decision threshold, this was not classified as UNDECIDABLE. Issue #6 was reopened rather than explaining the run away.
+
+Review of the permanent regression then found an experimental confound: every round always ran `control A -> control B -> control C -> treatment`. The treatment therefore always occupied the fourth wall-clock position. A monotonic runner drift over the experiment could alias execution position into a treatment effect while leaving the three controls relatively close to one another.
+
+## Balanced-order relay experiment
+
+The relay regression now uses four rounds and rotates the four series:
+
+```text
+round 0: A B C T
+round 1: B C T A
+round 2: C T A B
+round 3: T A B C
+```
+
+Each control and the treatment therefore occupies every execution position exactly once. This changes neither the treatment nor the **2.0%** decision threshold; it removes wall-clock position as a confound.
+
+First balanced execution, Actions run `32391362393`, artifact `9415043124`:
+
+| Measure | Result |
+|---|---:|
+| relay control spread | **0.052%** |
+| relay producer signal | **0.150%** |
+| threshold | **2.000%** |
+| decision | **PASS** |
+
+The same artifact's unbalanced diagnostic treatments remained informative:
+
+| Treatment | control spread | signal | finding? |
 |---|---:|---:|---|
-| queue-static | 0.073% | 0.018% | no |
-| queue-only | 0.042% | **0.434%** | no |
-| compute-only | 0.021% | 0.598% | no |
-| disk-only | 0.015% | **3.183%** | **yes** |
-| full-active | 0.042% | **2.492%** | **yes** |
+| queue-static | 0.066% | 0.004% | no |
+| queue-only | 0.095% | 0.368% | no |
+| compute-only | 0.031% | **3.969%** | **yes** |
+| disk-only | 0.180% | **2.622%** | **yes** |
+| full-active | 0.071% | 1.739% | no |
 
-Evidence: Actions run `32379491322`, artifact `9410486105`.
+This is the desired experimental separation: the balanced relay-producer treatment is far below the gate while same-runtime CPU/disk sensitivity remains visible rather than being hidden by the queue fix.
 
-### Independent rerun
+**Issue #6 remains open until the balanced relay result is reproduced on another independent runner.** If a balanced, resolvable run again exceeds 2%, the operator shaper/relay architecture must be isolated further rather than changing the threshold.
 
-| Treatment | control spread | signal | 2% finding? |
-|---|---:|---:|---|
-| queue-static | — | 0.005% | no |
-| queue-only | 0.041% | **0.323%** | no |
-| compute-only | 0.046% | **3.346%** | **yes** |
-| disk-only | 0.034% | **2.541%** | **yes** |
-| full-active | 0.080% | **2.014%** | **yes** |
+## Why the CPU/disk findings remain open
 
-Evidence: rerun of Actions run `32379491322`, artifact `9411954174`.
+Unrelated CPU or disk activity in the same Go runtime/host can perturb wall-clock scheduling. Package/dependency separation is therefore not a resource-isolation boundary.
 
-The directly isolated concurrent-queue signal is therefore reproducibly about **0.3-0.4%** after the lock-free change, compared with about **3.9%** before it, with the threshold still fixed at **2.0%**.
+For the reader product, private query/selection belongs in the network-incapable native browser process. Current macOS boundary work uses two Team-scoped App Groups:
 
-The same testnet snapshot also passed `go test -race ./...`, the traffic-analysis harness self-tests, operator ceremony, `go vet ./...`, and the isolated multi-process Compose fabric-to-cache path.
+```text
+network/fetch domain -> <TeamID>.nomad.fabric-cache
+                           |
+                           v
+                    networkless materializer
+                           |
+                           v
+Nomad Browser       <- <TeamID>.nomad.browser-cache
+```
 
-Issue #6 was closed for this specific QueueSource/scheduler channel after those results were recorded.
+Browser and network/fetch processes never share one App Group directly. The materializer is the only bridge and has no network entitlement. This is tracked in issue #7 and still needs a host/kernel packet-capture campaign using release-shaped separate processes under CPU/disk/UI/search pressure.
 
-## Why the CPU/disk findings are not erased
-
-The decomposition also exposed a different class of effect: unrelated CPU or disk activity running in the **same Go process/runtime and host** can perturb wall-clock scheduling on some shared runners. Its magnitude varies substantially between executions, which is consistent with host/runtime resource contention rather than the now-removed QueueSource lock path.
-
-That finding remains security-relevant. Package/dependency separation is not process or resource isolation.
-
-It is also a different production boundary. The native Nomad reader keeps private query/selection state in a network-incapable browser sandbox and intentionally contains no fabric transport. A separate materializer/network domain is intended to populate the verified cache. The future publisher fixed-rate uplink must likewise remain outside the private authoring/work process.
-
-Therefore the remaining same-host resource channel is tracked separately as issue #7. It must be tested using release-shaped **separate processes**, the actual IPC/storage boundary, and host/kernel packet capture under CPU, disk and memory pressure. A deliberately colocated same-runtime case remains useful as a positive control.
-
-We do not convert that observation into a pass by widening the timing tolerance or by claiming that package separation is sufficient.
+The future publisher fixed-rate uplink needs the equivalent process/resource boundary.
 
 ## Shared-runner measurement boundary
 
-The complete preregistered packet-analysis rule is preserved, but a GitHub shared runner can sometimes make even idle-vs-idle worlds fail its timing statistics. For example, one lock-free run measured an idle-vs-idle baseline drift of about 3.39%, already above the 2% resolution target.
+The complete preregistered packet-analysis rule is preserved, but a GitHub shared runner can sometimes make even idle-vs-idle worlds fail. A run whose control spread itself reaches the target resolution is evidence that the host cannot decide that comparison, not a privacy pass or failure.
 
-Such a run is evidence that the host cannot resolve that comparison, not evidence for or against anonymity. The local campaign therefore measures its own idle-control spread and reports a statistic as undecidable when the noise floor itself reaches the threshold. The stricter sustained rule belongs on controlled hosts and the real WAN campaign.
-
-The intentionally distinguishing analyzer fixtures remain in CI so a green result cannot be produced by a blind parser or disabled detector.
+The intentionally distinguishing analyzer fixtures remain in CI so a green result cannot be produced by a disabled detector or blind parser.
 
 ## CI placement correction
 
-The Dockerfile previously ran the wall-clock campaign during every parallel BuildKit image build. That caused the timing experiment to execute repeatedly while the host was simultaneously compiling multiple images. Image builds now run deterministic `go test -short ./live/...`; the wall-clock campaign still runs with the unchanged 2% threshold in the dedicated CI privacy job.
+Wall-clock privacy campaigns are no longer run repeatedly inside parallel Docker BuildKit image builds. Image builds use deterministic `go test -short ./live/...`; dedicated privacy CI retains the unchanged 2% timing decision rule and uploads the captures.
 
-This is test placement, not a relaxed criterion.
+## Current claim boundary
 
-## Claim boundary
+The shared-mutex QueueSource mechanism has been removed and multiple measurements show a large reduction in concurrent queue signal. The later 2.47% run also exposed a treatment-order confound, and the first balanced execution measured 0.150%.
 
-This work explains and removes the reproducible scheduler-visible QueueSource contention mechanism behind issue #6. It does **not** prove general OS-level timing isolation, client process isolation, WAN indistinguishability, independent-operator security, publication anonymity, or production anonymity. Those remain separate evidence gates.
+This is **not yet a closed production claim**. Issue #6 stays open pending another balanced execution. Issue #7 separately tracks OS/process resource isolation. WAN indistinguishability, independent operators, publication anonymity and production anonymity remain unproven.
