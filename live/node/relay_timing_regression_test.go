@@ -10,6 +10,8 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/wire"
 )
 
+const relayCampaignRounds = 4
+
 // TestRelayProducerDoesNotModulateSchedulerCadence is the permanent regression
 // for issue #6. It deliberately tests only the production boundary that issue
 // #6 isolated: a public relay producer concurrently supplies work while the
@@ -38,11 +40,33 @@ func TestRelayProducerDoesNotModulateSchedulerCadence(t *testing.T) {
 	}
 	treatment := &wire.Capture{Label: "relay-queue-active"}
 
-	for round := 0; round < campaignRounds; round++ {
-		for _, control := range controls {
-			runCampaignRound(t, network, identities, endpoints, idle, baseline, control)
+	// Do not always run treatment last. A shared runner can drift over the
+	// roughly 16-second experiment, and fixed A/B/C/treatment ordering would
+	// alias a monotonic host-speed change into a treatment effect. Four rounds
+	// let the four series occupy each wall-clock position exactly once:
+	//
+	//   round 0: A B C T
+	//   round 1: B C T A
+	//   round 2: C T A B
+	//   round 3: T A B C
+	//
+	// This changes neither the 2% decision threshold nor the treatment. It only
+	// removes execution position as a confound.
+	type series struct {
+		world   campaignWorld
+		capture *wire.Capture
+	}
+	seriesByIdentity := []series{
+		{world: idle, capture: controls[0]},
+		{world: idle, capture: controls[1]},
+		{world: idle, capture: controls[2]},
+		{world: active, capture: treatment},
+	}
+	for round := 0; round < relayCampaignRounds; round++ {
+		for position := 0; position < len(seriesByIdentity); position++ {
+			entry := seriesByIdentity[(round+position)%len(seriesByIdentity)]
+			runCampaignRound(t, network, identities, endpoints, entry.world, baseline, entry.capture)
 		}
-		runCampaignRound(t, network, identities, endpoints, active, baseline, treatment)
 	}
 
 	noise := worldGap{}
@@ -68,11 +92,15 @@ func TestRelayProducerDoesNotModulateSchedulerCadence(t *testing.T) {
 		ControlSpread float64 `json:"control_spread"`
 		Signal        float64 `json:"signal"`
 		Tolerance     float64 `json:"tolerance"`
+		Rounds        int     `json:"rounds"`
+		OrderBalanced bool    `json:"order_balanced"`
 		Decision      string  `json:"decision"`
 	}{
 		ControlSpread: noise.cadence,
 		Signal:        signal.cadence,
 		Tolerance:     cadenceTolerance,
+		Rounds:        relayCampaignRounds,
+		OrderBalanced: true,
 		Decision:      "PASS",
 	}
 
