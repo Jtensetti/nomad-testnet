@@ -1,8 +1,78 @@
-# Nomad Testnet
+# Nomad live testnet
 
-Runnable integration harness for the Nomad v0.1 research reference stack.
+Nomad's reader-side reference deployment. It runs three separately keyed
+operator processes, emits authenticated 1200-byte UDP cells on a signed fixed
+cadence, stores only valid encrypted work, obtains public threshold partials on
+an independent fixed schedule, and materializes a signed object for Nomad
+Browser without any query-triggered network action. The epoch committee is
+created by three networked Kyber Pedersen DKG processes; the live descriptor is
+accepted only with the resulting all-operator activation certificate.
 
-## What the composed test does
+This repository now contains two harnesses:
+
+- `go run ./cmd/nomad-testnet` is the deterministic protocol integration test.
+- `deploy/compose.yaml` is the live fabric-to-cache deployment and release gate.
+
+It also ships `nomad-operator` and `nomad-topology` for an offline
+multi-administrator topology ceremony. Each operator generates separate
+Ed25519, X25519 and DKG secrets, publishes only a self-signed enrollment, signs
+the same complete topology draft and locally derives directed hop keys. The
+authority sees no operator private key and distributes no pairwise MAC or
+threshold secret.
+
+```bash
+nomad-operator init --id=operator-a --endpoint=host-a:4200 \
+  --partial-endpoint=https://host-a:4300 \
+  --dkg-endpoint=https://host-a:4400 \
+  --secret=node-secrets.json --enrollment=enrollment.json
+
+nomad-topology draft --network-id=nomad-live --epoch=1 \
+  --dkg-start-delay=10m --dkg-phase-duration=2m --dkg-threshold=2 \
+  --enrollments=a.json,b.json,c.json --out=topology-draft.json
+
+nomad-operator attest --secret=node-secrets.json \
+  --draft=topology-draft.json --out=operator-a.attestation.json
+```
+
+After collecting exactly one attestation from every member, the authority uses
+`nomad-topology finalize`; every operator runs `nomad-operator verify` before
+starting its node. Every operator then runs `nomad-dkg` before the signed start
+time. The command exchanges only signed public ceremony traffic and writes one
+operator-local threshold share plus the identical all-operator-certified public
+committee certificate. The complete runbook is in `deploy/MULTI_OPERATOR.md`.
+
+## Run the live network
+
+Docker Compose supplies the reproducible single-administrator deployment:
+
+```bash
+./scripts/compose-e2e.sh
+```
+
+The script builds the locked-down image, bootstraps a signed epoch, runs three
+TLS DKG processes, compares their certified public result, starts three UDP
+nodes using three distinct distributed shares, three threshold-share servers,
+one public-cadence partial fetcher and one networkless materializer. It waits for
+the exact verified browser object,
+checks every process and container boundary, records packet/process/health
+evidence from the dedicated fabric bridge, and rejects a capture whose cells
+are not 1200 bytes or whose cadence/topology is wrong. Bootstrap and the
+materializer run with Docker networking disabled.
+
+To feed a locally installed Nomad Browser directly, set its existing object
+cache as the materializer destination before starting Compose:
+
+```bash
+export NOMAD_VERIFIED_CACHE="$HOME/Library/Containers/io.nomad.browser/Data/Library/Application Support/NomadBrowser/objects"
+docker compose -f deploy/compose.yaml up --build
+```
+
+Docker Desktop must be allowed to mount that directory. The browser performs
+only local cache reads and signature verification; it has no network
+entitlement. See `deploy/MULTI_OPERATOR.md` for deployment across independently
+controlled hosts.
+
+## What the deterministic harness does
 
 1. Creates canonical content and a signed object manifest.
 2. Produces fixed 504-byte RLNC generation packets over GF(2^8).
@@ -29,14 +99,15 @@ cannot check them out. `components/` is a generated source snapshot used only
 for integration CI. `COMPONENTS.lock` records the exact source commit for every
 snapshot. Component changes must update both the snapshot and lock entry.
 
-## Security status
+## Live security status
 
-**Research software, not an audited anonymity network.** The shuffle now
-preserves payloads and carries a Kyber Neff proof, but the test profile still
-uses a single decryption key. Production gates include independent
-cryptographic review, threshold key generation/decryption, committee identity
-and accountability, replay/drop/delay handling, WAN/NAT/Sybil work, a
-publication airlock, and browser-engine isolation.
+**Live testnet software, not yet an audited production anonymity network.** The
+live path uses networked authenticated Pedersen DKG output, unanimous committee
+activation, 2-of-3 proved threshold decryption and one verified Neff shuffle per
+operator. Its one-host Compose profile demonstrates process, key and cache
+separation; it cannot prove that three organizations independently administer
+the operators. The exact release gate and remaining external production
+requirements are in `LIVE_DOD.md` and `DKG_DOD.md`.
 
 The lexical hashing embedder is an offline development baseline, not a semantic
 model. A real embedding model must remain local.
@@ -44,5 +115,5 @@ model. A real embedding model must remain local.
 ```bash
 go test -race ./...
 go vet ./...
-go run ./cmd/nomad-testnet
+./scripts/compose-e2e.sh
 ```

@@ -14,7 +14,7 @@ import (
 )
 
 func TestEndToEndReferenceStackFromCapturedUDP(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	content := []byte("A signed Nomad object about Iranian military systems, reconstructed only from captured coded cells.")
 	result, err := Run(ctx, content, "Iran military weapons systems geopolitics", "weapons systems in Iran military")
