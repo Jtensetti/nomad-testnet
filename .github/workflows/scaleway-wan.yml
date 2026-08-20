@@ -34,11 +34,6 @@ on:
         type: string
         required: true
         default: '24'
-      enable_ipv6_wan:
-        description: 'Open Nomad/DKG test ingress on IPv6 as well as IPv4'
-        type: boolean
-        required: true
-        default: false
       state_run_id:
         description: 'For destroy: GitHub Actions run ID of the successful apply'
         type: string
@@ -105,6 +100,10 @@ jobs:
           set -euo pipefail
           [[ '${{ inputs.capture_seconds }}' =~ ^[0-9]+$ ]] && (( ${{ inputs.capture_seconds }} >= 30 && ${{ inputs.capture_seconds }} <= 3600 ))
           [[ '${{ inputs.ttl_hours }}' =~ ^[0-9]+$ ]] && (( ${{ inputs.ttl_hours }} >= 1 && ${{ inputs.ttl_hours }} <= 72 ))
+          (( ${{ inputs.ttl_hours }} * 3600 >= ${{ inputs.capture_seconds }} + 900 )) || {
+            echo 'ttl_hours must leave at least 15 minutes beyond capture_seconds' >&2
+            exit 1
+          }
           test -n "$SCW_ACCESS_KEY"
           test -n "$SCW_SECRET_KEY"
           test -n "$TF_VAR_project_id"
@@ -134,7 +133,6 @@ jobs:
             echo "TF_VAR_admin_ipv4_cidr=${runner_ip}/32"
             echo "TF_VAR_deployment_id=gh-${GITHUB_RUN_ID}"
             echo "TF_VAR_ttl_hours=${{ inputs.ttl_hours }}"
-            echo "TF_VAR_enable_ipv6_wan=${{ inputs.enable_ipv6_wan }}"
           } >> "$GITHUB_ENV"
 
       - name: Terraform plan
@@ -159,7 +157,6 @@ jobs:
           DEPLOYMENT_ID=${TF_VAR_deployment_id}
           ADMIN_IPV4_CIDR=${TF_VAR_admin_ipv4_cidr}
           TTL_HOURS=${TF_VAR_ttl_hours}
-          ENABLE_IPV6_WAN=${TF_VAR_enable_ipv6_wan}
           APPLY_RUN_ID=${GITHUB_RUN_ID}
           EOF
 
@@ -261,7 +258,6 @@ jobs:
             echo "TF_VAR_deployment_id=$DEPLOYMENT_ID"
             echo "TF_VAR_admin_ipv4_cidr=$ADMIN_IPV4_CIDR"
             echo "TF_VAR_ttl_hours=$TTL_HOURS"
-            echo "TF_VAR_enable_ipv6_wan=$ENABLE_IPV6_WAN"
             echo 'TF_VAR_ssh_public_key=unused-during-destroy'
           } >> "$GITHUB_ENV"
 
