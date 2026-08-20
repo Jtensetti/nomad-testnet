@@ -13,10 +13,11 @@ Terraform creates exactly three `STARDUST1-S` Ubuntu instances:
 | `operator-b` | `nl-ams-1` |
 | `operator-c` | `pl-waw-2` |
 
-Each host receives one routed IPv4 and one routed IPv6 address. IPv4 Nomad/DKG
-ports are restricted to the other lab IPs and SSH is restricted to the current
-GitHub Actions runner. IPv6 protocol ingress is closed by default and can be
-enabled only for an explicit dual-stack campaign.
+Each host receives one routed IPv4 and one routed IPv6 address. The first
+campaign uses IPv4 only: Nomad UDP/4200 and DKG TLS/4400 are restricted to the
+three lab IPv4 addresses, and SSH is restricted to the current GitHub Actions
+runner. IPv6 is allocated for later dual-stack work but has no Nomad ingress
+rule and is not part of the first evidence claim.
 
 The instance type is intentionally hard-coded. This workflow is measurement
 infrastructure, not a performance environment, and a workflow input must not be
@@ -68,12 +69,15 @@ Run it again with `operation=apply`. The workflow:
 8. verifies that all hosts independently produce the same public DKG certificate
    while each threshold share remains local;
 9. starts fixed-cadence Nomad nodes in the three regions;
-10. captures egress traffic at each host boundary;
-11. fails unless all cells are 1200-byte UDP payloads with bounded cadence and
-    one fixed destination per sender;
-12. uploads hashes, pcaps, health data and claim limits as a GitHub artifact.
+10. captures both emitted cells and cells that actually arrive over the WAN at
+    every host boundary;
+11. requires exact 1200-byte payloads, fixed sender destinations, no sender-side
+    catch-up burst, bounded sender cadence and a sane no-fault WAN arrival rate;
+12. uploads hashes, pcaps, health data, DKG evidence and claim limits as a
+    GitHub artifact.
 
-The default capture is five minutes. The input accepts 30-3600 seconds. Longer
+The default capture is five minutes. The input accepts 30-3600 seconds. The TTL
+must leave at least fifteen minutes beyond the selected capture interval. Longer
 campaigns and the required 72-hour production evidence are separate work.
 
 ### 3. Destroy
@@ -102,8 +106,9 @@ A successful run means only:
 
 > The current Nomad binaries completed their distributed DKG and maintained the
 > specified fixed-size/fixed-cadence reader-side fabric across three real
-> Scaleway regions for the recorded capture interval under one administrator.
+> Scaleway regions for the recorded capture interval under one administrator,
+> with both sender-boundary and receiver-arrival packet evidence.
 
 It does **not** by itself establish anonymous publication, independent operator
-governance, long-horizon indistinguishability, production availability, or an
-external security assessment.
+governance, IPv6 protocol behavior, long-horizon indistinguishability,
+production availability, or an external security assessment.
