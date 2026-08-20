@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"io"
-	"sync"
 	"sync/atomic"
 )
 
@@ -29,53 +28,83 @@ func RandomCellFrom(r io.Reader) (Cell, error) {
 
 var ErrNoWork = errors.New("no protocol work available")
 
+type queueSlot struct {
+	// published is position+1 when cell is ready for the consumer. A producer
+	// reserves its position before copying the 1200-byte cell, so the consumer
+	// can observe a reserved-but-not-ready slot and return cover immediately
+	// instead of waiting on producer work.
+	published atomic.Uint64
+	cell      Cell
+}
+
 // QueueSource is filled by public replication and cache-maintenance policy.
 // It has no query or reader-state API.
 //
-// The queue is a preallocated ring. This is security-relevant rather than a
-// throughput micro-optimization: the scheduler calls NextCell on its emission
-// path, so producer activity must not make that call perform work proportional
-// to queue depth. The previous slice implementation shifted every remaining
-// 1200-byte cell on each dequeue while holding the producer mutex; a busy
-// producer could therefore measurably change scheduler timing.
+// There is deliberately no producer/consumer mutex. Producers reserve bounded
+// positions with enqueue CAS, copy outside the scheduler path, then publish the
+// slot with a sequentially-consistent atomic store. The scheduler is the single
+// consumer: it only reads the next already-published slot. If the queue is
+// empty, or the oldest reserved producer has not published yet, NextCell returns
+// ErrNoWork immediately and CoverSource supplies filler for that public slot.
+// It never waits for useful work.
+//
+// This fail-open-to-cover behavior is security-relevant. Producer scheduling,
+// queue depth and producer stalls may decide whether a slot carries work or
+// cover, but they cannot hold the scheduler's deadline path behind a lock.
 type QueueSource struct {
-	mu    sync.Mutex
-	cells []Cell
-	head  int
-	size  int
+	capacity uint64
+	slots    []queueSlot
+	enqueue  atomic.Uint64
+	dequeue  atomic.Uint64
 }
 
 func NewQueueSource(capacity int) (*QueueSource, error) {
 	if capacity < 1 {
 		return nil, errors.New("queue capacity must be positive")
 	}
-	return &QueueSource{cells: make([]Cell, capacity)}, nil
+	return &QueueSource{capacity: uint64(capacity), slots: make([]queueSlot, capacity)}, nil
 }
 
 func (q *QueueSource) Enqueue(cell Cell) bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.size == len(q.cells) {
+	if q == nil || q.capacity == 0 {
 		return false
 	}
-	tail := (q.head + q.size) % len(q.cells)
-	q.cells[tail] = cell
-	q.size++
-	return true
+	for {
+		position := q.enqueue.Load()
+		consumed := q.dequeue.Load()
+		if position-consumed >= q.capacity {
+			return false
+		}
+		if !q.enqueue.CompareAndSwap(position, position+1) {
+			continue
+		}
+		slot := &q.slots[position%q.capacity]
+		slot.cell = cell
+		// Publishing after the cell copy is the handoff to the consumer.
+		slot.published.Store(position + 1)
+		return true
+	}
 }
 
 func (q *QueueSource) NextCell(context.Context) (Cell, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.size == 0 {
+	if q == nil || q.capacity == 0 {
 		return Cell{}, ErrNoWork
 	}
-	cell := q.cells[q.head]
-	q.head++
-	if q.head == len(q.cells) {
-		q.head = 0
+	position := q.dequeue.Load()
+	if position >= q.enqueue.Load() {
+		return Cell{}, ErrNoWork
 	}
-	q.size--
+	slot := &q.slots[position%q.capacity]
+	if slot.published.Load() != position+1 {
+		// A producer reserved this FIFO position but has not published it yet.
+		// Do not spin, sleep, lock, skip ahead, or otherwise let producer timing
+		// extend this emission slot. CoverSource will emit filler instead.
+		return Cell{}, ErrNoWork
+	}
+	cell := slot.cell
+	// The queue has one consumer (the scheduler). Advance only after copying the
+	// cell so a wrapped producer cannot reuse the slot while it is being read.
+	q.dequeue.Store(position + 1)
 	return cell, nil
 }
 
