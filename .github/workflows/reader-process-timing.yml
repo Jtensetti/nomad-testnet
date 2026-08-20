@@ -1,23 +1,6 @@
 name: reader-process-timing
 
 on:
-  pull_request:
-    paths:
-      - 'testnet/reader_process_boundary_test.go'
-      - '.github/workflows/reader-process-timing.yml'
-      - 'cmd/nomad-partial-fetch/**'
-      - 'live/partialfetch/**'
-      - 'live/fetchplan/**'
-      - 'live/topology/**'
-  push:
-    branches: [agent/reader-process-timing]
-    paths:
-      - 'testnet/reader_process_boundary_test.go'
-      - '.github/workflows/reader-process-timing.yml'
-      - 'cmd/nomad-partial-fetch/**'
-      - 'live/partialfetch/**'
-      - 'live/fetchplan/**'
-      - 'live/topology/**'
   workflow_dispatch:
 
 permissions:
@@ -48,9 +31,6 @@ jobs:
           evidence=runtime/evidence/reader-process-boundary
           mkdir -p "$evidence"
 
-          # Capture outside the fetcher and private-workload processes. The
-          # fixed loopback ports are test-only public endpoints from the signed
-          # fixture. tcpdump observes the host network boundary, not Go timing.
           sudo tcpdump -i lo0 -n -U -w "$evidence/reader-loopback.pcap" \
             '(tcp port 49301 or tcp port 49302 or tcp port 49303)' \
             >"$evidence/tcpdump.log" 2>&1 &
