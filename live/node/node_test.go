@@ -9,14 +9,23 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
+	"github.com/Jtensetti/nomad-constant-rate-fabric/fabric"
 	"github.com/Jtensetti/nomad-testnet/live/hop"
 	"github.com/Jtensetti/nomad-testnet/live/rawcache"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
+
+type acceptingRelay struct{ accepted atomic.Uint64 }
+
+func (relay *acceptingRelay) Enqueue(fabric.Cell) bool {
+	relay.accepted.Add(1)
+	return true
+}
 
 func TestReceiveRejectsInvalidSourcesAuthenticationAndReplay(t *testing.T) {
 	network, identities, endpoints := nodeTestTopology(t)
@@ -27,6 +36,7 @@ func TestReceiveRejectsInvalidSourcesAuthenticationAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	self := network.Document.Operators[1]
+	relay := &acceptingRelay{}
 	worker, err := New(Config{
 		Topology: network,
 		Secrets: topology.VerifiedSecrets{
@@ -34,10 +44,8 @@ func TestReceiveRejectsInvalidSourcesAuthenticationAndReplay(t *testing.T) {
 			OutboundKeys: map[uint16][32]byte{2: keyBC},
 			InboundKeys:  map[uint16][32]byte{0: keyAB},
 		},
-		ListenAddress: endpoints[1], Cache: cache,
-		SequencePath: filepath.Join(t.TempDir(), "sequence"),
-		HealthPath:   filepath.Join(t.TempDir(), "health.json"),
-		CacheSweep:   time.Hour,
+		ListenAddress: endpoints[1], Cache: cache, Relay: relay,
+		HealthPath: filepath.Join(t.TempDir(), "health.json"), CacheSweep: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -58,15 +66,21 @@ func TestReceiveRejectsInvalidSourcesAuthenticationAndReplay(t *testing.T) {
 		}
 	}()
 
-	peerAddress, err := net.ResolveUDPAddr("udp", endpoints[0])
+	// The shaper is a separate process and therefore has a different ephemeral
+	// source port from the signed receive endpoint. Authentication must succeed
+	// based on source IP narrowing + the signed peer-specific HMAC, not port.
+	signedPeerAddress, err := net.ResolveUDPAddr("udp", endpoints[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	peer, err := net.ListenUDP("udp", peerAddress)
+	peer, err := net.ListenUDP("udp", &net.UDPAddr{IP: signedPeerAddress.IP, Port: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer peer.Close()
+	if peer.LocalAddr().(*net.UDPAddr).Port == signedPeerAddress.Port {
+		t.Fatal("test accidentally reused signed receive source port")
+	}
 	destination := worker.conn.LocalAddr().(*net.UDPAddr)
 	if _, err := peer.WriteToUDP([]byte{1, 2, 3}, destination); err != nil {
 		t.Fatal(err)
@@ -96,7 +110,8 @@ func TestReceiveRejectsInvalidSourcesAuthenticationAndReplay(t *testing.T) {
 	if _, err := peer.WriteToUDP(tampered[:], destination); err != nil {
 		t.Fatal(err)
 	}
-	unknown, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+
+	unknown, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.99"), Port: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,16 +126,16 @@ func TestReceiveRejectsInvalidSourcesAuthenticationAndReplay(t *testing.T) {
 	if _, err := peer.WriteToUDP(cell[:], destination); err != nil {
 		t.Fatal(err)
 	}
-	waitForNodeStats(t, worker, func(stats Stats) bool { return stats.Stored == 1 })
+	waitForNodeStats(t, worker, func(stats Stats) bool { return stats.Stored == 1 && stats.RelayAccepted == 1 })
 	if _, err := peer.WriteToUDP(cell[:], destination); err != nil {
 		t.Fatal(err)
 	}
 	waitForNodeStats(t, worker, func(stats Stats) bool { return stats.ReplayRejected == 1 })
 
 	stats := worker.Snapshot()
-	if stats.Received != 5 || stats.Stored != 1 || stats.WrongSize != 1 || stats.UnknownPeer != 1 ||
-		stats.AuthRejected != 1 || stats.ReplayRejected != 1 {
-		t.Fatalf("unexpected receiver counters: %+v", stats)
+	if stats.Received != 5 || stats.Stored != 1 || stats.RelayAccepted != 1 || stats.WrongSize != 1 ||
+		stats.UnknownPeer != 1 || stats.AuthRejected != 1 || stats.ReplayRejected != 1 || relay.accepted.Load() != 1 {
+		t.Fatalf("unexpected receiver counters: %+v relay=%d", stats, relay.accepted.Load())
 	}
 }
 
@@ -133,8 +148,7 @@ func singlePeerPlan(index int) []uint16 { return []uint16{uint16((index + 1) % 3
 
 // rotatingPeerPlan gives each operator a two-peer plan, so a test can check
 // that the destination a cell goes to is a function of the signed plan and
-// the emission ordinal alone. A plan must stay shorter than the operator
-// count, so two entries is the longest available with three operators.
+// the emission ordinal alone.
 func rotatingPeerPlan(index int) []uint16 {
 	return []uint16{uint16((index + 1) % 3), uint16((index + 2) % 3)}
 }
@@ -144,7 +158,8 @@ func nodeTestTopologyWithCadence(t *testing.T, intervalMillis, maxLatenessMillis
 	endpoints := make([]string, 3)
 	listeners := make([]*net.UDPConn, 3)
 	for index := range endpoints {
-		listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+		ip := net.ParseIP([]string{"127.0.0.11", "127.0.0.12", "127.0.0.13"}[index])
+		listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: 0})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -171,7 +186,7 @@ func nodeTestTopologyWithCadence(t *testing.T, intervalMillis, maxLatenessMillis
 			CellSize: topology.CellSize, CellIntervalMillis: intervalMillis,
 			MaxLatenessMillis: maxLatenessMillis, QueueCapacity: 32,
 		},
-		DKG:       topology.DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
+		DKG: topology.DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
 		Operators: make([]topology.Operator, 3),
 	}
 	for index := range document.Operators {
