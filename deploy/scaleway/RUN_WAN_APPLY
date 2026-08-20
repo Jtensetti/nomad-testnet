@@ -1,0 +1,5 @@
+run=first-real-wan-baseline
+capture_seconds=300
+ttl_hours=2
+transport=dedicated-nomad-shaper
+requested_at=2026-08-20
