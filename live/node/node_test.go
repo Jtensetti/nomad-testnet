@@ -186,7 +186,7 @@ func nodeTestTopologyWithCadence(t *testing.T, intervalMillis, maxLatenessMillis
 			CellSize: topology.CellSize, CellIntervalMillis: intervalMillis,
 			MaxLatenessMillis: maxLatenessMillis, QueueCapacity: 32,
 		},
-		DKG: topology.DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
+		DKG:       topology.DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
 		Operators: make([]topology.Operator, 3),
 	}
 	for index := range document.Operators {

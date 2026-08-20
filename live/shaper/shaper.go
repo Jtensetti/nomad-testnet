@@ -34,13 +34,13 @@ type Stats struct {
 }
 
 type Shaper struct {
-	config   Config
-	conn     *net.UDPConn
-	work     *relayipc.Source
-	cover    *fabric.CoverSource
-	sink     *authenticatedSink
-	stats    *counters
-	closed   atomic.Bool
+	config Config
+	conn   *net.UDPConn
+	work   *relayipc.Source
+	cover  *fabric.CoverSource
+	sink   *authenticatedSink
+	stats  *counters
+	closed atomic.Bool
 }
 
 type counters struct {

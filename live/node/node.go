@@ -91,9 +91,9 @@ type Node struct {
 	// different source port from the receive process. Source IP narrows the
 	// bounded candidate set; peer-specific HMAC authentication identifies the
 	// exact sender.
-	incoming map[string][]incomingPeer
-	replay   map[uint16]*hop.ReplayWindow
-	stats    *counters
+	incoming  map[string][]incomingPeer
+	replay    map[uint16]*hop.ReplayWindow
+	stats     *counters
 	startedAt time.Time
 }
 
@@ -295,7 +295,7 @@ func (node *Node) Snapshot() Stats {
 	return Stats{
 		StartedAt: node.startedAt, UpdatedAt: time.Now().UTC(), OperatorID: node.config.Secrets.Operator.ID,
 		TopologyDigest: fmt.Sprintf("%x", node.config.Topology.Digest),
-		Sent: node.stats.sent.Load(), Received: node.stats.received.Load(), Stored: node.stats.stored.Load(),
+		Sent:           node.stats.sent.Load(), Received: node.stats.received.Load(), Stored: node.stats.stored.Load(),
 		RelayAccepted: node.stats.relayAccepted.Load(), Relayed: node.stats.relayed.Load(), CoverSent: node.stats.coverSent.Load(),
 		WrongSize: node.stats.wrongSize.Load(), UnknownPeer: node.stats.unknownPeer.Load(),
 		AuthRejected: node.stats.authRejected.Load(), ReplayRejected: node.stats.replayRejected.Load(),
