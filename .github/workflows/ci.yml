@@ -78,6 +78,49 @@ jobs:
           name: operator-ceremony-evidence
           path: runtime/evidence/operator-ceremony.json
           if-no-files-found: warn
+      - name: Upload wire campaign captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wire-campaign-captures
+          path: runtime/evidence/wire-campaign/
+          if-no-files-found: warn
+      - name: Apply the preregistered rule to the wire campaign captures
+        if: always()
+        run: |
+          directory=runtime/evidence/wire-campaign
+          if ! test -d "$directory"; then
+            echo "no wire campaign captures were produced"
+            exit 0
+          fi
+          # The Go campaign gates on the one statistic a shared runner can
+          # resolve. This step re-reads the same captures through the full
+          # preregistered rule, so the captures a reviewer downloads are the
+          # captures the published rule was actually run against, and its
+          # verdict is visible rather than inferred.
+          #
+          # It reports and does not gate, deliberately: on a shared runner the
+          # rule's packet-count and KS tests are dominated by ambient stalls,
+          # which the campaign measures directly as a control spread swinging
+          # between 0.01 and 0.7 across runs. Gating here would fail at random
+          # and get switched off. The gating version of this rule belongs on
+          # the quiet, multi-region hosts of E-01/E-03; until those exist, the
+          # verdicts below are evidence to read, not a passed criterion.
+          failures=0
+          for stressor in baseline cpu-starvation disk-pressure; do
+            control="$directory/$stressor-control-a.txt"
+            treatment="$directory/$stressor-active.txt"
+            test -f "$control" -a -f "$treatment" || continue
+            echo "== $stressor: idle vs active =="
+            python3 scripts/two-world-analysis.py "$control" "$treatment" 1200 20 || failures=$((failures + 1))
+            # The idle-versus-idle control run through the same rule. A rule
+            # that rejects two identical worlds is measuring the runner, and
+            # its verdict on the treatment pair means nothing this run.
+            echo "== $stressor: idle vs idle (control) =="
+            python3 scripts/two-world-analysis.py "$control" "$directory/$stressor-control-b.txt" 1200 20 \
+              || echo "control pair also rejected: this runner cannot resolve the treatment comparison"
+          done
+          echo "preregistered rule rejected $failures treatment pair(s); reported, not gating"
 
   live-compose:
     needs: unit
