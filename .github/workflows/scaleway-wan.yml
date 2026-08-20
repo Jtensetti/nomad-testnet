@@ -1,41 +1,33 @@
 name: scaleway-wan
 
 on:
+  # Normal source changes do not consume Actions minutes. A push touching only
+  # this marker is the autonomous one-shot path used by the agent once the WAN
+  # code is ready. It performs a real apply, campaign and destroy.
   push:
+    branches: [agent/scaleway-wan]
     paths:
-      - '.github/workflows/scaleway-wan.yml'
-      - 'deploy/scaleway/**'
-      - 'scripts/wan/**'
-      - 'scripts/capture.py'
-  pull_request:
-    paths:
-      - '.github/workflows/scaleway-wan.yml'
-      - 'deploy/scaleway/**'
-      - 'scripts/wan/**'
-      - 'scripts/capture.py'
+      - 'deploy/scaleway/RUN_WAN_APPLY'
   workflow_dispatch:
     inputs:
       operation:
-        description: 'plan creates nothing; apply creates the 3-region lab; destroy removes an earlier apply run'
+        description: 'plan creates nothing; apply creates/runs/destroys the 3-region lab; destroy removes state from an earlier interrupted apply'
         type: choice
         required: true
         default: plan
-        options:
-          - plan
-          - apply
-          - destroy
+        options: [plan, apply, destroy]
       capture_seconds:
         description: 'Packet-capture duration for apply (30-3600 seconds)'
         type: string
         required: true
         default: '300'
       ttl_hours:
-        description: 'Host auto-poweroff backstop (1-72 hours; destroy still required to release IPv4)'
+        description: 'Host auto-poweroff backstop (1-72 hours)'
         type: string
         required: true
-        default: '24'
+        default: '2'
       state_run_id:
-        description: 'For destroy: GitHub Actions run ID of the successful apply'
+        description: 'For destroy: run ID whose uploaded Terraform state should be used'
         type: string
         required: false
         default: ''
@@ -55,73 +47,112 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: '1.14.6'
           terraform_wrapper: false
-      - name: Terraform format
-        run: terraform -chdir=deploy/scaleway fmt -check -recursive
-      - name: Terraform validate
+      - name: Terraform and script validation
         run: |
+          set -euo pipefail
+          terraform -chdir=deploy/scaleway fmt -check -recursive
           terraform -chdir=deploy/scaleway init -backend=false
           terraform -chdir=deploy/scaleway validate
-      - name: Script syntax
-        run: |
           bash -n scripts/wan/scaleway-provision.sh
+          bash -n scripts/wan/resolve-scaleway-project.sh
           python3 -m py_compile scripts/wan/analyze-captures.py scripts/wan/summarize-result.py scripts/capture.py
 
-  cloud-plan:
+  provision:
     needs: validate
-    if: github.event_name == 'push' && github.ref == 'refs/heads/agent/scaleway-wan'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation != 'destroy')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 75
     env:
       SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
       SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
-      SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_PROJECT_ID }}
-      SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_ORGANIZATION_ID }}
-      TF_VAR_project_id: ${{ secrets.SCW_PROJECT_ID }}
+      SCW_PROJECT_ID: ${{ secrets.SCW_PROJECT_ID }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.x'
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: '1.14.6'
           terraform_wrapper: false
-      - name: Prepare plan-only public inputs
+
+      - name: Resolve run mode and Project scope
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
+            operation=apply
+            capture_seconds=300
+            ttl_hours=2
+          else
+            operation='${{ inputs.operation }}'
+            capture_seconds='${{ inputs.capture_seconds }}'
+            ttl_hours='${{ inputs.ttl_hours }}'
+          fi
+          [[ "$capture_seconds" =~ ^[0-9]+$ ]] && (( capture_seconds >= 30 && capture_seconds <= 3600 ))
+          [[ "$ttl_hours" =~ ^[0-9]+$ ]] && (( ttl_hours >= 1 && ttl_hours <= 72 ))
+          (( ttl_hours * 3600 >= capture_seconds + 900 )) || {
+            echo 'ttl_hours must leave at least 15 minutes beyond capture_seconds' >&2
+            exit 1
+          }
           test -n "$SCW_ACCESS_KEY"
           test -n "$SCW_SECRET_KEY"
-          test -n "$TF_VAR_project_id"
-          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/nomad-wan-plan" -C "github-plan-${GITHUB_RUN_ID}"
+          project_id="$(bash scripts/wan/resolve-scaleway-project.sh)"
+          echo "::add-mask::$project_id"
+          {
+            echo "WAN_OPERATION=$operation"
+            echo "WAN_CAPTURE_SECONDS=$capture_seconds"
+            echo "WAN_TTL_HOURS=$ttl_hours"
+            echo "SCW_DEFAULT_PROJECT_ID=$project_id"
+            echo "TF_VAR_project_id=$project_id"
+          } >> "$GITHUB_ENV"
+
+      - name: Build exact Nomad WAN binaries
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+          mkdir -p dist/wan
+          for command in nomad-operator nomad-topology nomad-dkg nomad-node nomad-shaper; do
+            go build -trimpath -ldflags='-s -w' -o "dist/wan/$command" "./cmd/$command"
+          done
+          sha256sum dist/wan/* > dist/wan/SHA256SUMS
+
+      - name: Generate ephemeral orchestration key and runner ACL
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/nomad-wan" -C "github-run-${GITHUB_RUN_ID}"
           runner_ip="$(curl -4 --fail --silent --show-error --max-time 10 https://api.ipify.org)"
           [[ "$runner_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
           {
-            echo "TF_VAR_ssh_public_key=$(cat "$RUNNER_TEMP/nomad-wan-plan.pub")"
+            echo "TF_VAR_ssh_public_key=$(cat "$RUNNER_TEMP/nomad-wan.pub")"
             echo "TF_VAR_admin_ipv4_cidr=${runner_ip}/32"
-            echo "TF_VAR_deployment_id=plan-${GITHUB_RUN_ID}"
-            echo "TF_VAR_ttl_hours=1"
+            echo "TF_VAR_deployment_id=gh-${GITHUB_RUN_ID}"
+            echo "TF_VAR_ttl_hours=$WAN_TTL_HOURS"
           } >> "$GITHUB_ENV"
-      - name: Plan against real Scaleway API
+
+      - name: Terraform exact create-only plan
         run: |
           set -euo pipefail
-          mkdir -p runtime/evidence/scaleway-plan
+          mkdir -p runtime/evidence/scaleway-wan
           terraform -chdir=deploy/scaleway init
           terraform -chdir=deploy/scaleway plan -refresh=false -lock=false -out="$RUNNER_TEMP/nomad-wan.tfplan"
-          terraform -chdir=deploy/scaleway show -no-color "$RUNNER_TEMP/nomad-wan.tfplan" > runtime/evidence/scaleway-plan/terraform-plan.txt
-          terraform -chdir=deploy/scaleway show -json "$RUNNER_TEMP/nomad-wan.tfplan" > runtime/evidence/scaleway-plan/terraform-plan.json
-      - name: Assert exact zero-cost plan shape
-        shell: bash
-        run: |
+          terraform -chdir=deploy/scaleway show -no-color "$RUNNER_TEMP/nomad-wan.tfplan" > runtime/evidence/scaleway-wan/terraform-plan.txt
+          terraform -chdir=deploy/scaleway show -json "$RUNNER_TEMP/nomad-wan.tfplan" > runtime/evidence/scaleway-wan/terraform-plan.json
           python3 - <<'PY'
           import collections, json
           from pathlib import Path
-
-          plan = json.loads(Path('runtime/evidence/scaleway-plan/terraform-plan.json').read_text())
+          plan = json.loads(Path('runtime/evidence/scaleway-wan/terraform-plan.json').read_text())
           changes = []
           for resource in plan.get('resource_changes', []):
               actions = resource.get('change', {}).get('actions', [])
@@ -139,118 +170,48 @@ jobs:
           })
           if observed != expected:
               raise SystemExit(f"unexpected plan resource shape: {dict(observed)} != {dict(expected)}")
-          Path('runtime/evidence/scaleway-plan/PLAN_OK.txt').write_text(
-              'PASS: authenticated Scaleway plan contains exactly 15 create-only resources '
-              '(3 servers, 6 routed IPs, 3 security groups, 3 rule sets) and applies nothing.\n'
+          Path('runtime/evidence/scaleway-wan/PLAN_OK.txt').write_text(
+              'PASS: authenticated plan contains exactly 15 create-only WAN lab resources.\n'
           )
-          print(Path('runtime/evidence/scaleway-plan/PLAN_OK.txt').read_text(), end='')
           PY
-      - name: Upload authenticated plan evidence
-        uses: actions/upload-artifact@v4
-        with:
-          name: scaleway-authenticated-plan-${{ github.run_id }}
-          path: runtime/evidence/scaleway-plan/
-          if-no-files-found: error
-          retention-days: 14
 
-  provision:
-    needs: validate
-    if: github.event_name == 'workflow_dispatch' && inputs.operation != 'destroy'
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
-      SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
-      SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_PROJECT_ID }}
-      SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_ORGANIZATION_ID }}
-      TF_VAR_project_id: ${{ secrets.SCW_PROJECT_ID }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: '1.25.x'
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: '1.14.6'
-          terraform_wrapper: false
-
-      - name: Validate workflow inputs and credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ '${{ inputs.capture_seconds }}' =~ ^[0-9]+$ ]] && (( ${{ inputs.capture_seconds }} >= 30 && ${{ inputs.capture_seconds }} <= 3600 ))
-          [[ '${{ inputs.ttl_hours }}' =~ ^[0-9]+$ ]] && (( ${{ inputs.ttl_hours }} >= 1 && ${{ inputs.ttl_hours }} <= 72 ))
-          (( ${{ inputs.ttl_hours }} * 3600 >= ${{ inputs.capture_seconds }} + 900 )) || {
-            echo 'ttl_hours must leave at least 15 minutes beyond capture_seconds' >&2
-            exit 1
-          }
-          test -n "$SCW_ACCESS_KEY"
-          test -n "$SCW_SECRET_KEY"
-          test -n "$TF_VAR_project_id"
-
-      - name: Build exact Nomad WAN binaries
-        env:
-          CGO_ENABLED: '0'
-          GOOS: linux
-          GOARCH: amd64
-        run: |
-          set -euo pipefail
-          mkdir -p dist/wan
-          for command in nomad-operator nomad-topology nomad-dkg nomad-node; do
-            go build -trimpath -ldflags='-s -w' -o "dist/wan/$command" "./cmd/$command"
-          done
-          sha256sum dist/wan/* > dist/wan/SHA256SUMS
-
-      - name: Generate ephemeral orchestration key and runner ACL
-        shell: bash
-        run: |
-          set -euo pipefail
-          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/nomad-wan" -C "github-run-${GITHUB_RUN_ID}"
-          runner_ip="$(curl -4 --fail --silent --show-error --max-time 10 https://api.ipify.org)"
-          [[ "$runner_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          {
-            echo "TF_VAR_ssh_public_key=$(cat "$RUNNER_TEMP/nomad-wan.pub")"
-            echo "TF_VAR_admin_ipv4_cidr=${runner_ip}/32"
-            echo "TF_VAR_deployment_id=gh-${GITHUB_RUN_ID}"
-            echo "TF_VAR_ttl_hours=${{ inputs.ttl_hours }}"
-          } >> "$GITHUB_ENV"
-
-      - name: Terraform plan
-        run: |
-          set -euo pipefail
-          mkdir -p runtime/evidence/scaleway-wan
-          terraform -chdir=deploy/scaleway init
-          terraform -chdir=deploy/scaleway plan -out="$RUNNER_TEMP/nomad-wan.tfplan"
-          terraform -chdir=deploy/scaleway show -no-color "$RUNNER_TEMP/nomad-wan.tfplan" > runtime/evidence/scaleway-wan/terraform-plan.txt
-
-      - name: Apply three-region lab
-        if: inputs.operation == 'apply'
+      - name: Apply disposable three-region lab
+        if: env.WAN_OPERATION == 'apply'
         run: terraform -chdir=deploy/scaleway apply -auto-approve "$RUNNER_TEMP/nomad-wan.tfplan"
 
-      - name: Record deployment inputs
-        if: inputs.operation == 'apply'
+      - name: Record deployment and preserve emergency destroy state
+        if: env.WAN_OPERATION == 'apply'
         shell: bash
         run: |
           set -euo pipefail
           terraform -chdir=deploy/scaleway output -json nodes > runtime/evidence/scaleway-wan/nodes.json
-          cat > runtime/evidence/scaleway-wan/deployment.env <<EOF
+          mkdir -p runtime/scaleway-state
+          cp deploy/scaleway/terraform.tfstate runtime/scaleway-state/terraform.tfstate
+          cat > runtime/scaleway-state/deployment.env <<EOF
           DEPLOYMENT_ID=${TF_VAR_deployment_id}
           ADMIN_IPV4_CIDR=${TF_VAR_admin_ipv4_cidr}
           TTL_HOURS=${TF_VAR_ttl_hours}
-          CAPTURE_SECONDS=${{ inputs.capture_seconds }}
           APPLY_RUN_ID=${GITHUB_RUN_ID}
           EOF
 
+      - name: Upload emergency destroy state
+        if: env.WAN_OPERATION == 'apply'
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaleway-wan-state-${{ github.run_id }}
+          path: runtime/scaleway-state/
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Run real WAN DKG and cadence capture
-        if: inputs.operation == 'apply'
+        if: env.WAN_OPERATION == 'apply'
         env:
-          CAPTURE_SECONDS: ${{ inputs.capture_seconds }}
-          TTL_HOURS: ${{ inputs.ttl_hours }}
+          CAPTURE_SECONDS: ${{ env.WAN_CAPTURE_SECONDS }}
+          TTL_HOURS: ${{ env.WAN_TTL_HOURS }}
           DEPLOYMENT_ID: gh-${{ github.run_id }}
           EXPECTED_INTERVAL_MS: '50'
         run: |
           set -euo pipefail
-          command -v tcpdump >/dev/null || (sudo apt-get update && sudo apt-get install -y tcpdump)
           bash scripts/wan/scaleway-provision.sh \
             runtime/evidence/scaleway-wan/nodes.json \
             "$RUNNER_TEMP/nomad-wan" \
@@ -258,19 +219,26 @@ jobs:
             runtime/evidence/scaleway-wan
 
       - name: Render human-readable result
-        if: success() && inputs.operation == 'apply'
+        if: success() && env.WAN_OPERATION == 'apply'
         run: |
           set -euo pipefail
           python3 scripts/wan/summarize-result.py runtime/evidence/scaleway-wan
           cat runtime/evidence/scaleway-wan/RESULT.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Package Terraform state for explicit destroy
-        if: success() && inputs.operation == 'apply'
+      - name: Destroy disposable lab after successful campaign
+        if: success() && env.WAN_OPERATION == 'apply'
         run: |
           set -euo pipefail
-          mkdir -p runtime/scaleway-state
-          cp deploy/scaleway/terraform.tfstate runtime/scaleway-state/terraform.tfstate
-          cp runtime/evidence/scaleway-wan/deployment.env runtime/scaleway-state/deployment.env
+          terraform -chdir=deploy/scaleway destroy -auto-approve
+          test "$(terraform -chdir=deploy/scaleway state list | wc -l)" -eq 0
+          echo 'destroyed_after_campaign=true' >> runtime/evidence/scaleway-wan/RESULT_STATE.txt
+
+      - name: Fail-closed cleanup after unsuccessful apply/campaign
+        if: failure() && env.WAN_OPERATION == 'apply'
+        continue-on-error: true
+        run: |
+          echo 'Apply/campaign failed; destroying resources recorded in local Terraform state.'
+          terraform -chdir=deploy/scaleway destroy -auto-approve
 
       - name: Upload WAN evidence
         if: always()
@@ -281,22 +249,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Upload destroy state
-        if: success() && inputs.operation == 'apply'
-        uses: actions/upload-artifact@v4
-        with:
-          name: scaleway-wan-state-${{ github.run_id }}
-          path: runtime/scaleway-state/
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Fail-closed cleanup after an unsuccessful apply
-        if: failure() && inputs.operation == 'apply'
-        continue-on-error: true
-        run: |
-          echo 'Apply/campaign failed; destroying any resources recorded in local Terraform state.'
-          terraform -chdir=deploy/scaleway destroy -auto-approve
-
   destroy:
     needs: validate
     if: github.event_name == 'workflow_dispatch' && inputs.operation == 'destroy'
@@ -305,25 +257,29 @@ jobs:
     env:
       SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
       SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
-      SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_PROJECT_ID }}
-      SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_ORGANIZATION_ID }}
-      TF_VAR_project_id: ${{ secrets.SCW_PROJECT_ID }}
+      SCW_PROJECT_ID: ${{ secrets.SCW_PROJECT_ID }}
     steps:
       - uses: actions/checkout@v7
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: '1.14.6'
           terraform_wrapper: false
-
-      - name: Require an apply run ID
+      - name: Resolve Project scope
         run: |
           set -euo pipefail
+          project_id="$(bash scripts/wan/resolve-scaleway-project.sh)"
+          echo "::add-mask::$project_id"
+          {
+            echo "SCW_DEFAULT_PROJECT_ID=$project_id"
+            echo "TF_VAR_project_id=$project_id"
+          } >> "$GITHUB_ENV"
+      - name: Require an apply run ID
+        run: |
           [[ '${{ inputs.state_run_id }}' =~ ^[0-9]+$ ]] || {
-            echo 'state_run_id must be the numeric GitHub Actions run ID of a successful apply' >&2
+            echo 'state_run_id must be the numeric run ID of the interrupted apply' >&2
             exit 1
           }
-
-      - name: Download the apply state artifact
+      - name: Download apply state artifact
         uses: actions/download-artifact@v4
         with:
           name: scaleway-wan-state-${{ inputs.state_run_id }}
@@ -331,8 +287,7 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.state_run_id }}
-
-      - name: Restore state and public variables
+      - name: Restore state and destroy all lab resources
         shell: bash
         run: |
           set -euo pipefail
@@ -348,10 +303,6 @@ jobs:
             echo "TF_VAR_ttl_hours=$TTL_HOURS"
             echo 'TF_VAR_ssh_public_key=unused-during-destroy'
           } >> "$GITHUB_ENV"
-
-      - name: Destroy all lab resources
-        run: |
-          set -euo pipefail
           terraform -chdir=deploy/scaleway init
           terraform -chdir=deploy/scaleway destroy -auto-approve
           test "$(terraform -chdir=deploy/scaleway state list | wc -l)" -eq 0
