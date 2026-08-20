@@ -1,6 +1,7 @@
 package epoch
 
 import (
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"testing"
