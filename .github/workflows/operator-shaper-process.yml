@@ -1,23 +1,6 @@
 name: operator-shaper-process
 
 on:
-  push:
-    branches: [agent/operator-shaper-process]
-    paths:
-      - 'cmd/nomad-shaper/**'
-      - 'live/shaper/**'
-      - 'live/relayipc/**'
-      - 'testnet/shaper_process_boundary_test.go'
-      - 'testnet/shaper_dkg_helper_test.go'
-      - '.github/workflows/operator-shaper-process.yml'
-  pull_request:
-    paths:
-      - 'cmd/nomad-shaper/**'
-      - 'live/shaper/**'
-      - 'live/relayipc/**'
-      - 'testnet/shaper_process_boundary_test.go'
-      - 'testnet/shaper_dkg_helper_test.go'
-      - '.github/workflows/operator-shaper-process.yml'
   workflow_dispatch:
 
 permissions:
