@@ -32,25 +32,26 @@ control you provide.
 1. **Full-disk encryption is mandatory.** Key erasure at epoch retirement
    guarantees destruction of files within an encrypted volume, and nothing
    stronger. Without FDE the erasure claim does not hold.
-2. **Do not back up the share directory.** Backups defeat erasure. Back up
-   your operator secret (step 1 below) once, offline, and nothing else.
+2. **Do not back up epoch shares or DKG state.** Backups defeat forward
+   erasure. Back up your long-lived operator identity only according to the
+   operator recovery policy; epoch-private material must not enter backups or
+   snapshots.
 3. Have your own admin account on your own host. Do not share credentials
    with any other operator or with the maintainers.
 
 ## Step 1 — Create your identity, locally
 
-```
+```bash
 nomad-operator init \
   --id <your-operator-id> \
   --endpoint <public-host>:4200 \
-  --partial-endpoint http://<public-host>:8080/ \
-  --dkg-endpoint https://<public-host>:8443/ \
+  --partial-endpoint http://<public-host>:4300/ \
+  --dkg-endpoint https://<public-host>:4400/ \
   --secret /etc/nomad/operator-secret.json \
   --enrollment ./enrollment.json
 ```
 
-This generates three private keys — an Ed25519 identity, an X25519
-key-agreement key, and a DKG identity — and writes them to
+This generates the private operator material locally and writes it to
 `operator-secret.json` with mode 0600. **That file never leaves your host.**
 Nobody else, including the maintainers, ever needs it or should be given it.
 
@@ -59,7 +60,7 @@ one, to the coordinator.
 
 Confirm what you created without opening the secret by hand:
 
-```
+```bash
 nomad-operator inspect --secret /etc/nomad/operator-secret.json
 ```
 
@@ -77,7 +78,7 @@ sends it back. **Read it before attesting.** Check that:
 
 Then:
 
-```
+```bash
 nomad-operator attest \
   --secret /etc/nomad/operator-secret.json \
   --draft ./draft.json \
@@ -93,7 +94,7 @@ membership unilaterally.
 
 Once the authority has collected every attestation and signed the result:
 
-```
+```bash
 nomad-operator verify \
   --secret /etc/nomad/operator-secret.json \
   --topology ./topology.json \
@@ -106,45 +107,99 @@ rather than proceeding.
 
 ## Step 4 — Run the DKG at the scheduled time
 
-The topology names an absolute start time. Run:
+Provision a TLS certificate/private key for the DKG endpoint and start the
+ceremony before the signed start boundary:
 
-```
-nomad-dkg --topology ./topology.json --authority-key ./authority.pub \
-  --secret /etc/nomad/operator-secret.json \
-  --state /var/lib/nomad/dkg --share /etc/nomad/share.json \
-  --certificate ./certificate.json --listen :8443
+```bash
+install -d -m 0700 /var/lib/nomad/dkg /run/nomad
+nomad-dkg \
+  --topology ./topology.json \
+  --authority-key ./authority.pub \
+  --secrets /etc/nomad/operator-secret.json \
+  --listen :4400 \
+  --state /var/lib/nomad/dkg \
+  --share-out /run/nomad/threshold-share.json \
+  --certificate-out ./certificate.json \
+  --tls-certificate /etc/nomad/tls/dkg.crt \
+  --tls-private-key /etc/nomad/tls/dkg.key
 ```
 
 Every configured operator must be online and complete the ceremony; there is
 no partial success. If it aborts, do not improvise — wait for the next
-public retry offset. `/etc/nomad/share.json` is your threshold share and is
-as private as your operator secret.
+public retry offset and start a fresh signed session. The threshold share is
+as private as the operator secret and must never leave your host.
 
-## Step 5 — Serve
+## Step 5 — Activate and serve the epoch
 
-Start the node, share service and partial-fetch endpoints per
-`deploy/MULTI_OPERATOR.md`. Your host now carries fixed-cadence traffic
-whether or not anyone is reading anything; that constancy is the privacy
-property, so please do not "optimize" it.
+Do not infer activation from the topology validity envelope. Obtain the
+fully verified `epoch-descriptor.json` for the epoch. It binds the exact
+signed topology, the all-operator-certified DKG result, the public activation
+and retirement boundaries, and all activation signatures.
 
-## Step 6 — Epoch rotation, and erasure
+Maintain a local persistent chain directory, for example
+`/var/lib/nomad/epoch-chain`. `nomad-share` imports the supplied descriptor
+idempotently and refuses to open its HTTP listener unless that epoch is
+currently `ACTIVE` in the verified chain:
+
+```bash
+install -d -m 0700 /var/lib/nomad/epoch-chain
+nomad-share \
+  --topology /etc/nomad/topology.json \
+  --authority-key /etc/nomad/authority.pub \
+  --epoch-descriptor /etc/nomad/epoch-descriptor.json \
+  --epoch-chain /var/lib/nomad/epoch-chain \
+  --descriptor /etc/nomad/descriptor.json \
+  --share /run/nomad/threshold-share.json \
+  --cache /var/lib/nomad/raw \
+  --out /var/lib/nomad/partials \
+  --interval 1s \
+  --listen :4300
+```
+
+The running service re-reads the persisted chain before threshold work and
+before serving a previously generated partial. A scheduled retirement, an
+emergency successor, or a recorded chain halt therefore fails closed without
+requiring the service to keep using stale in-memory epoch state.
+
+Start the remaining node and reader-side processes per
+`deploy/MULTI_OPERATOR.md`. Fixed-cadence traffic must not be optimized in
+response to user activity.
+
+## Step 6 — Epoch rotation and erasure
 
 Epochs rotate on a public schedule. You will be asked to attest the next
-epoch's draft (step 2) while the current one is still serving. When an epoch
-retires:
+epoch while the current one is still serving. Ensure the successor descriptor
+is appended to the same local epoch chain used by the share service. For an
+emergency transition the predecessor becomes `RETIRED` at the emergency
+successor's activation boundary, even if the predecessor's own scheduled
+`retire_at` is later.
 
-```
+Once chain state says epoch N is `RETIRED`:
+
+```bash
 nomad-operator erase \
   --secret /etc/nomad/operator-secret.json \
-  --epoch-descriptor ./epoch-N.json --authority-key ./authority.pub \
-  --network <network-id> --filesystem ext4 \
+  --chain /var/lib/nomad/epoch-chain \
+  --epoch N \
+  --authority-key /etc/nomad/authority.pub \
+  --network <network-id> \
+  --filesystem ext4 \
   --out ./erasure-N.json \
-  /etc/nomad/share.json /var/lib/nomad/dkg
+  /run/nomad/threshold-share-N.json /var/lib/nomad/dkg-N/private-state.json
 ```
 
-This overwrites and unlinks the retired epoch's private material and emits a
-signed statement of exactly what was destroyed. It refuses to run before the
-retirement boundary. Send the statement; keep nothing else.
+The command looks the epoch up in the already verified chain rather than
+trying to verify a successor descriptor as a standalone genesis. It refuses
+to erase an `ACTIVE` or `READY` epoch, refuses protected chain/identity paths,
+verifies that the signing key belongs to that epoch's operator **before**
+destroying anything, overwrites and unlinks the requested private files, and
+fsyncs their parent directories before producing the signed erasure statement.
+
+The statement records exactly what was destroyed and states the storage
+limitations. On journaling filesystems, flash, copy-on-write storage,
+snapshots, or backups, overwrite/unlink is not a physical-media guarantee.
+The supported claim depends on encrypted storage and no backup of epoch-private
+material.
 
 ## If something goes wrong
 
@@ -154,12 +209,10 @@ ceremonies. Two things are worth knowing in advance:
 
 - **If you believe your key is compromised, say so immediately.** Recovery
   is a normal protocol flow. A quorum of your peers can revoke a
-  compromised operator without your cooperation, and you can self-revoke
-  with one command. Nothing about this requires rebuilding the network.
-- **If your node halts reporting equivocation, do not clear it.** That means
-  two conflicting signed documents exist for one epoch, which is a
-  governance failure, not a bug. Preserve the `HALTED` file — it is the
-  evidence — and report it.
+  compromised operator without its cooperation.
+- **If your node halts reporting equivocation, do not clear it.** Preserve
+  the `HALTED` evidence and report it. Serving after a valid equivocation is
+  intentionally forbidden.
 
 ## What we will never ask you for
 
