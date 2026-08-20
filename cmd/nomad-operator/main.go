@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -9,7 +11,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"github.com/Jtensetti/nomad-testnet/live/ceremony"
+	"github.com/Jtensetti/nomad-testnet/live/epoch"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -22,15 +26,19 @@ func main() {
 
 func run(arguments []string) error {
 	if len(arguments) == 0 {
-		return errors.New("required subcommand: init, attest or verify")
+		return errors.New("required subcommand: init, inspect, attest, verify or erase")
 	}
 	switch arguments[0] {
 	case "init":
 		return initialize(arguments[1:])
+	case "inspect":
+		return inspect(arguments[1:])
 	case "attest":
 		return attest(arguments[1:])
 	case "verify":
 		return verify(arguments[1:])
+	case "erase":
+		return erase(arguments[1:])
 	default:
 		return fmt.Errorf("unknown subcommand %q", arguments[0])
 	}
@@ -84,6 +92,99 @@ func initialize(arguments []string) error {
 		OperatorID string `json:"operator_id"`
 		Enrollment string `json:"enrollment"`
 	}{*operatorID, *enrollmentPath})
+}
+
+// inspect prints the PUBLIC identity an operator holds, so an administrator
+// can confirm what they enrolled without ever opening the secret by hand.
+// It prints public keys only; no private material reaches stdout.
+func inspect(arguments []string) error {
+	flags := flag.NewFlagSet("inspect", flag.ContinueOnError)
+	secretPath := flags.String("secret", "", "private operator-secret path")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *secretPath == "" {
+		return errors.New("--secret is required")
+	}
+	keys, err := topology.LoadPrivateKeys(*secretPath)
+	if err != nil {
+		return err
+	}
+	dkgPublic, err := mix.DKGPublicFromPrivate(keys.DKG)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(struct {
+		OperatorID     string `json:"operator_id"`
+		IdentityKey    string `json:"identity_key"`
+		KEXKey         string `json:"kex_key"`
+		DKGIdentityKey string `json:"dkg_identity_key"`
+	}{
+		keys.OperatorID,
+		base64.StdEncoding.EncodeToString(keys.Identity.Public().(ed25519.PublicKey)),
+		base64.StdEncoding.EncodeToString(keys.KEX.PublicKey().Bytes()),
+		base64.StdEncoding.EncodeToString(dkgPublic[:]),
+	})
+}
+
+// erase destroys this operator's private material for a retired epoch and
+// emits the signed statement that records what was destroyed, including the
+// standard limitations text. It refuses to run against an epoch that is
+// still serving.
+func erase(arguments []string) error {
+	flags := flag.NewFlagSet("erase", flag.ContinueOnError)
+	secretPath := flags.String("secret", "", "private operator-secret path")
+	descriptorPath := flags.String("epoch-descriptor", "", "retired epoch descriptor path")
+	authorityPath := flags.String("authority-key", "", "pinned public authority-key path")
+	networkID := flags.String("network", "", "network identifier")
+	filesystem := flags.String("filesystem", "", "filesystem type of the erased paths, recorded in the statement")
+	outputPath := flags.String("out", "", "new signed erasure-statement path")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if *secretPath == "" || *descriptorPath == "" || *authorityPath == "" || *networkID == "" || *filesystem == "" || *outputPath == "" {
+		return errors.New("--secret, --epoch-descriptor, --authority-key, --network, --filesystem and --out are required")
+	}
+	if flags.NArg() == 0 {
+		return errors.New("at least one path to erase is required")
+	}
+	authority, err := topology.LoadAuthorityKey(*authorityPath)
+	if err != nil {
+		return err
+	}
+	encodedDescriptor, err := readBoundedRegular(*descriptorPath)
+	if err != nil {
+		return err
+	}
+	retired, err := epoch.Verify(encodedDescriptor, authority, nil, nil)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	if now.Before(retired.RetireAt) {
+		return fmt.Errorf("refusing to erase material for epoch %d before its retirement boundary %s",
+			retired.Epoch, retired.RetireAt.Format(time.RFC3339))
+	}
+	keys, err := topology.LoadPrivateKeys(*secretPath)
+	if err != nil {
+		return err
+	}
+	statement, err := epoch.EraseEpochMaterial(*networkID, keys.OperatorID, retired, flags.Args(), *filesystem, keys.Identity, now)
+	if err != nil {
+		return err
+	}
+	encoded, err := epoch.EncodeErasureStatement(statement)
+	if err != nil {
+		return err
+	}
+	if err := writeNew(*outputPath, encoded, 0o644); err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(struct {
+		OperatorID string `json:"operator_id"`
+		Epoch      uint64 `json:"epoch"`
+		Files      int    `json:"files_erased"`
+	}{statement.OperatorID, statement.Epoch, len(statement.Files)})
 }
 
 func attest(arguments []string) error {

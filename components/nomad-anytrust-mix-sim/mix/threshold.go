@@ -147,16 +147,43 @@ func validateThresholdCommittee(committee ThresholdCommittee) error {
 		return errors.New("invalid committee threshold")
 	}
 	s := newSuite()
-	if _, err := publicPoint(s, committee.PublicKey); err != nil {
+	key, err := publicPoint(s, committee.PublicKey)
+	if err != nil {
+		return fmt.Errorf("committee public key: %w", err)
+	}
+	if err := rejectSmallOrder(s, key); err != nil {
 		return fmt.Errorf("committee public key: %w", err)
 	}
 	for index, member := range committee.Members {
 		if member.Index != uint32(index) {
 			return errors.New("committee members must have contiguous ordered indexes")
 		}
-		if _, err := sharePublicPoint(s, member.Share); err != nil {
+		memberShare, err := sharePublicPoint(s, member.Share)
+		if err != nil {
 			return fmt.Errorf("member %d public share: %w", index, err)
 		}
+		if err := rejectSmallOrder(s, memberShare); err != nil {
+			return fmt.Errorf("member %d public share: %w", index, err)
+		}
+	}
+	return nil
+}
+
+// rejectSmallOrder refuses the identity and the small-order points of the
+// curve.
+//
+// Decoding alone does not establish that a key is usable: the all-zero
+// encoding is a valid point of order 4, so a committee "public key" of small
+// order masks a plaintext with only a handful of possible values and anything
+// encrypted to it -- publication cover among other things -- is recoverable
+// with no key material at all. The cofactor is 8, so clearing it and testing
+// for the identity catches the whole small-order subgroup.
+func rejectSmallOrder(s proof.Suite, point kyber.Point) error {
+	if point.Equal(s.Point().Null()) {
+		return errors.New("point is the group identity")
+	}
+	if s.Point().Mul(s.Scalar().SetInt64(8), point).Equal(s.Point().Null()) {
+		return errors.New("point lies in the small-order subgroup")
 	}
 	return nil
 }
@@ -365,12 +392,54 @@ func VerifyPartialDecryption(committee ThresholdCommittee, batch *Batch, partial
 }
 
 func ThresholdDecrypt(committee ThresholdCommittee, batch *Batch, partials []*PartialDecryption) ([]PlainCell, error) {
+	columns, err := ThresholdDecryptColumns(committee, batch, partials)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PlainCell, len(columns))
+	for index, column := range columns {
+		if column.Err != nil {
+			return nil, column.Err
+		}
+		out[index] = column.Cell
+	}
+	return out, nil
+}
+
+// DecryptedCell is one column's outcome. Err is set when that column alone
+// could not be recovered.
+type DecryptedCell struct {
+	Cell PlainCell
+	Err  error
+}
+
+// ThresholdDecryptColumns is ThresholdDecrypt except that one undecryptable
+// column does not censor the rest.
+//
+// A ciphertext built from valid curve points that is not a real encryption
+// passes every structural check and every shuffle proof -- a shuffle proof
+// shows a permutation, not decryptability -- and fails only here. Under an
+// all-or-nothing decryption, one such column discards every other sender's
+// plaintext in the batch, after the whole committee has already spent its
+// budget on it. Callers that batch independent senders must use this form and
+// drop the failing column, so one poisoned entry cannot censor its
+// neighbours.
+func ThresholdDecryptColumns(committee ThresholdCommittee, batch *Batch, partials []*PartialDecryption) ([]DecryptedCell, error) {
 	if err := validateThresholdCommittee(committee); err != nil {
 		return nil, err
 	}
 	if err := validateBatch(batch); err != nil {
 		return nil, err
 	}
+	decoded, err := verifiedPartialPoints(committee, batch, partials)
+	if err != nil {
+		return nil, err
+	}
+	return recoverColumns(newSuite(), committee, batch, decoded)
+}
+
+func verifiedPartialPoints(committee ThresholdCommittee, batch *Batch,
+	partials []*PartialDecryption) (map[uint32][]kyber.Point, error) {
 	if len(partials) < int(committee.Threshold) {
 		return nil, errors.New("not enough partial decryptions")
 	}
@@ -397,8 +466,12 @@ func ThresholdDecrypt(committee ThresholdCommittee, batch *Batch, partials []*Pa
 	if len(seen) < int(committee.Threshold) {
 		return nil, errors.New("not enough unique partial decryptions")
 	}
+	return decoded, nil
+}
 
-	out := make([]PlainCell, batch.Len())
+func recoverColumns(s proof.Suite, committee ThresholdCommittee, batch *Batch,
+	decoded map[uint32][]kyber.Point) ([]DecryptedCell, error) {
+	out := make([]DecryptedCell, batch.Len())
 	for col := 0; col < batch.Len(); col++ {
 		for row := 0; row < ChunkCount; row++ {
 			pointIndex := row*batch.Len() + col
@@ -408,17 +481,21 @@ func ThresholdDecrypt(committee ThresholdCommittee, batch *Batch, partials []*Pa
 			}
 			sharedPoint, err := share.RecoverCommit(s, publicShares, committee.Threshold, uint32(len(committee.Members)))
 			if err != nil {
+				// Share recovery failing is a committee-level fault rather
+				// than a property of this column, so it fails the call.
 				return nil, fmt.Errorf("recover shared point for cell %d chunk %d: %w", col, row, err)
 			}
 			message := s.Point().Sub(batch.y[row][col], sharedPoint)
 			data, err := message.Data()
 			if err != nil {
-				return nil, fmt.Errorf("decrypt cell %d chunk %d: %w", col, row, err)
+				out[col].Err = fmt.Errorf("decrypt cell %d chunk %d: %w", col, row, err)
+				break
 			}
 			if len(data) != ChunkSize {
-				return nil, fmt.Errorf("decrypt cell %d chunk %d: got %d bytes", col, row, len(data))
+				out[col].Err = fmt.Errorf("decrypt cell %d chunk %d: got %d bytes", col, row, len(data))
+				break
 			}
-			copy(out[col][row*ChunkSize:], data)
+			copy(out[col].Cell[row*ChunkSize:], data)
 		}
 	}
 	return out, nil
@@ -439,4 +516,32 @@ func partialProofDomain(committee ThresholdCommittee, member PublicMember, batch
 	_, _ = h.Write(member.Share[:])
 	_, _ = h.Write(batchDigest[:])
 	return thresholdProofLabel + ":" + hex.EncodeToString(h.Sum(nil))
+}
+
+// ValidateCiphertextColumn checks that one wire cell decodes as a batch column
+// of usable points.
+//
+// It is stricter than ParseWire, which only requires the points to decode. An
+// honest ElGamal ciphertext has x = rG for a uniform r and y = M + rH, so a
+// point of small order appears with probability around 2^-252 -- never, in
+// practice. A column of identity points, on the other hand, is exactly what an
+// attacker submits to occupy a slot with something that cannot decrypt, so it
+// is refused at the boundary rather than discovered after the committee has
+// spent its budget on it.
+func ValidateCiphertextColumn(cell WireCell) error {
+	s := newSuite()
+	offset := 0
+	for row := 0; row < ChunkCount; row++ {
+		for pair := 0; pair < 2; pair++ {
+			p := s.Point()
+			if err := p.UnmarshalBinary(cell[offset : offset+pointSize]); err != nil {
+				return fmt.Errorf("chunk %d point %d: %w", row, pair, err)
+			}
+			if err := rejectSmallOrder(s, p); err != nil {
+				return fmt.Errorf("chunk %d point %d: %w", row, pair, err)
+			}
+			offset += pointSize
+		}
+	}
+	return nil
 }

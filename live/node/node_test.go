@@ -126,6 +126,21 @@ func TestReceiveRejectsInvalidSourcesAuthenticationAndReplay(t *testing.T) {
 
 func nodeTestTopology(t *testing.T) (topology.Verified, map[string]ed25519.PrivateKey, []string) {
 	t.Helper()
+	return nodeTestTopologyWithCadence(t, 10, 40, singlePeerPlan)
+}
+
+func singlePeerPlan(index int) []uint16 { return []uint16{uint16((index + 1) % 3)} }
+
+// rotatingPeerPlan gives each operator a two-peer plan, so a test can check
+// that the destination a cell goes to is a function of the signed plan and
+// the emission ordinal alone. A plan must stay shorter than the operator
+// count, so two entries is the longest available with three operators.
+func rotatingPeerPlan(index int) []uint16 {
+	return []uint16{uint16((index + 1) % 3), uint16((index + 2) % 3)}
+}
+
+func nodeTestTopologyWithCadence(t *testing.T, intervalMillis, maxLatenessMillis uint32, peerPlan func(int) []uint16) (topology.Verified, map[string]ed25519.PrivateKey, []string) {
+	t.Helper()
 	endpoints := make([]string, 3)
 	listeners := make([]*net.UDPConn, 3)
 	for index := range endpoints {
@@ -153,8 +168,8 @@ func nodeTestTopology(t *testing.T) (topology.Verified, map[string]ed25519.Priva
 		NotBefore: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
 		NotAfter:  time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 		Traffic: topology.TrafficClass{
-			CellSize: topology.CellSize, CellIntervalMillis: 10,
-			MaxLatenessMillis: 40, QueueCapacity: 32,
+			CellSize: topology.CellSize, CellIntervalMillis: intervalMillis,
+			MaxLatenessMillis: maxLatenessMillis, QueueCapacity: 32,
 		},
 		DKG:       topology.DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
 		Operators: make([]topology.Operator, 3),
@@ -181,7 +196,7 @@ func nodeTestTopology(t *testing.T) (topology.Verified, map[string]ed25519.Priva
 			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey),
 			KEXKey:          base64.StdEncoding.EncodeToString(kexKey.PublicKey().Bytes()),
 			DKGIdentityKey:  base64.StdEncoding.EncodeToString(dkgPublic[:]),
-			PeerPlan:        []uint16{uint16((index + 1) % 3)},
+			PeerPlan:        peerPlan(index),
 		}
 	}
 	signed, err := topology.Sign(document, authorityPrivate, identities)
