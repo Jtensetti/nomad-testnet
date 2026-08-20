@@ -10,6 +10,10 @@ permissions:
   contents: read
   actions: read
 
+concurrency:
+  group: nomad-scaleway-wan-once
+  cancel-in-progress: false
+
 env:
   TF_IN_AUTOMATION: 'true'
   TF_INPUT: 'false'
@@ -160,12 +164,16 @@ jobs:
           test "$(terraform -chdir=deploy/scaleway state list | wc -l)" -eq 0
           echo 'destroyed_after_campaign=true' > runtime/evidence/scaleway-wan/RESULT_STATE.txt
 
-      - name: Fail-closed cleanup
-        if: failure()
+      - name: Always attempt final cleanup
+        if: always()
         continue-on-error: true
         run: |
           if test -s deploy/scaleway/terraform.tfstate; then
-            terraform -chdir=deploy/scaleway destroy -auto-approve || true
+            terraform -chdir=deploy/scaleway state list > "$RUNNER_TEMP/state-list.txt" 2>/dev/null || true
+            if test -s "$RUNNER_TEMP/state-list.txt"; then
+              echo 'Residual Terraform resources found; issuing final destroy.'
+              terraform -chdir=deploy/scaleway destroy -auto-approve || true
+            fi
           fi
 
       - name: Upload WAN evidence
