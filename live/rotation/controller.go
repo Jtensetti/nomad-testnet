@@ -11,8 +11,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/Jtensetti/nomad-testnet/live/committee"
 	dkgnet "github.com/Jtensetti/nomad-testnet/live/dkg"
 	"github.com/Jtensetti/nomad-testnet/live/epoch"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
@@ -116,13 +119,25 @@ func (config Config) Step(ctx context.Context, now time.Time) (Outcome, error) {
 }
 
 func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.Plan, out Outcome) (Outcome, error) {
+	if err := ensureRealDirectory(config.StateRoot); err != nil {
+		return Outcome{}, err
+	}
+	if err := ensureRealDirectory(config.ShareRoot); err != nil {
+		return Outcome{}, err
+	}
+	if err := ensureRealDirectory(config.CertRoot); err != nil {
+		return Outcome{}, err
+	}
+
 	markerPath := filepath.Join(config.StateRoot, fmt.Sprintf("epoch-%020d-result.json", planned.Epoch))
 	if marker, err := loadMarker(markerPath); err == nil {
-		if marker.NetworkID != config.NetworkID || marker.Epoch != planned.Epoch {
-			return Outcome{}, errors.New("stored DKG result marker belongs to another network or epoch")
+		verified, err := config.verifyAttemptCompletion(marker.Epoch, marker.Attempt)
+		if err != nil {
+			return Outcome{}, fmt.Errorf("reverify completed DKG: %w", err)
 		}
-		if err := config.verifyMarkerFiles(marker); err != nil {
-			return Outcome{}, err
+		if marker.NetworkID != verified.NetworkID || marker.Epoch != verified.Epoch || marker.Attempt != verified.Attempt ||
+			marker.TopologyDigest != verified.TopologyDigest || marker.CertificateSHA256 != verified.CertificateSHA256 || marker.ShareSHA256 != verified.ShareSHA256 {
+			return Outcome{}, errors.New("stored DKG result marker conflicts with verified DKG artifacts")
 		}
 		out.Status = StatusDKGComplete
 		out.CertificateDigest = marker.CertificateSHA256
@@ -132,7 +147,25 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 		return Outcome{}, err
 	}
 
-	attemptRoot := filepath.Join(config.StateRoot, fmt.Sprintf("epoch-%020d-attempt-%02d", planned.Epoch, planned.Attempt))
+	// A process may have crashed after dkg.Run durably wrote COMPLETE,
+	// certificate and share but before this controller wrote its own marker.
+	// Recover that state by cryptographic verification; never run the DKG again.
+	recovered, found, err := config.recoverCompletedAttempt(planned.Epoch)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if found {
+		if err := writeMarker(markerPath, recovered); err != nil {
+			return Outcome{}, err
+		}
+		out.Status = StatusDKGComplete
+		out.Attempt = recovered.Attempt
+		out.CertificateDigest = recovered.CertificateSHA256
+		out.Reason = "recovered a durably completed successor DKG after controller restart"
+		return out, nil
+	}
+
+	attemptRoot := config.attemptRoot(planned.Epoch, planned.Attempt)
 	if _, err := os.Lstat(attemptRoot); err == nil {
 		out.Status = StatusAwaitRetry
 		out.Reason = "this public DKG attempt already started and did not complete; unsafe resume is forbidden"
@@ -144,7 +177,7 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 	// Every retry is a distinct, authority-signed DKG session. Reusing the
 	// topology from attempt 1 after its signed start time would either violate
 	// dkg.Run's anti-resume rule or silently turn a retry into the same session.
-	topologyPath := filepath.Join(config.TopologyDir, fmt.Sprintf("epoch-%020d", planned.Epoch), fmt.Sprintf("attempt-%02d", planned.Attempt), "topology.json")
+	topologyPath := config.attemptTopologyPath(planned.Epoch, planned.Attempt)
 	network, err := topology.Load(topologyPath, config.Authority, now)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("load successor topology for attempt %d: %w", planned.Attempt, err)
@@ -160,19 +193,27 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 		return Outcome{}, errors.New("successor topology does not contain the configured local operator identity")
 	}
 
-	if err := ensureRealDirectory(config.StateRoot); err != nil {
+	shareOut := config.sharePath(planned.Epoch)
+	certOut := config.certificatePath(planned.Epoch)
+	shareExists, err := pathExists(shareOut)
+	if err != nil {
 		return Outcome{}, err
 	}
-	if err := ensureRealDirectory(config.ShareRoot); err != nil {
+	certExists, err := pathExists(certOut)
+	if err != nil {
 		return Outcome{}, err
 	}
-	if err := ensureRealDirectory(config.CertRoot); err != nil {
-		return Outcome{}, err
+	if shareExists || certExists {
+		return Outcome{}, errors.New("successor DKG outputs exist without a completed DKG store; refusing ambiguous restart")
 	}
-	shareOut := filepath.Join(config.ShareRoot, fmt.Sprintf("epoch-%020d.share.json", planned.Epoch))
-	certOut := filepath.Join(config.CertRoot, fmt.Sprintf("epoch-%020d.certificate.json", planned.Epoch))
-	if exists(shareOut) || exists(certOut) {
-		return Outcome{}, errors.New("successor DKG outputs exist without a durable result marker; refusing ambiguous restart")
+	// NewStore intentionally requires a pre-existing empty directory. Creating
+	// it here is also the durable fact that prevents this same public attempt
+	// from being restarted after a crash.
+	if err := os.Mkdir(attemptRoot, 0o700); err != nil {
+		return Outcome{}, fmt.Errorf("create fresh DKG attempt state: %w", err)
+	}
+	if err := syncDirectory(config.StateRoot); err != nil {
+		return Outcome{}, err
 	}
 
 	runner := config.RunDKG
@@ -186,21 +227,14 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 	if err != nil {
 		return Outcome{}, err
 	}
-	certificateDigest, err := digestFile(certOut)
+	verified, err := config.verifyAttemptCompletion(planned.Epoch, planned.Attempt)
 	if err != nil {
-		return Outcome{}, err
+		return Outcome{}, fmt.Errorf("verify DKG completion before recording result: %w", err)
 	}
-	shareDigest, err := digestFile(shareOut)
-	if err != nil {
-		return Outcome{}, err
+	if verified.TopologyDigest != fmt.Sprintf("%x", network.Digest) || verified.CertificateSHA256 == "" || verified.ShareSHA256 == "" {
+		return Outcome{}, errors.New("verified DKG completion does not match the attempted topology")
 	}
-	completedAt := time.Now().UTC()
-	marker := resultMarker{
-		Version: 1, NetworkID: config.NetworkID, Epoch: planned.Epoch, Attempt: planned.Attempt,
-		TopologyDigest: fmt.Sprintf("%x", network.Digest), CertificateSHA256: certificateDigest,
-		ShareSHA256: shareDigest, CompletedAt: completedAt.Format(time.RFC3339),
-	}
-	if err := writeMarker(markerPath, marker); err != nil {
+	if err := writeMarker(markerPath, verified); err != nil {
 		return Outcome{}, err
 	}
 	out.Status = StatusDKGComplete
@@ -209,30 +243,118 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 	return out, nil
 }
 
-func (config Config) verifyMarkerFiles(marker resultMarker) error {
-	certificate := filepath.Join(config.CertRoot, fmt.Sprintf("epoch-%020d.certificate.json", marker.Epoch))
-	share := filepath.Join(config.ShareRoot, fmt.Sprintf("epoch-%020d.share.json", marker.Epoch))
-	certDigest, err := digestFile(certificate)
+func (config Config) recoverCompletedAttempt(epochNumber uint64) (resultMarker, bool, error) {
+	entries, err := os.ReadDir(config.StateRoot)
 	if err != nil {
-		return fmt.Errorf("verify completed certificate: %w", err)
+		return resultMarker{}, false, err
 	}
-	shareDigest, err := digestFile(share)
-	if err != nil {
-		return fmt.Errorf("verify completed share: %w", err)
+	prefix := fmt.Sprintf("epoch-%020d-attempt-", epochNumber)
+	completed := make([]int, 0, 1)
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		suffix := strings.TrimPrefix(entry.Name(), prefix)
+		attempt, err := strconv.Atoi(suffix)
+		if err != nil || attempt < 1 || attempt > 99 || fmt.Sprintf("%02d", attempt) != suffix {
+			return resultMarker{}, false, fmt.Errorf("unexpected DKG attempt state directory %q", entry.Name())
+		}
+		root := filepath.Join(config.StateRoot, entry.Name())
+		info, err := os.Lstat(root)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return resultMarker{}, false, fmt.Errorf("DKG attempt state %q is not a real directory", entry.Name())
+		}
+		complete := filepath.Join(root, "COMPLETE")
+		completeInfo, err := os.Lstat(complete)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil || !completeInfo.Mode().IsRegular() {
+			return resultMarker{}, false, fmt.Errorf("DKG completion marker for attempt %d is invalid", attempt)
+		}
+		completed = append(completed, attempt)
 	}
-	if certDigest != marker.CertificateSHA256 || shareDigest != marker.ShareSHA256 {
-		return errors.New("completed DKG output digest does not match durable result marker")
+	if len(completed) == 0 {
+		return resultMarker{}, false, nil
 	}
-	return nil
+	if len(completed) != 1 {
+		return resultMarker{}, false, errors.New("multiple completed DKG attempts exist for one epoch")
+	}
+	marker, err := config.verifyAttemptCompletion(epochNumber, completed[0])
+	return marker, err == nil, err
 }
 
-func loadMarker(path string) (resultMarker, error) {
-	encoded, err := os.ReadFile(path)
+func (config Config) verifyAttemptCompletion(epochNumber uint64, attempt int) (resultMarker, error) {
+	topologyBytes, err := readBoundedRegular(config.attemptTopologyPath(epochNumber, attempt), topology.MaximumFileBytes)
 	if err != nil {
 		return resultMarker{}, err
 	}
-	if len(encoded) == 0 || len(encoded) > 16<<10 {
-		return resultMarker{}, errors.New("invalid DKG result marker size")
+	network, err := topology.Verify(topologyBytes, config.Authority, time.Time{})
+	if err != nil {
+		return resultMarker{}, fmt.Errorf("verify attempt topology: %w", err)
+	}
+	if network.Document.NetworkID != config.NetworkID || network.Document.Epoch != epochNumber {
+		return resultMarker{}, errors.New("completed attempt topology belongs to another network or epoch")
+	}
+	certificateBytes, err := readBoundedRegular(config.certificatePath(epochNumber), committee.MaximumFileBytes)
+	if err != nil {
+		return resultMarker{}, err
+	}
+	_, certified, err := committee.Decode(certificateBytes, network)
+	if err != nil {
+		return resultMarker{}, fmt.Errorf("verify completed DKG certificate: %w", err)
+	}
+	if _, err := committee.LoadShare(config.sharePath(epochNumber), certified, network); err != nil {
+		return resultMarker{}, fmt.Errorf("verify completed DKG share: %w", err)
+	}
+	completePath := filepath.Join(config.attemptRoot(epochNumber, attempt), "COMPLETE")
+	complete, err := readBoundedRegular(completePath, 8<<10)
+	if err != nil {
+		return resultMarker{}, err
+	}
+	expected := []byte(fmt.Sprintf("network=%s\nepoch=%d\ntopology=%x\ncertificate=%x\n", network.Document.NetworkID, network.Document.Epoch, network.Digest, certified.Digest))
+	if !bytes.Equal(complete, expected) {
+		return resultMarker{}, errors.New("DKG COMPLETE marker does not match verified topology and certificate")
+	}
+	certificateDigest, err := digestFile(config.certificatePath(epochNumber))
+	if err != nil {
+		return resultMarker{}, err
+	}
+	shareDigest, err := digestFile(config.sharePath(epochNumber))
+	if err != nil {
+		return resultMarker{}, err
+	}
+	completeInfo, err := os.Lstat(completePath)
+	if err != nil {
+		return resultMarker{}, err
+	}
+	return resultMarker{
+		Version: 1, NetworkID: config.NetworkID, Epoch: epochNumber, Attempt: attempt,
+		TopologyDigest: fmt.Sprintf("%x", network.Digest), CertificateSHA256: certificateDigest,
+		ShareSHA256: shareDigest, CompletedAt: completeInfo.ModTime().UTC().Format(time.RFC3339),
+	}, nil
+}
+
+func (config Config) attemptRoot(epochNumber uint64, attempt int) string {
+	return filepath.Join(config.StateRoot, fmt.Sprintf("epoch-%020d-attempt-%02d", epochNumber, attempt))
+}
+
+func (config Config) attemptTopologyPath(epochNumber uint64, attempt int) string {
+	return filepath.Join(config.TopologyDir, fmt.Sprintf("epoch-%020d", epochNumber), fmt.Sprintf("attempt-%02d", attempt), "topology.json")
+}
+
+func (config Config) sharePath(epochNumber uint64) string {
+	return filepath.Join(config.ShareRoot, fmt.Sprintf("epoch-%020d.share.json", epochNumber))
+}
+
+func (config Config) certificatePath(epochNumber uint64) string {
+	return filepath.Join(config.CertRoot, fmt.Sprintf("epoch-%020d.certificate.json", epochNumber))
+}
+
+func loadMarker(path string) (resultMarker, error) {
+	encoded, err := readBoundedRegular(path, 16<<10)
+	if err != nil {
+		return resultMarker{}, err
 	}
 	var marker resultMarker
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
@@ -243,7 +365,7 @@ func loadMarker(path string) (resultMarker, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return resultMarker{}, errors.New("trailing DKG result marker data")
 	}
-	if marker.Version != 1 || marker.NetworkID == "" || marker.Epoch == 0 || marker.Attempt < 1 || marker.CertificateSHA256 == "" || marker.ShareSHA256 == "" {
+	if marker.Version != 1 || marker.NetworkID == "" || marker.Epoch == 0 || marker.Attempt < 1 || marker.CertificateSHA256 == "" || marker.ShareSHA256 == "" || marker.TopologyDigest == "" {
 		return resultMarker{}, errors.New("incomplete DKG result marker")
 	}
 	return marker, nil
@@ -278,12 +400,7 @@ func writeMarker(path string, marker resultMarker) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	dir, err := os.Open(parent)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = dir.Close() }()
-	if err := dir.Sync(); err != nil {
+	if err := syncDirectory(parent); err != nil {
 		return err
 	}
 	ok = true
@@ -291,19 +408,23 @@ func writeMarker(path string, marker resultMarker) error {
 }
 
 func digestFile(path string) (string, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return "", err
-	}
-	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 8<<20 {
-		return "", errors.New("DKG output must be a non-empty bounded regular file")
-	}
-	data, err := os.ReadFile(path)
+	data, err := readBoundedRegular(path, 8<<20)
 	if err != nil {
 		return "", err
 	}
 	digest := sha256.Sum256(data)
 	return fmt.Sprintf("%x", digest), nil
+}
+
+func readBoundedRegular(path string, maximum int64) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maximum {
+		return nil, errors.New("artifact must be a non-empty bounded regular file")
+	}
+	return os.ReadFile(path)
 }
 
 func ensureRealDirectory(path string) error {
@@ -320,7 +441,19 @@ func ensureRealDirectory(path string) error {
 	return nil
 }
 
-func exists(path string) bool {
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = directory.Close() }()
+	return directory.Sync()
+}
+
+func pathExists(path string) (bool, error) {
 	_, err := os.Lstat(path)
-	return err == nil
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
 }
