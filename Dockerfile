@@ -8,6 +8,7 @@ RUN CGO_ENABLED=0 go test ./live/... && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-dkg ./cmd/nomad-dkg && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-fixture-publisher ./cmd/nomad-fixture-publisher && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-lifecycle ./cmd/nomad-lifecycle && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-rotation-controller ./cmd/nomad-rotation-controller && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-node ./cmd/nomad-node && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-operator ./cmd/nomad-operator && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-topology ./cmd/nomad-topology && \
@@ -24,8 +25,8 @@ RUN mkdir -p /runtime/public \
     /runtime/operators/operator-c \
     /cache /state /partials /verified /config /operator /authority /dkg \
     /certificate /published /operators/a /operators/b /operators/c \
-    /epoch-chain /revocations && \
+    /epoch-chain /revocations /rotation/topologies /rotation/state /rotation/shares /rotation/certificates && \
     chown -R 65532:65532 /runtime /cache /state /partials /verified /config /operator \
-    /authority /dkg /certificate /published /operators /epoch-chain /revocations
+    /authority /dkg /certificate /published /operators /epoch-chain /revocations /rotation
 USER 65532:65532
 ENTRYPOINT []
