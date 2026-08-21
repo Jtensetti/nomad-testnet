@@ -142,11 +142,87 @@ check("Kolmogorov survival at zero is one", twa.kolmogorov_survival(0.0) == 1.0)
 check("Kolmogorov survival near zero is one", twa.kolmogorov_survival(0.01) > 0.99)
 check("Kolmogorov survival decays", twa.kolmogorov_survival(3.0) < 1e-6)
 
-# Chi-square over destination sequences.
-_, p_dest_same = twa.chi_square_destinations(["a"] * 50 + ["b"] * 50, ["a"] * 50 + ["b"] * 50)
+# Chi-square over destination sequences, taken per sender as labelled counts.
+_, p_dest_same = twa.chi_square_counts({"a": 50, "b": 50}, {"a": 50, "b": 50})
 check("chi-square accepts identical peer usage", p_dest_same > twa.CHI_SQUARE_ALPHA)
-_, p_dest_skew = twa.chi_square_destinations(["a"] * 90 + ["b"] * 10, ["a"] * 10 + ["b"] * 90)
+_, p_dest_skew = twa.chi_square_counts({"a": 90, "b": 10}, {"a": 10, "b": 90})
 check("chi-square rejects skewed peer usage", p_dest_skew < twa.CHI_SQUARE_ALPHA)
+
+# Per-flow grouping. The registration extracts features per direction and per
+# peer; a flow key is exactly that. These cover the defect that made the first
+# WAN campaign report a difference on all three hosts: a capture taken with
+# "-i any" holds the host's own emissions and its peers', the node is
+# restarted between worlds, and the peers' phase relative to the host is
+# re-randomised by the restart. Pooled, that shifts the merged inter-arrival
+# distribution on its own, whatever the node did.
+def flow_capture(spec):
+    """Build a parsed-capture tuple from {(src, dst): [times]}."""
+    times, sizes, destinations, sources = [], [], [], []
+    for (source, destination), stamps in spec.items():
+        for stamp in stamps:
+            times.append(stamp)
+            sizes.append(1200)
+            destinations.append(destination)
+            sources.append(source)
+    return times, sizes, destinations, sources
+
+
+OWN, PEER = "10.0.0.2.4200", "10.0.0.3.4200"
+steady_out = [100.0 + index * 0.05 for index in range(400)]
+# Same host, same cadence, but the peer's stream sits at a different phase in
+# each world -- which is what restarting the node between worlds produces.
+inbound_early = [100.010 + index * 0.05 for index in range(400)]
+inbound_late = [100.039 + index * 0.05 for index in range(400)]
+
+grouped = twa.flows_of(flow_capture({(OWN, PEER): steady_out, (PEER, OWN): inbound_early}))
+check("flows are keyed by direction and peer", set(grouped) == {(OWN, PEER), (PEER, OWN)})
+check("each flow keeps only its own packets", len(grouped[(OWN, PEER)]) == 400)
+
+pooled_a = sorted(steady_out + inbound_early)
+pooled_b = sorted(steady_out + inbound_late)
+_, pooled_p = twa.ks_two_sample(twa.interarrivals(pooled_a), twa.interarrivals(pooled_b))
+check("pooling both directions would raise a false alarm on a phase shift",
+      pooled_p < twa.KS_ALPHA)
+_, per_flow_p = twa.ks_two_sample(twa.interarrivals(steady_out), twa.interarrivals(steady_out))
+check("per-flow analysis is unmoved by the peer's phase",
+      per_flow_p > twa.KS_ALPHA)
+
+# Equal-length windows. A capture starts before the node and stops after it,
+# so two worlds cover slightly different spans; the count test is registered
+# for equal-length windows and must not charge that difference to the node.
+long_span = [100.0 + index * 0.05 for index in range(400)]
+short_span = [500.0 + index * 0.05 for index in range(396)]
+trimmed_left, trimmed_right, width = twa.equal_windows(long_span, short_span, 0.05)
+check("equal windows are an integer number of cell intervals",
+      abs(width / 0.05 - round(width / 0.05)) < 1e-9)
+check("equal windows equalise an honest sender's cell count",
+      len(trimmed_left) == len(trimmed_right))
+# The window is half-open, so a sender emitting at exactly the nominal
+# interval places one cell in each period and none on the closing edge.
+check("an honest sender emits one cell per period in the window",
+      len(trimmed_right) == round(width / 0.05))
+
+# The instrument must stay sensitive. A fix that stops false alarms by going
+# blind is worse than the false alarms, so each difference the registration
+# names is re-checked through the per-flow path.
+def verdict(world_a, world_b):
+    report_failures = []
+    left, right, width = twa.equal_windows(sorted(world_a), sorted(world_b), 0.05)
+    if len(left) != len(right):
+        report_failures.append("count")
+    _, p = twa.ks_two_sample(twa.interarrivals(left), twa.interarrivals(right))
+    if p < twa.KS_ALPHA:
+        report_failures.append("ks")
+    if twa.max_burst(left) != twa.max_burst(right):
+        report_failures.append("burst")
+    return report_failures
+
+
+check("per-flow path still catches an extra cell",
+      "count" in verdict(steady_out, sorted(steady_out + [100.0 + 199 * 0.05 + 0.025])))
+check("per-flow path still catches a catch-up burst",
+      verdict(steady_out, steady_out[:200] + [110.0 + index * 0.001 for index in range(200)]) != [])
+check("per-flow path passes a sender against itself", verdict(steady_out, steady_out) == [])
 
 # Burst detection: a steady 20/second stream and one with a burst must differ.
 steady = [index * 0.05 for index in range(100)]
@@ -175,11 +251,29 @@ exit 1
 """
 
 
-def write_world(path, jitter=0.0, size=1200):
+def write_world(path, jitter=0.0, size=1200, inbound_jitter=0.0, inbound=True,
+                inbound_drop=0):
+    """Render a capture as a host sees it: its own cells out, its peer's in.
+
+    Both directions are present because that is what "-i any" on a real host
+    records, and because the measured host is identified as the address that
+    both sends and receives. A one-directional fixture would exercise a shape
+    the campaign never produces.
+    """
     lines = ["reading from file capture.pcap, link-type EN10MB (Ethernet)"]
     for index in range(400):
         stamp = 1712345678.0 + 0.05 * index + (jitter if index % 2 else 0.0)
         lines.append(f"{stamp:.6f} IP 10.0.0.2.4200 > 10.0.0.3.4200: UDP, length {size}")
+    if inbound:
+        for index in range(400):
+            # Loss is modelled by dropping cells from inside the stream rather
+            # than by shortening it: a shorter capture is a shorter window, not
+            # a difference in behaviour, and the window trimming is right to
+            # decline to charge it.
+            if inbound_drop and index % inbound_drop == 0 and 0 < index < 399:
+                continue
+            stamp = 1712345678.013 + 0.05 * index + (inbound_jitter if index % 2 else 0.0)
+            lines.append(f"{stamp:.6f} IP 10.0.0.1.4200 > 10.0.0.2.4200: UDP, length 1200")
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -192,18 +286,36 @@ with tempfile.TemporaryDirectory() as workspace:
     write_world(root / "b", jitter=0.0)
     write_world(root / "leaky", jitter=0.004)
     write_world(root / "oversized", jitter=0.0, size=1201)
+    # Same emissions, a different stream arriving from the peer.
+    write_world(root / "lossy-inbound", jitter=0.0, inbound_drop=7)
+    write_world(root / "one-way", jitter=0.0, inbound=False)
 
     analysis = str(pathlib.Path(__file__).with_name("two-world-analysis.py"))
 
-    def run(left, right):
+    def run(left, right, *extra):
         return subprocess.run(
-            [sys.executable, analysis, str(root / left), str(root / right), "1200", "50"],
+            [sys.executable, analysis, str(root / left), str(root / right), "1200", "50",
+             *extra],
             env=environment, capture_output=True, text=True,
         ).returncode
 
     check("end to end: matching worlds exit 0", run("a", "b") == 0)
     check("end to end: a jittered world exits non-zero", run("a", "leaky") == 1)
     check("end to end: an off-size cell exits non-zero", run("a", "oversized") == 1)
+
+    # A difference in what the host received is a fact about the sender or the
+    # path, not about this host's scheduler. It must still be reported and must
+    # still be non-zero -- silently dropping it would hide a real leak at the
+    # sender -- but it must not be returned as this node's verdict.
+    check("end to end: a difference on a received flow exits 3, not 1",
+          run("a", "lossy-inbound") == 3)
+
+    # Which host a capture was taken at decides which flows the verdict rests
+    # on, so a capture that does not say must be refused rather than guessed.
+    check("end to end: a one-directional capture fails closed",
+          run("one-way", "one-way") == 2)
+    check("end to end: an explicit host makes a one-directional capture judgeable",
+          run("one-way", "one-way", "10.0.0.2.4200") == 0)
 
     # A capture the rule cannot read must not be reported as a rejection.
     (root / "unreadable").write_text("this is not a capture at all\n")
