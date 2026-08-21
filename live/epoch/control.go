@@ -1,10 +1,6 @@
 package epoch
 
-import (
-	"errors"
-	"os"
-	"path/filepath"
-)
+import "errors"
 
 // DescriptorIdentity reads the claimed network and epoch from a descriptor
 // without treating them as trusted. Callers use this only to select the
@@ -20,35 +16,22 @@ func DescriptorIdentity(encoded []byte) (string, uint64, error) {
 	return embeddedIdentity(descriptor)
 }
 
-// ScopedSet returns the identities that were already revoked before the
-// target epoch. A revocation observed during epoch N is forward-scoped: it
-// must not retroactively invalidate N, but it blocks that identity from N+1
-// and later descriptors and from approving the N -> N+1 transition.
+// ScopedSet returns identities whose verified revocations were observed before
+// targetEpoch. Persisted revocation files loaded after a restart are not usable
+// here until Revalidate has checked them against the exact historical chain.
 func (store *RevocationStore) ScopedSet(targetEpoch uint64) (RevocationSet, error) {
 	if targetEpoch == 0 {
 		return nil, errors.New("target epoch must be non-zero")
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	set := make(RevocationSet)
-	entries, err := os.ReadDir(store.root)
-	if err != nil {
-		return nil, err
+	if !store.validated {
+		return nil, errors.New("revocation store contains persisted state that has not been revalidated against the epoch chain")
 	}
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".revocation" {
-			continue
-		}
-		encoded, err := os.ReadFile(filepath.Join(store.root, entry.Name()))
-		if err != nil {
-			return nil, err
-		}
-		revocation, err := DecodeRevocation(encoded)
-		if err != nil {
-			return nil, err
-		}
+	set := make(RevocationSet)
+	for key, revocation := range store.byKey {
 		if revocation.EpochObserved < targetEpoch {
-			set[revocation.IdentityKey] = struct{}{}
+			set[key] = struct{}{}
 		}
 	}
 	return set, nil
