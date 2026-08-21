@@ -129,9 +129,6 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 		}
 	}
 
-	// Completion is reconstructed from the signed topology, DKG COMPLETE
-	// marker, all-operator certificate and private share. The local result JSON
-	// is only a cached summary and is never a trust root.
 	verifiedCompletion, completed, err := config.recoverCompletedAttempt(planned.Epoch)
 	if err != nil {
 		return Outcome{}, err
@@ -163,10 +160,6 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 	if private.OperatorID != config.OperatorID {
 		return Outcome{}, errors.New("configured operator ID does not match local private material")
 	}
-	// At the public boundary for retry N, discard only private share output
-	// left by earlier failed attempts. Journals and public certificates remain
-	// untouched as evidence. The discard itself is local and creates no wire
-	// event.
 	if err := config.discardEarlierFailedShares(planned.Epoch, planned.Attempt, private.Identity, now); err != nil {
 		return Outcome{}, err
 	}
@@ -180,9 +173,6 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 		return out, nil
 	}
 
-	// Every retry is a distinct, authority-signed DKG session. Reusing the
-	// topology from attempt 1 after its signed start time would either violate
-	// dkg.Run's anti-resume rule or silently turn a retry into the same session.
 	topologyPath := config.attemptTopologyPath(planned.Epoch, planned.Attempt)
 	network, err := topology.Load(topologyPath, config.Authority, now)
 	if err != nil {
@@ -210,9 +200,6 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 			return Outcome{}, fmt.Errorf("attempt output %s exists before its DKG state directory; refusing ambiguous restart", filepath.Base(path))
 		}
 	}
-	// NewStore intentionally requires a pre-existing empty directory. Creating
-	// it here is also the durable fact that prevents this same public attempt
-	// from being restarted after a crash.
 	if err := os.Mkdir(attemptRoot, 0o700); err != nil {
 		return Outcome{}, fmt.Errorf("create fresh DKG attempt state: %w", err)
 	}
@@ -302,7 +289,7 @@ func (config Config) discardEarlierFailedShares(epochNumber uint64, currentAttem
 		if network.Document.NetworkID != config.NetworkID || network.Document.Epoch != epochNumber {
 			return errors.New("failed-attempt topology belongs to another network or epoch")
 		}
-		if _, err := topology.VerifySecrets(mustReadSecretFile(config.SecretsPath), network); err != nil {
+		if _, err := topology.LoadSecrets(config.SecretsPath, network); err != nil {
 			return fmt.Errorf("failed-attempt private material does not match its signed topology: %w", err)
 		}
 		if _, err := DiscardFailedShare(config.NetworkID, epochNumber, attempt, fmt.Sprintf("%x", network.Digest), config.OperatorID, share, statement, identity, now); err != nil {
@@ -310,17 +297,6 @@ func (config Config) discardEarlierFailedShares(epochNumber uint64, currentAttem
 		}
 	}
 	return nil
-}
-
-func mustReadSecretFile(path string) []byte {
-	// The caller already loaded this file through LoadPrivateKeys, including
-	// permission and canonical-key checks. This second bounded read exists only
-	// to bind the same private material to an older signed attempt topology.
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	return data
 }
 
 func (config Config) recoverCompletedAttempt(epochNumber uint64) (resultMarker, bool, error) {
