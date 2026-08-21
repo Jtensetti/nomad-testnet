@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,15 +30,28 @@ func baseConfig(t *testing.T, planned epoch.Plan) Config {
 	state := filepath.Join(root, "state")
 	shares := filepath.Join(root, "shares")
 	certs := filepath.Join(root, "certs")
-	for _, directory := range []string{state, shares, certs} {
+	topologies := filepath.Join(root, "topologies")
+	for _, directory := range []string{state, shares, certs, topologies} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
+	generated, err := topology.GenerateSecrets("operator-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := topology.EncodeSecrets(generated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretPath := filepath.Join(root, "operator.json")
+	if err := os.WriteFile(secretPath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	return Config{
 		Planner: fixedPlanner{plan: planned}, Policy: epoch.DefaultPolicy(), OperatorID: "operator-a",
-		Authority: authority, NetworkID: "nomad-test", TopologyDir: filepath.Join(root, "topologies"),
-		SecretsPath: filepath.Join(root, "operator.json"), Listen: "127.0.0.1:0",
+		Authority: authority, NetworkID: "nomad-test", TopologyDir: topologies,
+		SecretsPath: secretPath, Listen: "127.0.0.1:0",
 		StateRoot: state, ShareRoot: shares, CertRoot: certs,
 	}
 }
@@ -45,7 +59,7 @@ func baseConfig(t *testing.T, planned epoch.Plan) Config {
 func TestInterruptedAttemptNeverRestartsSamePublicAttempt(t *testing.T) {
 	planned := epoch.Plan{Action: epoch.ActionPrepareNext, Epoch: 2, Attempt: 1, DueAt: time.Unix(100, 0).UTC()}
 	config := baseConfig(t, planned)
-	attempt := filepath.Join(config.StateRoot, "epoch-00000000000000000002-attempt-01")
+	attempt := config.attemptRoot(2, 1)
 	if err := os.Mkdir(attempt, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -66,72 +80,65 @@ func TestInterruptedAttemptNeverRestartsSamePublicAttempt(t *testing.T) {
 	}
 }
 
-func TestCompletedDKGDoesNotRunAgainAtLaterRetryTick(t *testing.T) {
-	planned := epoch.Plan{Action: epoch.ActionPrepareNext, Epoch: 2, Attempt: 2, DueAt: time.Unix(200, 0).UTC()}
+func TestResultMarkerAloneNeverEstablishesCompletion(t *testing.T) {
+	planned := epoch.Plan{Action: epoch.ActionPrepareNext, Epoch: 2, Attempt: 1}
 	config := baseConfig(t, planned)
-	certificate := filepath.Join(config.CertRoot, "epoch-00000000000000000002.certificate.json")
-	share := filepath.Join(config.ShareRoot, "epoch-00000000000000000002.share.json")
-	if err := os.WriteFile(certificate, []byte("certificate"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(share, []byte("share"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	certificateDigest, err := digestFile(certificate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	shareDigest, err := digestFile(share)
-	if err != nil {
-		t.Fatal(err)
-	}
-	markerPath := filepath.Join(config.StateRoot, "epoch-00000000000000000002-result.json")
-	if err := writeMarker(markerPath, resultMarker{
+	digest := strings.Repeat("ab", 32)
+	if err := writeMarker(config.resultMarkerPath(2), resultMarker{
 		Version: 1, NetworkID: config.NetworkID, Epoch: 2, Attempt: 1,
-		CertificateSHA256: certificateDigest, ShareSHA256: shareDigest,
-		TopologyDigest: "public-topology-digest", CompletedAt: time.Unix(150, 0).UTC().Format(time.RFC3339),
+		TopologyDigest: digest, CommitteeDigest: digest, CertificateSHA256: digest, ShareSHA256: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	called := false
-	config.RunDKG = func(context.Context, topology.Verified, topology.VerifiedSecrets, dkgnet.RunConfig) (dkgnet.RunResult, error) {
-		called = true
-		return dkgnet.RunResult{}, nil
-	}
-	outcome, err := config.Step(context.Background(), time.Unix(250, 0).UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if called {
-		t.Fatal("completed DKG was run again when the public retry tick advanced")
-	}
-	if outcome.Status != StatusDKGComplete {
-		t.Fatalf("status = %s, want %s", outcome.Status, StatusDKGComplete)
+	if _, err := config.Step(context.Background(), time.Now().UTC()); err == nil {
+		t.Fatal("unbacked result marker was accepted as a completed DKG")
 	}
 }
 
-func TestTamperedCompletedOutputFailsClosed(t *testing.T) {
-	planned := epoch.Plan{Action: epoch.ActionPrepareNext, Epoch: 2, Attempt: 1}
-	config := baseConfig(t, planned)
-	certificate := filepath.Join(config.CertRoot, "epoch-00000000000000000002.certificate.json")
-	share := filepath.Join(config.ShareRoot, "epoch-00000000000000000002.share.json")
-	if err := os.WriteFile(certificate, []byte("certificate"), 0o600); err != nil {
+func TestAttemptOutputsCannotCollideAcrossRetries(t *testing.T) {
+	config := baseConfig(t, epoch.Plan{Action: epoch.ActionPrepareNext, Epoch: 2, Attempt: 1})
+	if config.sharePath(2, 1) == config.sharePath(2, 2) {
+		t.Fatal("private share output path is shared across retries")
+	}
+	if config.certificatePath(2, 1) == config.certificatePath(2, 2) {
+		t.Fatal("certificate output path is shared across retries")
+	}
+	if config.discardPath(2, 1) == config.discardPath(2, 2) {
+		t.Fatal("discard evidence path is shared across retries")
+	}
+}
+
+func TestResultMarkerDistinguishesCommitteeAndCertificateDigests(t *testing.T) {
+	base := resultMarker{
+		Version: 1, NetworkID: "nomad-test", Epoch: 2, Attempt: 1,
+		TopologyDigest: strings.Repeat("01", 32), CommitteeDigest: strings.Repeat("02", 32),
+		CertificateSHA256: strings.Repeat("03", 32), ShareSHA256: strings.Repeat("04", 32),
+	}
+	other := base
+	other.CommitteeDigest = strings.Repeat("05", 32)
+	if sameResultMarker(base, other) {
+		t.Fatal("committee digest change was confused with certificate file hash")
+	}
+	other = base
+	other.CertificateSHA256 = strings.Repeat("06", 32)
+	if sameResultMarker(base, other) {
+		t.Fatal("certificate file hash change was ignored")
+	}
+}
+
+func TestLoadMarkerRejectsNonCanonicalDigest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "result.json")
+	marker := resultMarker{
+		Version: 1, NetworkID: "nomad-test", Epoch: 2, Attempt: 1,
+		TopologyDigest: strings.Repeat("AA", 32), CommitteeDigest: strings.Repeat("02", 32),
+		CertificateSHA256: strings.Repeat("03", 32), ShareSHA256: strings.Repeat("04", 32),
+	}
+	encoded := []byte(`{"version":1,"network_id":"nomad-test","epoch":2,"attempt":1,"topology_digest":"` + marker.TopologyDigest + `","committee_digest":"` + marker.CommitteeDigest + `","certificate_sha256":"` + marker.CertificateSHA256 + `","share_sha256":"` + marker.ShareSHA256 + `","completed_at":""}`)
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(share, []byte("share"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	certificateDigest, _ := digestFile(certificate)
-	shareDigest, _ := digestFile(share)
-	markerPath := filepath.Join(config.StateRoot, "epoch-00000000000000000002-result.json")
-	if err := writeMarker(markerPath, resultMarker{Version: 1, NetworkID: config.NetworkID, Epoch: 2, Attempt: 1, CertificateSHA256: certificateDigest, ShareSHA256: shareDigest}); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(share, []byte("tampered"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := config.Step(context.Background(), time.Now().UTC()); err == nil {
-		t.Fatal("tampered completed DKG output was accepted")
+	if _, err := loadMarker(path); err == nil {
+		t.Fatal("non-canonical uppercase digest was accepted")
 	}
 }
 
