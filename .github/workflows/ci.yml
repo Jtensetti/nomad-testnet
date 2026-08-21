@@ -86,6 +86,8 @@ jobs:
         run: go run ./cmd/nomad-conformance -check conformance/wire-vectors.json
       - name: Verify the traffic-analysis harness still detects differences
         run: python3 scripts/test-two-world-analysis.py
+      - name: Verify the campaign verdict still separates noise from a finding
+        run: python3 scripts/wan/test-wan-verdict.py
       - name: Run independent operator ceremony
         env:
           NOMAD_CEREMONY_EVIDENCE: runtime/evidence/operator-ceremony.json
