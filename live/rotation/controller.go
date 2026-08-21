@@ -3,6 +3,7 @@ package rotation
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -27,14 +28,20 @@ const (
 	StatusHalted          = "HALTED"
 )
 
+// Planner is deliberately tiny: controller decisions depend only on the
+// public lifecycle state machine, never on private publication or reader state.
+type Planner interface {
+	PlanAtForOperator(time.Time, epoch.Policy, string) (epoch.Plan, error)
+}
+
 // RunDKG is injected in tests. Production uses dkgnet.Run directly.
 type RunDKG func(context.Context, topology.Verified, topology.VerifiedSecrets, dkgnet.RunConfig) (dkgnet.RunResult, error)
 
 type Config struct {
-	Chain       *epoch.Chain
+	Planner     Planner
 	Policy      epoch.Policy
 	OperatorID  string
-	Authority   []byte
+	Authority   ed25519.PublicKey
 	NetworkID   string
 	TopologyDir string
 	SecretsPath string
@@ -72,15 +79,15 @@ type resultMarker struct {
 // from publication, reader, cache or queue state. A DKG run is started only
 // when PlanAtForOperator says PREPARE_NEXT on the public schedule.
 func (config Config) Step(ctx context.Context, now time.Time) (Outcome, error) {
-	if ctx == nil || config.Chain == nil || config.OperatorID == "" || config.NetworkID == "" ||
+	if ctx == nil || config.Planner == nil || config.OperatorID == "" || config.NetworkID == "" ||
 		config.TopologyDir == "" || config.SecretsPath == "" || config.Listen == "" ||
 		config.StateRoot == "" || config.ShareRoot == "" || config.CertRoot == "" {
 		return Outcome{}, errors.New("complete rotation controller configuration is required")
 	}
-	if len(config.Authority) == 0 {
+	if len(config.Authority) != ed25519.PublicKeySize {
 		return Outcome{}, errors.New("authority key is required")
 	}
-	planned, err := config.Chain.PlanAtForOperator(now.UTC(), config.Policy, config.OperatorID)
+	planned, err := config.Planner.PlanAtForOperator(now.UTC(), config.Policy, config.OperatorID)
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -135,8 +142,7 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 	}
 
 	topologyPath := filepath.Join(config.TopologyDir, fmt.Sprintf("epoch-%020d", planned.Epoch), "topology.json")
-	authority := append([]byte(nil), config.Authority...)
-	network, err := topology.Load(topologyPath, authority, now)
+	network, err := topology.Load(topologyPath, config.Authority, now)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("load successor topology: %w", err)
 	}
