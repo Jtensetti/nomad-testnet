@@ -35,13 +35,21 @@ for index in $(seq "$start" 30); do
   sha256sum "$work"/results/*.pcap > "$runroot/PCAP_SHA256SUMS"
   printf '{"sample":%d,"mode":"%s","campaign_status":"COMPLETE","verdict_exit":%d,"work":"%s"}\n' "$index" "$mode" "$verdict_status" "$work" >> "$manifest"
   cat "$runroot/verdict.txt" >&2
-  if [ "$verdict_status" -eq 1 ]; then
-    echo "FINDING at sample $index: stop, explain, fix, then preregister any new experiment before rerun" >&2
-    exit 1
-  fi
-  if [ "$verdict_status" -not -in 0 2 ] 2>/dev/null; then
-    :
-  fi
+  case "$verdict_status" in
+    0)
+      ;;
+    1)
+      echo "FINDING at sample $index: stop, explain, fix, then preregister any new experiment before rerun" >&2
+      exit 1
+      ;;
+    2)
+      echo "sample $index is INCONCLUSIVE; preserving it and continuing with the next independent sample" >&2
+      ;;
+    *)
+      echo "unexpected verdict exit $verdict_status; screening instrument is broken" >&2
+      exit 2
+      ;;
+  esac
 done
 
 python3 - "$root" "$mode" <<'PY'
