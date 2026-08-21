@@ -46,6 +46,8 @@ jobs:
           network_deps="$(go list -deps \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-node \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-dkg \
+            github.com/Jtensetti/nomad-testnet/cmd/nomad-lifecycle \
+            github.com/Jtensetti/nomad-testnet/cmd/nomad-rotation-controller \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-operator \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-partial-fetch \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-topology \
@@ -59,9 +61,10 @@ jobs:
             github.com/Jtensetti/nomad-testnet/live/partialfetch \
             github.com/Jtensetti/nomad-testnet/live/rawcache \
             github.com/Jtensetti/nomad-testnet/live/epoch \
+            github.com/Jtensetti/nomad-testnet/live/rotation \
             github.com/Jtensetti/nomad-testnet/live/topology)"
           if printf '%s\n' "$network_deps" | grep -Eq 'nomad-(semantic-basins|local-reconstruction)'; then
-            echo 'network domain imports private selection or reconstruction code'
+            echo 'network/control domain imports private selection or reconstruction code'
             exit 1
           fi
           publish_deps="$(go list -deps github.com/Jtensetti/nomad-testnet/live/publish)"
@@ -69,7 +72,7 @@ jobs:
             echo 'publication API reaches a socket or process-launch capability'
             exit 1
           fi
-          if printf '%s\n' "$publish_deps" | grep -Eq 'nomad-(constant-rate-fabric|selection-firewall)|nomad-testnet/live/(node|hop|fetchplan|partialfetch|uplink)'; then
+          if printf '%s\n' "$publish_deps" | grep -Eq 'nomad-(constant-rate-fabric|selection-firewall)|nomad-testnet/live/(node|hop|fetchplan|partialfetch|uplink|rotation)'; then
             echo 'publication API imports transport, peer selection or scheduling'
             exit 1
           fi
@@ -78,13 +81,13 @@ jobs:
             echo 'publication airlock reaches a socket or process-launch capability'
             exit 1
           fi
-          if printf '%s\n' "$airlock_deps" | grep -Eq 'nomad-(constant-rate-fabric|selection-firewall)|nomad-testnet/live/(node|hop|fetchplan|partialfetch|uplink)'; then
+          if printf '%s\n' "$airlock_deps" | grep -Eq 'nomad-(constant-rate-fabric|selection-firewall)|nomad-testnet/live/(node|hop|fetchplan|partialfetch|uplink|rotation)'; then
             echo 'publication airlock imports transport, peer selection or scheduling'
             exit 1
           fi
           materializer_imports="$(go list -f '{{join .Imports "\n"}}' github.com/Jtensetti/nomad-testnet/live/materialize)"
-          if printf '%s\n' "$materializer_imports" | grep -Eq '(^net$|nomad-testnet/live/node|nomad-constant-rate-fabric|nomad-selection-firewall|nomad-semantic-basins)'; then
-            echo 'materializer directly imports network control or query code'
+          if printf '%s\n' "$materializer_imports" | grep -Eq '(^net$|nomad-testnet/live/(node|rotation)|nomad-constant-rate-fabric|nomad-selection-firewall|nomad-semantic-basins)'; then
+            echo 'materializer directly imports network/control or query code'
             exit 1
           fi
       - name: Fast tests only
@@ -144,7 +147,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          for command in nomad-bootstrap nomad-conformance nomad-dkg nomad-fixture-publisher nomad-node nomad-operator nomad-topology nomad-share nomad-partial-fetch nomad-materializer; do
+          for command in nomad-bootstrap nomad-conformance nomad-dkg nomad-fixture-publisher nomad-lifecycle nomad-rotation-controller nomad-node nomad-operator nomad-topology nomad-share nomad-partial-fetch nomad-materializer; do
             go build -trimpath -ldflags='-s -w' -o "dist/$command" "./cmd/$command"
           done
           tar -C dist -czf nomad-live-linux-amd64.tgz .
