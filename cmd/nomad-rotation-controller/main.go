@@ -29,7 +29,7 @@ func run() error {
 	authorityPath := flag.String("authority-key", "", "pinned topology authority public key")
 	networkID := flag.String("network", "", "network identifier")
 	operatorID := flag.String("operator-id", "", "local operator identifier")
-	topologyDir := flag.String("topology-dir", "", "public successor topology root; epoch-N/topology.json")
+	topologyDir := flag.String("topology-dir", "", "public retry topology root; epoch-N/attempt-NN/topology.json")
 	secretsPath := flag.String("secrets", "", "local operator secret path")
 	listen := flag.String("listen", "", "local DKG HTTP(S) listen address")
 	stateRoot := flag.String("state", "", "rotation/DKG state root")
