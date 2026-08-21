@@ -55,6 +55,16 @@ func run() error {
 		return err
 	}
 	policy := epoch.Policy{PrepareLead: *prepareLead, RetryOffsets: offsets, EscalateAfter: *escalateAfter}
+
+	// The process lock spans chain reads, retry decisions and the DKG itself.
+	// Two controller instances must never overlap different retry attempts on
+	// the same operator state root.
+	processLock, err := rotation.AcquireProcessLock(*stateRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = processLock.Release() }()
+
 	authority, err := topology.LoadAuthorityKey(*authorityPath)
 	if err != nil {
 		return err
@@ -100,8 +110,6 @@ func run() error {
 	}
 }
 
-// nextWake depends only on public lifecycle state, wall clock and the public
-// control interval. In particular it has no private queue/activity input.
 func nextWake(now time.Time, outcome rotation.Outcome, interval time.Duration) time.Time {
 	if (outcome.Status == rotation.StatusIdle || outcome.Status == rotation.StatusAwaitActivation) && outcome.DueAt.After(now) {
 		return outcome.DueAt
