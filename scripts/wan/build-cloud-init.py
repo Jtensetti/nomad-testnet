@@ -20,10 +20,21 @@ confound, not a leak.
 The node is restarted between worlds so each capture starts from the same
 state, and the capture is stopped and restarted with it, so no world's file
 contains any of another's traffic.
+
+World boundaries are absolute wall-clock times shared by every host, not
+offsets from each host's own boot. Hosts boot up to half a minute apart, and in
+a ring exactly one of them starts before its upstream peer: that host records
+its peer's previous world, then sees the peer restart and its sequence counter
+reset, and correctly rejects the rest of the world as replays. Measured on the
+first three-world campaign, one host rejected 5574 of 5673 received cells that
+way while the other two rejected none. Emissions are unaffected -- they are
+fixed-cadence cover either way -- but the relay path is not exercised, so the
+boundaries are aligned rather than left to boot order.
 """
 
 import json
 import sys
+import time
 
 TEMPLATE = """#cloud-config
 users:
@@ -88,6 +99,18 @@ write_files:
       stop_node
       sleep 2
 
+      # Wait until this world's shared start time. Every host computes the
+      # same instants, so no node sees a peer restart inside its own world.
+      wait_until() {{
+        local target=$1 now
+        now=$(date +%s)
+        if [ "$now" -lt "$target" ]; then
+          sleep $((target - now))
+        elif [ "$now" -gt $((target + {capture_seconds})) ]; then
+          echo "WARNING late by $((now - target))s for slot $target; worlds are not aligned"
+        fi
+      }}
+
       run_world() {{
         local world=$1 capture=$2 seed_flag=$3
         rm -rf /opt/cache /opt/state
@@ -131,14 +154,16 @@ WORLD_ORDER = {
     "operator-c": ("active", "idle1", "idle2"),
 }
 SEED_FLAG = {"active": "--seed=/opt/seed.json", "idle1": "", "idle2": ""}
+# Slack between worlds: node and capture shutdown, then a fresh start.
+SLOT_GAP_SECONDS = 30
 
 
-def world_runs(operator, urls):
+def world_runs(operator, urls, base_epoch, capture_seconds):
     """Render the run and upload lines for one operator's world order."""
     lines = []
     for position, world in enumerate(WORLD_ORDER[operator]):
-        if position:
-            lines.append("      sleep 5")
+        slot = base_epoch + position * (capture_seconds + SLOT_GAP_SECONDS)
+        lines.append(f"      wait_until {slot}")
         lines.append(f'      run_world {world} /opt/{world}.pcap "{SEED_FLAG[world]}"')
     lines.append("")
     for world in WORLD_ORDER[operator]:
@@ -148,11 +173,12 @@ def world_runs(operator, urls):
 
 
 def main():
-    if len(sys.argv) != 6:
-        print("usage: build-cloud-init.py URLS_JSON OPERATOR PUBKEY_PATH CAPTURE_SECONDS OUT",
-              file=sys.stderr)
+    if len(sys.argv) != 7:
+        print("usage: build-cloud-init.py URLS_JSON OPERATOR PUBKEY_PATH CAPTURE_SECONDS "
+              "BASE_EPOCH OUT", file=sys.stderr)
         return 2
-    urls_path, operator, pubkey_path, capture_seconds, out_path = sys.argv[1:6]
+    urls_path, operator, pubkey_path, capture_seconds, base_epoch, out_path = sys.argv[1:7]
+    base_epoch = int(base_epoch)
     urls = json.load(open(urls_path))
     payload = TEMPLATE.format(
         pubkey=open(pubkey_path).read().strip(),
@@ -162,14 +188,15 @@ def main():
         secrets_url=urls["get"][f"{operator}/node-secrets.json"],
         seed_url=urls["get"]["seed.json"],
         capture_seconds=int(capture_seconds),
-        world_runs=world_runs(operator, urls),
+        world_runs=world_runs(operator, urls, base_epoch, int(capture_seconds)),
         health_put=urls["put"][f"results/{operator}-health.json"],
         log_put=urls["put"][f"results/{operator}-log.txt"],
     )
     with open(out_path, "w") as handle:
         handle.write(payload)
     print(f"{operator}: {len(payload)} bytes of cloud-init, worlds "
-          f"{' -> '.join(WORLD_ORDER[operator])}", file=sys.stderr)
+          f"{' -> '.join(WORLD_ORDER[operator])}, first slot at "
+          f"{time.strftime('%H:%M:%SZ', time.gmtime(base_epoch))}", file=sys.stderr)
     return 0
 
 

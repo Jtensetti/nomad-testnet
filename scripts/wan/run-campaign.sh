@@ -80,9 +80,15 @@ python3 "$here/stage-payload.py" "$bucket" "$work/runtime" "$work/urls.json" || 
 
 echo "--- building per-operator cloud-init ---" >&2
 ssh-keygen -q -t ed25519 -N "" -f "$work/id_ed25519" <<< y >/dev/null 2>&1
+# Every host runs its worlds on the same absolute schedule, so no node sees a
+# peer restart inside its own world. The offset is the slack a host needs to be
+# provisioned, boot, install tcpdump and pass preflight before the first slot.
+base_epoch=$(( $(date -u +%s) + 420 ))
+echo "first world slot at $(date -u -d "@$base_epoch" +%H:%M:%SZ)" >&2
 for operator in operator-a operator-b operator-c; do
   python3 "$here/build-cloud-init.py" "$work/urls.json" "$operator" \
-    "$work/id_ed25519.pub" "$capture_seconds" "$work/cloud-init-$operator.yaml" || exit 1
+    "$work/id_ed25519.pub" "$capture_seconds" "$base_epoch" \
+    "$work/cloud-init-$operator.yaml" || exit 1
 done
 
 echo "--- provisioning hosts ---" >&2
@@ -92,7 +98,7 @@ python3 "$here/provision.py" "$deployment" "$work/id_ed25519.pub" \
 echo "--- waiting for results ---" >&2
 # Boot, package install, two captures and the uploads, with room for a slow
 # apt mirror in one region not to fail the whole campaign.
-deadline=$(( capture_seconds * 3 + 600 ))
+deadline=$(( capture_seconds * 3 + 1100 ))
 python3 "$here/collect.py" "$bucket" "$work/results" "$deadline"
 collect_status=$?
 
