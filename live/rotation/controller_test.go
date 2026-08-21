@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	dkgnet "github.com/Jtensetti/nomad-testnet/live/dkg"
 	"github.com/Jtensetti/nomad-testnet/live/epoch"
+	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
 type fixedPlanner struct{ plan epoch.Plan }
