@@ -1,0 +1,48 @@
+name: scaleway shaper A-B
+
+on:
+  push:
+    branches: [agent/scaleway-shaper-ab]
+    paths:
+      - 'deploy/scaleway/RUN_SHAPER_AB'
+
+permissions:
+  contents: read
+
+env:
+  SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+  SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+  SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID || secrets.SCW_PROJECT_ID }}
+
+jobs:
+  real-wan-ab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.x'
+          check-latest: false
+      - name: Validate exact experiment build
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SCW_ACCESS_KEY"
+          test -n "$SCW_SECRET_KEY"
+          test -n "$SCW_DEFAULT_PROJECT_ID"
+          python3 -m py_compile scripts/wan/*.py
+          bash -n scripts/wan/run-campaign.sh scripts/wan/run-shaper-ab.sh scripts/wan/scaleway-teardown.sh
+          go build ./cmd/nomad-bootstrap ./cmd/nomad-node ./cmd/nomad-shaper
+      - name: Install campaign client dependency
+        run: python3 -m pip install --disable-pip-version-check boto3
+      - name: Run coupled then isolated on disposable real WAN hosts
+        run: bash scripts/wan/run-shaper-ab.sh runtime/evidence/scaleway-shaper-ab 60
+      - name: Upload A-B evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaleway-shaper-ab-${{ github.run_id }}
+          path: runtime/evidence/scaleway-shaper-ab/
+          if-no-files-found: warn
+          retention-days: 30
