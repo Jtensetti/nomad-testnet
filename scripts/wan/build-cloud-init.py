@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
 """Build the cloud-init payload that runs one operator's WAN campaign.
 
-Each host runs both worlds itself, back to back, on the same machine and the
-same network path: idle first, then active. Running them on one host rather
-than on a pair is deliberate -- two hosts differ in placement, neighbours and
-clock, and those differences would sit inside the comparison rather than
-outside it.
+Each host runs every world itself, back to back, on the same machine and the
+same network path. Running them on one host rather than spreading them over
+several is deliberate -- two hosts differ in placement, neighbours and clock,
+and those differences would sit inside the comparison rather than outside it.
 
-The node is restarted between worlds so the second capture starts from the
-same state as the first, and the capture is stopped and restarted with it, so
-neither world's file contains any of the other's traffic.
+Three worlds, not two: two idle series and one active. Without a pair of idle
+series there is no noise floor, and a rejection cannot be told apart from any
+two captures on that host differing. The first WAN campaign to reach a verdict
+ran idle against active alone and rejected one host of three at KS p=0.00988,
+with no control pair to say whether two idle captures would have done the same.
+
+The order is rotated per operator so no world always occupies the same
+position. Warm-up and drift within a run land on whichever world is scheduled
+there, so a fixed order puts them systematically on one world; that is a
+confound, not a leak.
+
+The node is restarted between worlds so each capture starts from the same
+state, and the capture is stopped and restarted with it, so no world's file
+contains any of another's traffic.
 """
 
 import json
@@ -101,19 +111,40 @@ write_files:
 
       # Idle: the node relays nothing of its own, so every cell it emits is
       # cover. Active: the same node with a published object seeded into its
-      # cache, so real work competes for the same fixed cadence.
-      run_world idle /opt/idle.pcap ""
-      sleep 5
-      run_world active /opt/active.pcap "--seed=/opt/seed.json"
+      # cache, so real work competes for the same fixed cadence. Two idle
+      # series give the noise floor the active one is judged against.
+{world_runs}
 
-      curl -fsS --retry 3 -X PUT -T /opt/idle.pcap '{idle_put}'
-      curl -fsS --retry 3 -X PUT -T /opt/active.pcap '{active_put}'
       curl -fsS --retry 3 -X PUT -T /opt/state/health.json '{health_put}'
       echo "campaign complete"
       curl -fsS --retry 3 -X PUT -T /opt/campaign.log '{log_put}'
 runcmd:
   - [ /opt/campaign.sh ]
 """
+
+
+# Each operator runs the same three worlds in a different order, so position
+# and world are independent across the campaign.
+WORLD_ORDER = {
+    "operator-a": ("idle1", "idle2", "active"),
+    "operator-b": ("idle1", "active", "idle2"),
+    "operator-c": ("active", "idle1", "idle2"),
+}
+SEED_FLAG = {"active": "--seed=/opt/seed.json", "idle1": "", "idle2": ""}
+
+
+def world_runs(operator, urls):
+    """Render the run and upload lines for one operator's world order."""
+    lines = []
+    for position, world in enumerate(WORLD_ORDER[operator]):
+        if position:
+            lines.append("      sleep 5")
+        lines.append(f'      run_world {world} /opt/{world}.pcap "{SEED_FLAG[world]}"')
+    lines.append("")
+    for world in WORLD_ORDER[operator]:
+        url = urls["put"][f"results/{operator}-{world}.pcap"]
+        lines.append(f"      curl -fsS --retry 3 -X PUT -T /opt/{world}.pcap '{url}'")
+    return "\n".join(lines)
 
 
 def main():
@@ -131,14 +162,14 @@ def main():
         secrets_url=urls["get"][f"{operator}/node-secrets.json"],
         seed_url=urls["get"]["seed.json"],
         capture_seconds=int(capture_seconds),
-        idle_put=urls["put"][f"results/{operator}-idle.pcap"],
-        active_put=urls["put"][f"results/{operator}-active.pcap"],
+        world_runs=world_runs(operator, urls),
         health_put=urls["put"][f"results/{operator}-health.json"],
         log_put=urls["put"][f"results/{operator}-log.txt"],
     )
     with open(out_path, "w") as handle:
         handle.write(payload)
-    print(f"{operator}: {len(payload)} bytes of cloud-init", file=sys.stderr)
+    print(f"{operator}: {len(payload)} bytes of cloud-init, worlds "
+          f"{' -> '.join(WORLD_ORDER[operator])}", file=sys.stderr)
     return 0
 
 

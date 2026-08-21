@@ -28,7 +28,7 @@ def main():
 
     expected = {f"results/{operator}-{world}.pcap"
                 for operator in ("operator-a", "operator-b", "operator-c")
-                for world in ("idle", "active")}
+                for world in ("idle1", "idle2", "active")}
 
     deadline = time.time() + deadline_seconds
     seen = set()

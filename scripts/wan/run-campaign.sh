@@ -92,7 +92,7 @@ python3 "$here/provision.py" "$deployment" "$work/id_ed25519.pub" \
 echo "--- waiting for results ---" >&2
 # Boot, package install, two captures and the uploads, with room for a slow
 # apt mirror in one region not to fail the whole campaign.
-deadline=$(( capture_seconds * 2 + 600 ))
+deadline=$(( capture_seconds * 3 + 600 ))
 python3 "$here/collect.py" "$bucket" "$work/results" "$deadline"
 collect_status=$?
 

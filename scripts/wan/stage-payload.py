@@ -20,7 +20,7 @@ import boto3
 ENDPOINT = "https://s3.fr-par.scw.cloud"
 REGION = "fr-par"
 OPERATORS = ("operator-a", "operator-b", "operator-c")
-WORLDS = ("idle", "active")
+WORLDS = ("idle1", "idle2", "active")
 EXPIRY_SECONDS = 7200
 
 
