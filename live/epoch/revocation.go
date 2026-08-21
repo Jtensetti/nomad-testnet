@@ -19,17 +19,10 @@ const (
 	RevocationVersion = "nomad-operator-revocation-v1"
 	revocationDomain  = "nomad-operator-revocation-v1"
 
-	// ReasonSelf is a voluntary self-revocation by the operator itself.
-	ReasonSelf = "self"
-	// ReasonCompromise is a revocation asserted by a quorum of peers.
+	ReasonSelf       = "self"
 	ReasonCompromise = "compromise"
 )
 
-// Revocation withdraws an operator identity. It is authorized either by the
-// revoked operator itself, or by an approval-quorum of the operators of the
-// epoch in which the compromise was observed. Quorum authorization exists so
-// that a compromised operator that will not cooperate can still be removed,
-// while a single peer cannot evict another.
 type Revocation struct {
 	Version       string   `json:"version"`
 	NetworkID     string   `json:"network_id"`
@@ -40,7 +33,6 @@ type Revocation struct {
 	Signatures    []Signer `json:"signatures"`
 }
 
-// Signer is one signature over a revocation statement.
 type Signer struct {
 	OperatorID string `json:"operator_id"`
 	Signature  string `json:"signature"`
@@ -78,7 +70,6 @@ func revocationCanonicalBytes(revocation Revocation) ([]byte, error) {
 	return canonical, nil
 }
 
-// RevocationMessage is the exact signing message for a revocation.
 func RevocationMessage(revocation Revocation) ([]byte, error) {
 	canonical, err := revocationCanonicalBytes(revocation)
 	if err != nil {
@@ -91,7 +82,6 @@ func RevocationMessage(revocation Revocation) ([]byte, error) {
 	return message, nil
 }
 
-// SignRevocation adds one signature to a revocation statement.
 func SignRevocation(revocation Revocation, operatorID string, identity ed25519.PrivateKey) (Revocation, error) {
 	if len(identity) != ed25519.PrivateKeySize {
 		return Revocation{}, errors.New("signing identity is required")
@@ -108,10 +98,6 @@ func SignRevocation(revocation Revocation, operatorID string, identity ed25519.P
 	return signed, nil
 }
 
-// VerifyRevocation checks a revocation against the epoch in which the
-// compromise was observed. Self-revocation needs the revoked identity's own
-// signature; compromise revocation needs an approval quorum of that epoch's
-// other operators, so no single peer can evict another.
 func VerifyRevocation(revocation Revocation, observed Verified) error {
 	if revocation.NetworkID != observed.NetworkID {
 		return errors.New("revocation belongs to a different network")
@@ -133,6 +119,9 @@ func VerifyRevocation(revocation Revocation, observed Verified) error {
 
 	verified := make(map[string]struct{}, len(revocation.Signatures))
 	for _, signer := range revocation.Signatures {
+		if _, duplicate := verified[signer.OperatorID]; duplicate {
+			return errors.New("duplicate revocation signer")
+		}
 		operator, err := observed.Topology.OperatorByID(signer.OperatorID)
 		if err != nil {
 			return fmt.Errorf("revocation signer %q is not in the observed epoch", signer.OperatorID)
@@ -154,8 +143,6 @@ func VerifyRevocation(revocation Revocation, observed Verified) error {
 		}
 		return nil
 	}
-	// Compromise: count only peers other than the target, and require the
-	// same quorum that authorizes a membership transition.
 	peers := 0
 	for id := range verified {
 		if id != target.ID {
@@ -192,13 +179,24 @@ func DecodeRevocation(encoded []byte) (Revocation, error) {
 	return revocation, nil
 }
 
-// RevocationStore is the persisted set of accepted revocations. It is the
-// source of the RevocationSet a chain admits new descriptors against.
+type persistedRevocation struct {
+	Name       string
+	Encoded    []byte
+	Digest     [32]byte
+	Revocation Revocation
+}
+
+// RevocationStore separates "present on local disk" from "verified against
+// the signed epoch chain". Persisted files loaded after a restart are never
+// used for future admission until Revalidate has checked their signatures and
+// quorum against the exact EpochObserved descriptor.
 type RevocationStore struct {
-	mu     sync.Mutex
-	root   string
-	byKey  map[string]Revocation
-	sorted []string
+	mu        sync.Mutex
+	root      string
+	persisted map[string]persistedRevocation
+	byKey     map[string]Revocation
+	sorted    []string
+	validated bool
 }
 
 func OpenRevocationStore(root string) (*RevocationStore, error) {
@@ -208,31 +206,83 @@ func OpenRevocationStore(root string) (*RevocationStore, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, err
 	}
-	store := &RevocationStore{root: root, byKey: make(map[string]Revocation)}
-	entries, err := os.ReadDir(root)
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("revocation store root must be a real directory")
+	}
+	persisted, err := loadPersistedRevocations(root)
 	if err != nil {
 		return nil, err
 	}
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".revocation" {
-			continue
-		}
-		encoded, err := os.ReadFile(filepath.Join(root, entry.Name()))
-		if err != nil {
-			return nil, err
-		}
-		revocation, err := DecodeRevocation(encoded)
-		if err != nil {
-			return nil, fmt.Errorf("stored revocation %s: %w", entry.Name(), err)
-		}
-		store.byKey[revocation.IdentityKey] = revocation
+	store := &RevocationStore{
+		root: root, persisted: persisted, byKey: make(map[string]Revocation),
+		validated: len(persisted) == 0,
 	}
 	store.reindexLocked()
 	return store, nil
 }
 
-// Accept verifies and persists a revocation. Accepting the same revocation
-// twice is idempotent.
+// Revalidate verifies every persisted revocation against the exact historical
+// epoch it names. It then re-reads the directory and requires byte-identical
+// files before publishing the verified set, closing the TOCTOU window where a
+// local process could replace a revocation during validation.
+func (store *RevocationStore) Revalidate(chain *Chain) error {
+	if chain == nil {
+		return errors.New("verified epoch chain is required to revalidate revocations")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	before, err := loadPersistedRevocations(store.root)
+	if err != nil {
+		store.validated = false
+		store.byKey = make(map[string]Revocation)
+		return err
+	}
+	verifiedByKey := make(map[string]Revocation)
+	names := sortedPersistedNames(before)
+	for _, name := range names {
+		item := before[name]
+		observed, found, err := chain.FreshEpoch(item.Revocation.EpochObserved)
+		if err != nil {
+			store.validated = false
+			store.byKey = make(map[string]Revocation)
+			return fmt.Errorf("load observed epoch for %s: %w", name, err)
+		}
+		if !found {
+			store.validated = false
+			store.byKey = make(map[string]Revocation)
+			return fmt.Errorf("revocation %s names unstored epoch %d", name, item.Revocation.EpochObserved)
+		}
+		if err := VerifyRevocation(item.Revocation, observed); err != nil {
+			store.validated = false
+			store.byKey = make(map[string]Revocation)
+			return fmt.Errorf("stored revocation %s failed verification: %w", name, err)
+		}
+		mergeRevocation(verifiedByKey, item.Revocation)
+	}
+	after, err := loadPersistedRevocations(store.root)
+	if err != nil {
+		store.validated = false
+		store.byKey = make(map[string]Revocation)
+		return err
+	}
+	if !samePersistedRevocations(before, after) {
+		store.validated = false
+		store.byKey = make(map[string]Revocation)
+		return errors.New("revocation store changed during revalidation")
+	}
+	store.persisted = after
+	store.byKey = verifiedByKey
+	store.validated = true
+	store.reindexLocked()
+	return nil
+}
+
+// Accept verifies and persists a revocation. A store that was already fully
+// validated remains validated after accepting a new verified statement. If
+// another process changed the directory since this object opened, the store
+// falls back to unvalidated state until Revalidate is run again.
 func (store *RevocationStore) Accept(encoded []byte, observed Verified) error {
 	revocation, err := DecodeRevocation(encoded)
 	if err != nil {
@@ -243,38 +293,67 @@ func (store *RevocationStore) Accept(encoded []byte, observed Verified) error {
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+
+	disk, err := loadPersistedRevocations(store.root)
+	if err != nil {
+		return err
+	}
+	if !samePersistedRevocations(store.persisted, disk) {
+		store.validated = false
+		store.byKey = make(map[string]Revocation)
+	}
+	store.persisted = disk
+
 	digest := sha256.Sum256(encoded)
-	path := filepath.Join(store.root, fmt.Sprintf("%s-%x.revocation", revocation.OperatorID, digest[:8]))
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+	name := fmt.Sprintf("%s-%x.revocation", revocation.OperatorID, digest[:8])
+	path := filepath.Join(store.root, name)
+	if existing, exists := store.persisted[name]; exists {
+		if !bytes.Equal(existing.Encoded, encoded) {
+			return errors.New("revocation filename collision with different bytes")
+		}
+	} else {
 		if err := writeNewFile(path, encoded, 0o600); err != nil {
 			return err
 		}
 		if err := syncDir(store.root); err != nil {
 			return err
 		}
-	} else if err != nil {
-		return err
+		store.persisted[name] = persistedRevocation{Name: name, Encoded: append([]byte(nil), encoded...), Digest: digest, Revocation: revocation}
 	}
-	store.byKey[revocation.IdentityKey] = revocation
+	if store.validated {
+		mergeRevocation(store.byKey, revocation)
+	}
 	store.reindexLocked()
 	return nil
 }
 
-// Set returns the revocation set for chain admission.
+// Set is retained for existing in-process callers. Fresh stores and stores
+// that have run Revalidate return only verified identities. If persisted state
+// exists but has not been revalidated, it conservatively exposes those keys as
+// revoked rather than silently permitting future admission. Production code
+// should use Revalidate + ScopedSet, which can report validation failure.
 func (store *RevocationStore) Set() RevocationSet {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	set := make(RevocationSet, len(store.byKey))
-	for key := range store.byKey {
-		set[key] = struct{}{}
+	set := make(RevocationSet)
+	if store.validated {
+		for key := range store.byKey {
+			set[key] = struct{}{}
+		}
+		return set
+	}
+	for _, item := range store.persisted {
+		set[item.Revocation.IdentityKey] = struct{}{}
 	}
 	return set
 }
 
-// Revoked reports whether an identity key has been revoked.
 func (store *RevocationStore) Revoked(identityKey string) bool {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if !store.validated && len(store.persisted) > 0 {
+		return true
+	}
 	_, exists := store.byKey[identityKey]
 	return exists
 }
@@ -285,4 +364,66 @@ func (store *RevocationStore) reindexLocked() {
 		store.sorted = append(store.sorted, key)
 	}
 	sort.Strings(store.sorted)
+}
+
+func loadPersistedRevocations(root string) (map[string]persistedRevocation, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]persistedRevocation)
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) != ".revocation" {
+			continue
+		}
+		path := filepath.Join(root, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > MaximumFileBytes {
+			return nil, fmt.Errorf("stored revocation %s is not a bounded regular file", entry.Name())
+		}
+		encoded, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		revocation, err := DecodeRevocation(encoded)
+		if err != nil {
+			return nil, fmt.Errorf("stored revocation %s: %w", entry.Name(), err)
+		}
+		result[entry.Name()] = persistedRevocation{
+			Name: entry.Name(), Encoded: append([]byte(nil), encoded...), Digest: sha256.Sum256(encoded), Revocation: revocation,
+		}
+	}
+	return result, nil
+}
+
+func samePersistedRevocations(left, right map[string]persistedRevocation) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for name, item := range left {
+		other, ok := right[name]
+		if !ok || item.Digest != other.Digest || !bytes.Equal(item.Encoded, other.Encoded) {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedPersistedNames(values map[string]persistedRevocation) []string {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func mergeRevocation(target map[string]Revocation, candidate Revocation) {
+	current, exists := target[candidate.IdentityKey]
+	if !exists || candidate.EpochObserved < current.EpochObserved {
+		target[candidate.IdentityKey] = candidate
+	}
 }
