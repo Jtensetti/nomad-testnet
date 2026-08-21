@@ -5,6 +5,17 @@ on:
     branches: [agent/scaleway-shaper-ab]
     paths:
       - 'deploy/scaleway/RUN_SHAPER_AB'
+  pull_request:
+    branches: [claude/nomad-production-ready-dxv4ql]
+    paths:
+      - 'deploy/scaleway/RUN_SHAPER_AB'
+      - '.github/workflows/scaleway-shaper-ab.yml'
+      - 'cmd/nomad-node/**'
+      - 'cmd/nomad-shaper/**'
+      - 'live/node/**'
+      - 'live/relayipc/**'
+      - 'live/shaper/**'
+      - 'scripts/wan/**'
 
 permissions:
   contents: read
