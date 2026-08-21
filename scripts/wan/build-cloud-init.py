@@ -1,35 +1,9 @@
 #!/usr/bin/env python3
-"""Build the cloud-init payload that runs one operator's WAN campaign.
+"""Build one operator's mode-controlled WAN campaign payload.
 
-Each host runs every world itself, back to back, on the same machine and the
-same network path. Running them on one host rather than spreading them over
-several is deliberate -- two hosts differ in placement, neighbours and clock,
-and those differences would sit inside the comparison rather than outside it.
-
-Three worlds, not two: two idle series and one active. Without a pair of idle
-series there is no noise floor, and a rejection cannot be told apart from any
-two captures on that host differing. The first WAN campaign to reach a verdict
-ran idle against active alone and rejected one host of three at KS p=0.00988,
-with no control pair to say whether two idle captures would have done the same.
-
-The order is rotated per operator so no world always occupies the same
-position. Warm-up and drift within a run land on whichever world is scheduled
-there, so a fixed order puts them systematically on one world; that is a
-confound, not a leak.
-
-The node is restarted between worlds so each capture starts from the same
-state, and the capture is stopped and restarted with it, so no world's file
-contains any of another's traffic.
-
-World boundaries are absolute wall-clock times shared by every host, not
-offsets from each host's own boot. Hosts boot up to half a minute apart, and in
-a ring exactly one of them starts before its upstream peer: that host records
-its peer's previous world, then sees the peer restart and its sequence counter
-reset, and correctly rejects the rest of the world as replays. Measured on the
-first three-world campaign, one host rejected 5574 of 5673 received cells that
-way while the other two rejected none. Emissions are unaffected -- they are
-fixed-cadence cover either way -- but the relay path is not exercised, so the
-boundaries are aligned rather than left to boot order.
+The world order and absolute boundaries are Claude's corrected WAN instrument.
+The only added variable is egress_mode: coupled or isolated. Analysis, packet
+capture, timing thresholds and world definitions are unchanged.
 """
 
 import json
@@ -49,20 +23,16 @@ write_files:
     permissions: '0700'
     content: |
       #!/bin/bash
-      # Never abort on a single failed step: a half-finished campaign that
-      # uploads its log is diagnosable, one that dies silently is not.
       set -x
       exec > /opt/campaign.log 2>&1
       set -u
-
-      # curl honours the inherited umask, and the node refuses to load an
-      # operator secret that is group- or world-readable. Without this the
-      # fetched secrets land 0644 and every world captures nothing.
       umask 077
+      EGRESS_MODE='{egress_mode}'
 
-      mkdir -p /opt/cache /opt/state
+      mkdir -p /opt/cache /opt/state /run/nomad
       curl -fsSL --retry 5 --retry-delay 3 -o /opt/nomad-node '{node_url}'
-      chmod 700 /opt/nomad-node
+      curl -fsSL --retry 5 --retry-delay 3 -o /opt/nomad-shaper '{shaper_url}'
+      chmod 700 /opt/nomad-node /opt/nomad-shaper
       curl -fsSL --retry 5 -o /opt/topology.json '{topology_url}'
       curl -fsSL --retry 5 -o /opt/authority.pub '{authority_url}'
       curl -fsSL --retry 5 -o /opt/node-secrets.json '{secrets_url}'
@@ -72,35 +42,73 @@ write_files:
 
       start_node() {{
         local seed_flag=$1
-        /opt/nomad-node --topology=/opt/topology.json --authority-key=/opt/authority.pub \\
-          --secrets=/opt/node-secrets.json --listen=:4200 --cache=/opt/cache \\
-          --state=/opt/state/sequence --health=/opt/state/health.json \\
-          --cache-sweep=30s $seed_flag &
+        SHAPER_PID=""
+        if [ "$EGRESS_MODE" = "isolated" ]; then
+          rm -f /run/nomad/relay.sock
+          /opt/nomad-shaper --topology=/opt/topology.json --authority-key=/opt/authority.pub \\
+            --secrets=/opt/node-secrets.json --bind=0.0.0.0:0 \\
+            --work-socket=/run/nomad/relay.sock --state=/opt/state/shaper-sequence \\
+            --stats-out=/opt/state/shaper-stats.json &
+          SHAPER_PID=$!
+          for _ in $(seq 1 100); do
+            [ -S /run/nomad/relay.sock ] && break
+            kill -0 "$SHAPER_PID" 2>/dev/null || break
+            sleep 0.1
+          done
+          if [ ! -S /run/nomad/relay.sock ]; then
+            echo "isolated preflight: shaper socket did not appear"
+            return 1
+          fi
+          /opt/nomad-node --topology=/opt/topology.json --authority-key=/opt/authority.pub \\
+            --secrets=/opt/node-secrets.json --listen=:4200 --cache=/opt/cache \\
+            --health=/opt/state/health.json --cache-sweep=30s \\
+            --egress-mode=isolated --relay-socket=/run/nomad/relay.sock $seed_flag &
+        else
+          /opt/nomad-node --topology=/opt/topology.json --authority-key=/opt/authority.pub \\
+            --secrets=/opt/node-secrets.json --listen=:4200 --cache=/opt/cache \\
+            --state=/opt/state/sequence --health=/opt/state/health.json \\
+            --cache-sweep=30s --egress-mode=coupled $seed_flag &
+        fi
         NODE_PID=$!
       }}
 
       stop_node() {{
-        kill $NODE_PID 2>/dev/null; sleep 2; kill -9 $NODE_PID 2>/dev/null
+        kill "$NODE_PID" 2>/dev/null || true
+        sleep 2
+        kill -9 "$NODE_PID" 2>/dev/null || true
+        if [ -n "${{SHAPER_PID:-}}" ]; then
+          kill "$SHAPER_PID" 2>/dev/null || true
+          for _ in $(seq 1 20); do
+            kill -0 "$SHAPER_PID" 2>/dev/null || break
+            sleep 0.1
+          done
+          kill -9 "$SHAPER_PID" 2>/dev/null || true
+        fi
       }}
 
-      # Preflight. A node that refuses to start does so within a second, and
-      # without this the campaign would spend two 150s captures recording
-      # nothing before anyone found out.
-      rm -rf /opt/cache /opt/state; mkdir -p /opt/cache /opt/state
-      start_node ""
+      rm -rf /opt/cache /opt/state; mkdir -p /opt/cache /opt/state /run/nomad
+      if ! start_node ""; then
+        echo "PREFLIGHT FAILED: start_node failed"
+        curl -fsS --retry 3 -X PUT -T /opt/campaign.log '{log_put}'
+        exit 1
+      fi
       sleep 8
-      if ! kill -0 $NODE_PID 2>/dev/null; then
-        echo "PREFLIGHT FAILED: node exited during startup; not running any world"
+      if ! kill -0 "$NODE_PID" 2>/dev/null; then
+        echo "PREFLIGHT FAILED: node exited during startup"
         stop_node
         curl -fsS --retry 3 -X PUT -T /opt/campaign.log '{log_put}'
         exit 1
       fi
-      echo "preflight ok: node alive after 8s"
+      if [ "$EGRESS_MODE" = "isolated" ] && ! kill -0 "$SHAPER_PID" 2>/dev/null; then
+        echo "PREFLIGHT FAILED: shaper exited during startup"
+        stop_node
+        curl -fsS --retry 3 -X PUT -T /opt/campaign.log '{log_put}'
+        exit 1
+      fi
+      echo "preflight ok: $EGRESS_MODE node path alive after 8s"
       stop_node
       sleep 2
 
-      # Wait until this world's shared start time. Every host computes the
-      # same instants, so no node sees a peer restart inside its own world.
       wait_until() {{
         local target=$1 now
         now=$(date +%s)
@@ -114,52 +122,51 @@ write_files:
       run_world() {{
         local world=$1 capture=$2 seed_flag=$3
         rm -rf /opt/cache /opt/state
-        mkdir -p /opt/cache /opt/state
-        # -U writes packets as they arrive, so a killed tcpdump still leaves a
-        # readable file rather than a truncated buffer.
+        mkdir -p /opt/cache /opt/state /run/nomad
+        rm -f /run/nomad/relay.sock
         tcpdump -i any -n -s 96 -U -w "$capture" 'udp port 4200' &
         local tcpdump_pid=$!
         sleep 3
-        start_node "$seed_flag"
+        if ! start_node "$seed_flag"; then
+          echo "world $world: WARNING start_node failed"
+        fi
         sleep {capture_seconds}
-        # A node that died mid-world makes the capture meaningless rather than
-        # merely short, so say so in the log next to the packet count.
-        kill -0 $NODE_PID 2>/dev/null && echo "world $world: node still alive at end" \\
+        kill -0 "$NODE_PID" 2>/dev/null && echo "world $world: node still alive at end" \\
           || echo "world $world: WARNING node exited before the world ended"
+        if [ "$EGRESS_MODE" = "isolated" ]; then
+          kill -0 "$SHAPER_PID" 2>/dev/null && echo "world $world: shaper still alive at end" \\
+            || echo "world $world: WARNING shaper exited before the world ended"
+        fi
         stop_node
         sleep 2
-        kill -INT $tcpdump_pid 2>/dev/null; sleep 3; kill -9 $tcpdump_pid 2>/dev/null
+        kill -INT "$tcpdump_pid" 2>/dev/null || true
+        sleep 3
+        kill -9 "$tcpdump_pid" 2>/dev/null || true
         echo "world $world captured $(tcpdump -r "$capture" 2>/dev/null | wc -l) packets"
       }}
 
-      # Idle: the node relays nothing of its own, so every cell it emits is
-      # cover. Active: the same node with a published object seeded into its
-      # cache, so real work competes for the same fixed cadence. Two idle
-      # series give the noise floor the active one is judged against.
 {world_runs}
 
-      curl -fsS --retry 3 -X PUT -T /opt/state/health.json '{health_put}'
-      echo "campaign complete"
+      curl -fsS --retry 3 -X PUT -T /opt/state/health.json '{health_put}' || true
+      if [ -f /opt/state/shaper-stats.json ]; then
+        curl -fsS --retry 3 -X PUT -T /opt/state/shaper-stats.json '{shaper_stats_put}' || true
+      fi
+      echo "campaign complete: egress_mode=$EGRESS_MODE"
       curl -fsS --retry 3 -X PUT -T /opt/campaign.log '{log_put}'
 runcmd:
   - [ /opt/campaign.sh ]
 """
 
-
-# Each operator runs the same three worlds in a different order, so position
-# and world are independent across the campaign.
 WORLD_ORDER = {
     "operator-a": ("idle1", "idle2", "active"),
     "operator-b": ("idle1", "active", "idle2"),
     "operator-c": ("active", "idle1", "idle2"),
 }
 SEED_FLAG = {"active": "--seed=/opt/seed.json", "idle1": "", "idle2": ""}
-# Slack between worlds: node and capture shutdown, then a fresh start.
 SLOT_GAP_SECONDS = 30
 
 
 def world_runs(operator, urls, base_epoch, capture_seconds):
-    """Render the run and upload lines for one operator's world order."""
     lines = []
     for position, world in enumerate(WORLD_ORDER[operator]):
         slot = base_epoch + position * (capture_seconds + SLOT_GAP_SECONDS)
@@ -173,16 +180,21 @@ def world_runs(operator, urls, base_epoch, capture_seconds):
 
 
 def main():
-    if len(sys.argv) != 7:
+    if len(sys.argv) != 8:
         print("usage: build-cloud-init.py URLS_JSON OPERATOR PUBKEY_PATH CAPTURE_SECONDS "
-              "BASE_EPOCH OUT", file=sys.stderr)
+              "BASE_EPOCH EGRESS_MODE OUT", file=sys.stderr)
         return 2
-    urls_path, operator, pubkey_path, capture_seconds, base_epoch, out_path = sys.argv[1:7]
+    urls_path, operator, pubkey_path, capture_seconds, base_epoch, egress_mode, out_path = sys.argv[1:8]
+    if egress_mode not in ("coupled", "isolated"):
+        print("EGRESS_MODE must be coupled or isolated", file=sys.stderr)
+        return 2
     base_epoch = int(base_epoch)
     urls = json.load(open(urls_path))
     payload = TEMPLATE.format(
         pubkey=open(pubkey_path).read().strip(),
+        egress_mode=egress_mode,
         node_url=urls["get"]["nomad-node"],
+        shaper_url=urls["get"]["nomad-shaper"],
         topology_url=urls["get"]["topology.json"],
         authority_url=urls["get"]["authority.pub"],
         secrets_url=urls["get"][f"{operator}/node-secrets.json"],
@@ -190,11 +202,12 @@ def main():
         capture_seconds=int(capture_seconds),
         world_runs=world_runs(operator, urls, base_epoch, int(capture_seconds)),
         health_put=urls["put"][f"results/{operator}-health.json"],
+        shaper_stats_put=urls["put"][f"results/{operator}-shaper-stats.json"],
         log_put=urls["put"][f"results/{operator}-log.txt"],
     )
     with open(out_path, "w") as handle:
         handle.write(payload)
-    print(f"{operator}: {len(payload)} bytes of cloud-init, worlds "
+    print(f"{operator}: {egress_mode}, {len(payload)} bytes, worlds "
           f"{' -> '.join(WORLD_ORDER[operator])}, first slot at "
           f"{time.strftime('%H:%M:%SZ', time.gmtime(base_epoch))}", file=sys.stderr)
     return 0

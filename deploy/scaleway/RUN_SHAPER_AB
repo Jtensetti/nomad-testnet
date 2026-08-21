@@ -1,0 +1,3 @@
+Real WAN diagnostic A/B trigger.
+Commit: same build for coupled and isolated egress.
+Worlds: idle1, idle2, active; 60 seconds each; corrected WAN v2 analyzer.

@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 """Stage a WAN campaign's payload in Scaleway Object Storage.
 
-The campaign hosts cannot be reached over SSH from every environment -- the
-sandbox this was developed in blocks outbound port 22 entirely -- so the hosts
-fetch what they need over HTTPS and push their results back the same way.
-
-They are given presigned URLs rather than credentials. A host that is
-compromised mid-campaign can therefore read the campaign's own inputs and
-write its own results, and nothing else in the account; the URLs also expire,
-so the blast radius is bounded in time as well as scope.
+Hosts receive only per-object presigned URLs. Both egress implementations are
+staged from the same commit so an A/B campaign changes only the process
+boundary, not the wire implementation or analysis.
 """
 
 import json
@@ -39,16 +34,21 @@ def main():
         print("usage: stage-payload.py BUCKET RUNTIME_DIR OUT_URLS_JSON", file=sys.stderr)
         return 2
     bucket, runtime, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
-    binary = os.path.join(os.path.dirname(runtime), "bin", "nomad-node")
+    binary_dir = os.path.join(os.path.dirname(runtime), "bin")
 
     uploads = {
-        "nomad-node": binary,
+        "nomad-node": os.path.join(binary_dir, "nomad-node"),
+        "nomad-shaper": os.path.join(binary_dir, "nomad-shaper"),
         "topology.json": f"{runtime}/public/topology.json",
         "authority.pub": f"{runtime}/public/authority.pub",
         "seed.json": f"{runtime}/public/seed.json",
     }
     for operator in OPERATORS:
         uploads[f"{operator}/node-secrets.json"] = f"{runtime}/operators/{operator}/node-secrets.json"
+
+    for key, path in uploads.items():
+        if not os.path.isfile(path):
+            raise SystemExit(f"missing staged input {key}: {path}")
 
     s3 = client()
     for key, path in uploads.items():
@@ -64,7 +64,7 @@ def main():
             key = f"results/{operator}-{world}.pcap"
             urls["put"][key] = s3.generate_presigned_url(
                 "put_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=EXPIRY_SECONDS)
-        for extra in ("health.json", "log.txt"):
+        for extra in ("health.json", "log.txt", "shaper-stats.json"):
             key = f"results/{operator}-{extra}"
             urls["put"][key] = s3.generate_presigned_url(
                 "put_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=EXPIRY_SECONDS)
