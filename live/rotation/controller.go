@@ -141,10 +141,13 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 		return Outcome{}, err
 	}
 
-	topologyPath := filepath.Join(config.TopologyDir, fmt.Sprintf("epoch-%020d", planned.Epoch), "topology.json")
+	// Every retry is a distinct, authority-signed DKG session. Reusing the
+	// topology from attempt 1 after its signed start time would either violate
+	// dkg.Run's anti-resume rule or silently turn a retry into the same session.
+	topologyPath := filepath.Join(config.TopologyDir, fmt.Sprintf("epoch-%020d", planned.Epoch), fmt.Sprintf("attempt-%02d", planned.Attempt), "topology.json")
 	network, err := topology.Load(topologyPath, config.Authority, now)
 	if err != nil {
-		return Outcome{}, fmt.Errorf("load successor topology: %w", err)
+		return Outcome{}, fmt.Errorf("load successor topology for attempt %d: %w", planned.Attempt, err)
 	}
 	if network.Document.NetworkID != config.NetworkID || network.Document.Epoch != planned.Epoch {
 		return Outcome{}, errors.New("successor topology does not match planned network and epoch")
@@ -191,10 +194,11 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 	if err != nil {
 		return Outcome{}, err
 	}
+	completedAt := time.Now().UTC()
 	marker := resultMarker{
 		Version: 1, NetworkID: config.NetworkID, Epoch: planned.Epoch, Attempt: planned.Attempt,
 		TopologyDigest: fmt.Sprintf("%x", network.Digest), CertificateSHA256: certificateDigest,
-		ShareSHA256: shareDigest, CompletedAt: now.Format(time.RFC3339),
+		ShareSHA256: shareDigest, CompletedAt: completedAt.Format(time.RFC3339),
 	}
 	if err := writeMarker(markerPath, marker); err != nil {
 		return Outcome{}, err
