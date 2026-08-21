@@ -6,7 +6,7 @@ on:
     paths:
       - 'deploy/scaleway/RUN_WAN_APPLY'
   pull_request:
-    types: [reopened]
+    types: [opened, reopened]
 
 permissions:
   contents: read
@@ -27,7 +27,7 @@ jobs:
   real-wan-baseline:
     if: >-
       github.event_name == 'push' ||
-      (github.event_name == 'pull_request' && github.event.action == 'reopened' && github.head_ref == 'agent/scaleway-wan')
+      (github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'reopened') && github.head_ref == 'agent/scaleway-live-run')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
