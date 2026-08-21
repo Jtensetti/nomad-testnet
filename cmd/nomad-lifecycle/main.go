@@ -63,6 +63,17 @@ func importEpochs(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	// Persisted revocations are not trusted merely because their JSON decodes.
+	// Re-verify every stored statement against its exact historical epoch before
+	// it may influence admission of a future descriptor.
+	historical, err := epoch.OpenChain(*chainPath, *networkID, authority, nil)
+	if err != nil {
+		return err
+	}
+	if err := revocations.Revalidate(historical); err != nil {
+		return fmt.Errorf("revalidate persisted revocations: %w", err)
+	}
+
 	type imported struct {
 		Epoch  uint64 `json:"epoch"`
 		Digest string `json:"digest"`
@@ -84,9 +95,6 @@ func importEpochs(arguments []string) error {
 		if err != nil {
 			return err
 		}
-		// Re-open for every descriptor so the admission set is scoped to the
-		// target epoch. Historical descriptors are re-verified independently
-		// of later revocations by OpenChain itself.
 		chain, err := epoch.OpenChain(*chainPath, *networkID, authority, scope)
 		if err != nil {
 			return err
@@ -305,6 +313,9 @@ func revokeAccept(arguments []string) error {
 	store, err := epoch.OpenRevocationStore(*storePath)
 	if err != nil {
 		return err
+	}
+	if err := store.Revalidate(chain); err != nil {
+		return fmt.Errorf("revalidate persisted revocations: %w", err)
 	}
 	if err := store.Accept(encoded, observed); err != nil {
 		return err
