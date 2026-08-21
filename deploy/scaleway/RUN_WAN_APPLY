@@ -1,6 +1,6 @@
 run=first-real-wan-baseline
-attempt=2
+attempt=3
 capture_seconds=300
 ttl_hours=2
 transport=dedicated-nomad-shaper
-requested_at=2026-08-20T17:33Z
+requested_at=2026-08-21T04:56Z
