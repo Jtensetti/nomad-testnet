@@ -89,17 +89,23 @@ func VerifyDiscard(statement DiscardStatement, expectedOperatorID string, identi
 	return nil
 }
 
-// DiscardFailedShare destroys private share output from a failed, never-
-// activated DKG attempt. It persists the signed original-file metadata in a
-// .pending file before destruction; after overwrite/unlink it atomically
-// renames that intent to the final evidence path. Therefore a crash at any
-// point can resume without inventing a new pre-erasure digest.
+// DiscardFailedShare is a crash-resumable three-phase local transaction:
+//
+//   final absent, .pending present: original digest is durably pinned;
+//   .erasing present: the original path has been moved to quarantine and may
+//                     already be partly/fully overwritten;
+//   final present: quarantine was unlinked and directory metadata synced.
+//
+// The DKG journal and public certificate are retained as failure evidence.
 func DiscardFailedShare(networkID string, epochNumber uint64, attempt int, topologyDigest, operatorID, sharePath, statementPath string, identity ed25519.PrivateKey, now time.Time) (DiscardStatement, error) {
 	if len(identity) != ed25519.PrivateKeySize || networkID == "" || operatorID == "" || epochNumber == 0 || attempt < 1 {
 		return DiscardStatement{}, errors.New("complete failed-DKG discard context is required")
 	}
 	public := identity.Public().(ed25519.PublicKey)
 	pendingPath := statementPath + ".pending"
+	erasingPath := statementPath + ".erasing"
+	quarantinePath := sharePath + ".discarding"
+
 	finalExists, err := regularFileExists(statementPath)
 	if err != nil {
 		return DiscardStatement{}, err
@@ -108,53 +114,56 @@ func DiscardFailedShare(networkID string, epochNumber uint64, attempt int, topol
 	if err != nil {
 		return DiscardStatement{}, err
 	}
-	if finalExists && pendingExists {
-		return DiscardStatement{}, errors.New("both pending and final failed-DKG discard evidence exist")
+	erasingExists, err := regularFileExists(erasingPath)
+	if err != nil {
+		return DiscardStatement{}, err
+	}
+	phaseCount := 0
+	for _, exists := range []bool{finalExists, pendingExists, erasingExists} {
+		if exists {
+			phaseCount++
+		}
+	}
+	if phaseCount > 1 {
+		return DiscardStatement{}, errors.New("conflicting failed-DKG discard phase files exist")
 	}
 	if finalExists {
 		statement, err := loadAndVerifyDiscard(statementPath, networkID, epochNumber, attempt, topologyDigest, operatorID, filepath.Base(sharePath), public)
 		if err != nil {
 			return DiscardStatement{}, err
 		}
-		if exists, err := pathExists(sharePath); err != nil {
-			return DiscardStatement{}, err
-		} else if exists {
-			return DiscardStatement{}, errors.New("failed DKG share exists despite completed discard evidence")
+		for _, path := range []string{sharePath, quarantinePath} {
+			if exists, err := pathExists(path); err != nil {
+				return DiscardStatement{}, err
+			} else if exists {
+				return DiscardStatement{}, errors.New("private failed-DKG material exists despite completed discard evidence")
+			}
 		}
 		return statement, nil
 	}
 
 	var statement DiscardStatement
-	if pendingExists {
+	switch {
+	case erasingExists:
+		statement, err = loadAndVerifyDiscard(erasingPath, networkID, epochNumber, attempt, topologyDigest, operatorID, filepath.Base(sharePath), public)
+		if err != nil {
+			return DiscardStatement{}, err
+		}
+		if sourceExists, err := pathExists(sharePath); err != nil {
+			return DiscardStatement{}, err
+		} else if sourceExists {
+			return DiscardStatement{}, errors.New("original failed DKG share reappeared during erasing phase")
+		}
+	case pendingExists:
 		statement, err = loadAndVerifyDiscard(pendingPath, networkID, epochNumber, attempt, topologyDigest, operatorID, filepath.Base(sharePath), public)
 		if err != nil {
 			return DiscardStatement{}, err
 		}
-	} else {
-		info, err := os.Lstat(sharePath)
+	case !pendingExists:
+		statement, err = createDiscardIntent(networkID, epochNumber, attempt, topologyDigest, operatorID, sharePath, identity, now)
 		if err != nil {
 			return DiscardStatement{}, err
 		}
-		if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 8<<20 {
-			return DiscardStatement{}, errors.New("failed DKG share must be a non-empty bounded regular file")
-		}
-		contents, err := os.ReadFile(sharePath)
-		if err != nil {
-			return DiscardStatement{}, err
-		}
-		digest := sha256.Sum256(contents)
-		statement = DiscardStatement{
-			Version: DiscardVersion, NetworkID: networkID, Epoch: epochNumber, Attempt: attempt,
-			TopologyDigest: topologyDigest, OperatorID: operatorID, File: filepath.Base(sharePath),
-			SizeBytes: info.Size(), FileSHA256: hex.EncodeToString(digest[:]),
-			DiscardedAt: now.UTC().Truncate(time.Second).Format(time.RFC3339),
-			Method: "overwrite-random-then-unlink", Limitations: DiscardLimitations,
-		}
-		message, err := discardMessage(statement)
-		if err != nil {
-			return DiscardStatement{}, err
-		}
-		statement.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(identity, message))
 		encoded, err := json.MarshalIndent(statement, "", "  ")
 		if err != nil {
 			return DiscardStatement{}, err
@@ -162,26 +171,82 @@ func DiscardFailedShare(networkID string, epochNumber uint64, attempt int, topol
 		if err := writeExclusive(pendingPath, encoded, 0o600); err != nil {
 			return DiscardStatement{}, err
 		}
+		pendingExists = true
 	}
 
-	shareExists, err := pathExists(sharePath)
+	if !erasingExists {
+		sourceExists, err := pathExists(sharePath)
+		if err != nil {
+			return DiscardStatement{}, err
+		}
+		quarantineExists, err := regularFileExists(quarantinePath)
+		if err != nil {
+			return DiscardStatement{}, err
+		}
+		switch {
+		case sourceExists && quarantineExists:
+			return DiscardStatement{}, errors.New("both original and quarantine failed-DKG share exist")
+		case sourceExists:
+			if err := verifyCurrentShareMatchesStatement(sharePath, statement); err != nil {
+				return DiscardStatement{}, err
+			}
+			if err := os.Rename(sharePath, quarantinePath); err != nil {
+				return DiscardStatement{}, err
+			}
+			if err := syncDirectory(filepath.Dir(sharePath)); err != nil {
+				return DiscardStatement{}, err
+			}
+		case quarantineExists:
+			// Crash after source->quarantine but before phase promotion.
+		case !sourceExists && !quarantineExists:
+			return DiscardStatement{}, errors.New("pending discard lost both original and quarantine file; method completion is ambiguous")
+		}
+		if err := promoteEvidence(pendingPath, erasingPath); err != nil {
+			return DiscardStatement{}, err
+		}
+		erasingExists = true
+	}
+
+	quarantineExists, err := regularFileExists(quarantinePath)
 	if err != nil {
 		return DiscardStatement{}, err
 	}
-	if shareExists {
-		if err := verifyCurrentShareMatchesStatement(sharePath, statement); err != nil {
-			return DiscardStatement{}, err
-		}
-		if err := overwriteAndUnlink(sharePath, statement.SizeBytes); err != nil {
+	if quarantineExists {
+		if err := overwriteAndUnlink(quarantinePath); err != nil {
 			return DiscardStatement{}, err
 		}
 	}
-	if err := os.Rename(pendingPath, statementPath); err != nil {
+	if err := promoteEvidence(erasingPath, statementPath); err != nil {
 		return DiscardStatement{}, err
 	}
-	if err := syncDirectory(filepath.Dir(statementPath)); err != nil {
+	return statement, nil
+}
+
+func createDiscardIntent(networkID string, epochNumber uint64, attempt int, topologyDigest, operatorID, sharePath string, identity ed25519.PrivateKey, now time.Time) (DiscardStatement, error) {
+	info, err := os.Lstat(sharePath)
+	if err != nil {
 		return DiscardStatement{}, err
 	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 8<<20 {
+		return DiscardStatement{}, errors.New("failed DKG share must be a non-empty bounded regular file")
+	}
+	contents, err := os.ReadFile(sharePath)
+	if err != nil {
+		return DiscardStatement{}, err
+	}
+	digest := sha256.Sum256(contents)
+	statement := DiscardStatement{
+		Version: DiscardVersion, NetworkID: networkID, Epoch: epochNumber, Attempt: attempt,
+		TopologyDigest: topologyDigest, OperatorID: operatorID, File: filepath.Base(sharePath),
+		SizeBytes: info.Size(), FileSHA256: hex.EncodeToString(digest[:]),
+		DiscardedAt: now.UTC().Truncate(time.Second).Format(time.RFC3339),
+		Method: "overwrite-random-then-unlink", Limitations: DiscardLimitations,
+	}
+	message, err := discardMessage(statement)
+	if err != nil {
+		return DiscardStatement{}, err
+	}
+	statement.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(identity, message))
 	return statement, nil
 }
 
@@ -223,12 +288,19 @@ func verifyCurrentShareMatchesStatement(path string, statement DiscardStatement)
 	return nil
 }
 
-func overwriteAndUnlink(path string, size int64) error {
+func overwriteAndUnlink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 8<<20 {
+		return errors.New("quarantined failed DKG share must be a non-empty bounded regular file")
+	}
 	file, err := os.OpenFile(path, os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	noise := make([]byte, size)
+	noise := make([]byte, info.Size())
 	if _, err := rand.Read(noise); err != nil {
 		_ = file.Close()
 		return err
@@ -248,6 +320,13 @@ func overwriteAndUnlink(path string, size int64) error {
 		return err
 	}
 	return syncDirectory(filepath.Dir(path))
+}
+
+func promoteEvidence(from, to string) error {
+	if err := os.Rename(from, to); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(to))
 }
 
 func decodeDiscard(encoded []byte) (DiscardStatement, error) {
@@ -307,7 +386,7 @@ func regularFileExists(path string) (bool, error) {
 		return false, err
 	}
 	if !info.Mode().IsRegular() {
-		return false, errors.New("discard evidence path exists but is not a regular file")
+		return false, errors.New("discard phase/evidence path exists but is not a regular file")
 	}
 	return true, nil
 }
