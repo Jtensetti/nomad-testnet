@@ -213,13 +213,19 @@ def equal_windows(left, right, interval):
 
 
 def measured_host(flows_a, flows_b):
-    """Infer which address the capture was taken at.
+    """Infer which address the capture was taken at, if it was taken at one.
 
-    A host sees its own emissions leave and its peers' arrive, so its address
-    is the one appearing as both a source and a destination; a pure upstream
-    peer only ever appears as a source and a pure downstream peer only as a
-    destination. Where that is not unique the caller must say, because
-    guessing here would silently decide which flows the verdict rests on.
+    A participating host sees its own emissions leave and its peers' arrive,
+    so its address is the one appearing as both a source and a destination; a
+    pure upstream peer only ever appears as a source and a pure downstream peer
+    only as a destination.
+
+    An empty result is not a failure. It means no address does both, which is
+    what a capture taken at an observation point rather than at a participant
+    looks like -- every flow in it is some sender's emission, and all of them
+    carry the verdict. More than one candidate is a real ambiguity: the caller
+    must say, because guessing would silently decide which flows the verdict
+    rests on, and guessing wrong would file a leak under the path.
     """
     candidates = set()
     for flows in (flows_a, flows_b):
@@ -270,13 +276,14 @@ def main():
     host = declared_host
     if host is None:
         candidates = measured_host(flows_a, flows_b)
-        if len(candidates) != 1:
+        if len(candidates) > 1:
             print(f"cannot tell which host this capture was taken at "
-                  f"(candidates: {sorted(candidates) or 'none'}); pass it explicitly",
+                  f"(candidates: {sorted(candidates)}); pass it explicitly",
                   file=sys.stderr)
             return 2
-        host = candidates.pop()
+        host = candidates.pop() if candidates else None
     report["measured_host"] = host
+    report["vantage"] = "participant" if host else "observation point"
 
     # Flows the measured host emits, and flows it merely receives. The claim
     # under test is that private activity does not modulate the events this
@@ -286,10 +293,14 @@ def main():
     # scheduler would be a category error -- so those flows are tested too,
     # reported in full, and returned under their own non-zero exit status
     # rather than folded into this node's verdict or quietly dropped.
-    emission_keys = sorted(key for key in set(flows_a) & set(flows_b) if key[0] == host)
-    path_keys = sorted(key for key in set(flows_a) & set(flows_b) if key[0] != host)
+    shared = set(flows_a) & set(flows_b)
+    if host is None:
+        emission_keys, path_keys = sorted(shared), []
+    else:
+        emission_keys = sorted(key for key in shared if key[0] == host)
+        path_keys = sorted(key for key in shared if key[0] != host)
     if not emission_keys:
-        print(f"no flow in either world is sourced at {host}; nothing to judge",
+        print(f"no flow common to both worlds is sourced at {host}; nothing to judge",
               file=sys.stderr)
         return 2
 
@@ -300,13 +311,13 @@ def main():
     only_b = sorted(f"{s} > {d}" for s, d in set(flows_b) - set(flows_a))
     report["flows_only_in_a"], report["flows_only_in_b"] = only_a, only_b
     for name in only_a:
-        (failures if name.startswith(host) else path_failures).append(
-            f"flow present only in world A: {name}")
+        sink = failures if host is None or name.startswith(host) else path_failures
+        sink.append(f"flow present only in world A: {name}")
     for name in only_b:
-        (failures if name.startswith(host) else path_failures).append(
-            f"flow present only in world B: {name}")
+        sink = failures if host is None or name.startswith(host) else path_failures
+        sink.append(f"flow present only in world B: {name}")
 
-    def evaluate(keys, sink, label):
+    def evaluate(keys, sink, label, inconclusive):
         results = {}
         for key in keys:
             name = f"{key[0]} > {key[1]}"
@@ -314,8 +325,13 @@ def main():
             entry = {"window_seconds": width, "count": {"a": len(left), "b": len(right)}}
             results[name] = entry
             if width <= 0.0 or min(len(left), len(right)) < MIN_PACKETS_PER_FLOW:
-                sink.append(f"{name}: too few cells to evaluate "
-                            f"({len(left)} vs {len(right)})")
+                # Not a difference: the rule had too little to run on. Recorded
+                # apart from the findings for the same reason exit 2 exists at
+                # all -- a comparison that could not be made is not a
+                # comparison that rejected.
+                inconclusive.append(f"{name}: too few cells to evaluate "
+                                    f"({len(left)} vs {len(right)}, "
+                                    f"minimum {MIN_PACKETS_PER_FLOW})")
                 continue
             if len(left) != len(right):
                 sink.append(f"{name}: packet count differs over a "
@@ -342,29 +358,46 @@ def main():
                             f"{burst_left} vs {burst_right}")
         report[label] = results
 
-    evaluate(emission_keys, failures, "emission_flows")
-    evaluate(path_keys, path_failures, "path_flows")
+    inconclusive = []
+    evaluate(emission_keys, failures, "emission_flows", inconclusive)
+    evaluate(path_keys, path_failures, "path_flows", inconclusive)
+    report["inconclusive"] = inconclusive
 
-    # Destination sequence for the measured host: which peer slots it used and
-    # in what proportion.
-    left_counts = {d: len(t) for (s, d), t in flows_a.items() if s == host}
-    right_counts = {d: len(t) for (s, d), t in flows_b.items() if s == host}
-    statistic, p = chi_square_counts(left_counts, right_counts)
-    report["destination_chi_square"] = {"statistic": statistic, "p": p}
-    if p < CHI_SQUARE_ALPHA:
-        failures.append(f"{host}: destination distributions differ "
-                        f"(chi-square p={p:.4g})")
+    # Destination sequence per sender: which peer slots a source used and in
+    # what proportion. Pooling senders here would let one sender's shift hide
+    # behind another's steadiness.
+    report["destination_chi_square"] = {}
+    for source in sorted({key[0] for key in emission_keys}):
+        left_counts = {d: len(t) for (s, d), t in flows_a.items() if s == source}
+        right_counts = {d: len(t) for (s, d), t in flows_b.items() if s == source}
+        statistic, p = chi_square_counts(left_counts, right_counts)
+        report["destination_chi_square"][source] = {"statistic": statistic, "p": p}
+        if p < CHI_SQUARE_ALPHA:
+            failures.append(f"{source}: destination distributions differ "
+                            f"(chi-square p={p:.4g})")
 
     report["failures"] = failures
     report["path_failures"] = path_failures
-    report["verdict"] = "PASS" if not failures else "FAIL"
+    report["verdict"] = ("FAIL" if failures
+                         else "INCONCLUSIVE" if inconclusive else "PASS")
     report["path_verdict"] = "PASS" if not path_failures else "FAIL"
     json.dump(report, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     if failures:
-        print(f"\n{len(failures)} preregistered test(s) failed on traffic {host} emits. "
+        emitter = f"traffic {host} emits" if host else "emitted traffic"
+        print(f"\n{len(failures)} preregistered test(s) failed on {emitter}. "
               f"A single failure is a finding.", file=sys.stderr)
         return 1
+    if inconclusive:
+        # A finding outranks this, because a rejection stands whatever else
+        # was short of data. With no finding, too little data is exit 2: the
+        # rule did not run on those flows, and reporting that as a pass would
+        # turn an empty capture into evidence of indistinguishability.
+        for line in inconclusive:
+            print(f"  {line}", file=sys.stderr)
+        print(f"\n{len(inconclusive)} flow(s) had too few cells for the rule to run.",
+              file=sys.stderr)
+        return 2
     if path_failures:
         print(f"\n{len(path_failures)} preregistered test(s) failed on traffic {host} "
               f"receives. That is a finding about the sender or the path between them, "

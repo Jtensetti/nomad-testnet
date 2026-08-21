@@ -531,6 +531,12 @@ func runCampaignRound(t *testing.T, network topology.Verified, identities map[st
 	observers := bindObservers(t, endpoints, []int{1})
 	defer closeObservers(observers)
 
+	// Every round is its own contiguous observation window. Between rounds
+	// this world's sender is not running, and folding that pause into the
+	// series would put the other worlds' durations inside this world's
+	// cadence statistics.
+	capture.BeginSegment()
+
 	scratch := t.TempDir()
 	worker := buildCampaignNode(t, network, identities, endpoints, scratch)
 
@@ -715,15 +721,29 @@ func absolute(value float64) float64 {
 	return value
 }
 
+// writeCampaignCapture writes one file per round rather than one per series.
+// The preregistered rule compares equal-length windows of a continuous stream,
+// and a series file spanning several rounds is not one: it carries the pauses
+// during which the other worlds ran, so the number of cells inside any window
+// depends on how long they took. Per-round files are each a real stream.
 func writeCampaignCapture(t *testing.T, directory string, capture *wire.Capture) {
 	t.Helper()
-	path := filepath.Join(directory, capture.Label+".txt")
-	file, err := os.Create(path)
-	if err != nil {
-		t.Fatalf("write capture: %v", err)
+	segments := capture.Segments()
+	if len(segments) == 0 {
+		t.Fatalf("%s captured nothing to write", capture.Label)
 	}
-	defer func() { _ = file.Close() }()
-	if err := capture.WriteTcpdump(file); err != nil {
-		t.Fatalf("render capture: %v", err)
+	for _, segment := range segments {
+		path := filepath.Join(directory, segment.Label+".txt")
+		file, err := os.Create(path)
+		if err != nil {
+			t.Fatalf("write capture: %v", err)
+		}
+		if err := segment.WriteTcpdump(file); err != nil {
+			_ = file.Close()
+			t.Fatalf("render capture: %v", err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatalf("close capture: %v", err)
+		}
 	}
 }

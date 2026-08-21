@@ -51,24 +51,63 @@ jobs:
         if: always()
         run: |
           directory=runtime/evidence/wire-campaign
-          test -d "$directory" || { echo "no captures were produced"; exit 0; }
-          status=0
+          # A campaign that produced nothing is a broken run, not a clean one.
+          # Passing the gate because no capture exists is how an empty result
+          # becomes evidence of indistinguishability.
+          test -d "$directory" || { echo "no captures were produced"; exit 1; }
+          compared=0
+          findings=0
+          # Per round: a series file spanning several rounds carries the pauses
+          # during which the other worlds ran, so it is not the continuous
+          # stream the rule compares windows of.
           for stressor in baseline cpu-starvation disk-pressure; do
-            control="$directory/$stressor-control-a.txt"
-            test -f "$control" || continue
-            echo "== $stressor: idle vs idle (control) =="
-            python3 scripts/two-world-analysis.py "$control" \
-              "$directory/$stressor-control-b.txt" 1200 20 || status=$?
-            echo "== $stressor: idle vs active =="
-            python3 scripts/two-world-analysis.py "$control" \
-              "$directory/$stressor-active.txt" 1200 20 || status=$?
-            # Exit 2 means the rule could not run at all, which is a broken
-            # step rather than a verdict.
-            if [ "$status" -eq 2 ]; then
-              echo "the analysis could not read these captures"
-              exit 1
-            fi
+            for control in "$directory/$stressor-control-a"*-r*.txt; do
+              test -f "$control" || continue
+              # The campaign may retry, naming the second attempt's series
+              # "<stressor>-<world>-attempt2-r<N>". Take whatever follows
+              # "control-a" so a retry's rounds are compared against that
+              # retry's own controls rather than skipped.
+              name=$(basename "$control" .txt)
+              tail="${name#$stressor-control-a}"
+            for pair in "control-b:idle vs idle (control)" "active:idle vs active"; do
+              world="${pair%%:*}"
+              treatment="$directory/$stressor-$world$tail.txt"
+              test -f "$treatment" || continue
+              echo "== $stressor$tail: ${pair#*:} =="
+              # The default shell is bash -e, so the non-zero exit has to be
+              # caught here or the step aborts before the status is read and
+              # the remaining comparisons never run.
+              status=0
+              python3 scripts/two-world-analysis.py "$control" \
+                "$treatment" 1200 20 || status=$?
+              compared=$((compared + 1))
+              # Exit 2 means the rule could not run -- unreadable captures, or
+              # a round too short to evaluate. That is a broken run rather than
+              # a verdict, and must not be reported as either a pass or a
+              # finding.
+              if [ "$status" -eq 2 ]; then
+                echo "the rule could not run on $stressor $round"
+                exit 1
+              fi
+              # 1 is a finding on emitted traffic, 3 on received traffic. Both
+              # are findings. Accumulating them without failing the step, which
+              # is what this did until 2026-08-21, makes the gate report green
+              # on a rejected run.
+              if [ "$status" -ne 0 ]; then
+                findings=$((findings + 1))
+              fi
+            done
+            done
           done
+          if [ "$compared" -eq 0 ]; then
+            echo "no capture pairs were compared; the gate checked nothing"
+            exit 1
+          fi
+          echo "compared $compared pair(s)"
+          if [ "$findings" -gt 0 ]; then
+            echo "$findings preregistered comparison(s) were rejected"
+            exit 1
+          fi
 
       - name: Upload campaign captures
         if: always()

@@ -252,7 +252,7 @@ exit 1
 
 
 def write_world(path, jitter=0.0, size=1200, inbound_jitter=0.0, inbound=True,
-                inbound_drop=0):
+                inbound_drop=0, cells=400):
     """Render a capture as a host sees it: its own cells out, its peer's in.
 
     Both directions are present because that is what "-i any" on a real host
@@ -261,7 +261,7 @@ def write_world(path, jitter=0.0, size=1200, inbound_jitter=0.0, inbound=True,
     the campaign never produces.
     """
     lines = ["reading from file capture.pcap, link-type EN10MB (Ethernet)"]
-    for index in range(400):
+    for index in range(cells):
         stamp = 1712345678.0 + 0.05 * index + (jitter if index % 2 else 0.0)
         lines.append(f"{stamp:.6f} IP 10.0.0.2.4200 > 10.0.0.3.4200: UDP, length {size}")
     if inbound:
@@ -289,6 +289,14 @@ with tempfile.TemporaryDirectory() as workspace:
     # Same emissions, a different stream arriving from the peer.
     write_world(root / "lossy-inbound", jitter=0.0, inbound_drop=7)
     write_world(root / "one-way", jitter=0.0, inbound=False)
+    write_world(root / "one-way-leaky", jitter=0.004, inbound=False)
+    # Both addresses send and receive, so neither can be identified as the
+    # vantage point from the capture alone.
+    (root / "two-way").write_text(
+        (root / "one-way").read_text()
+        + "\n".join(f"{1712345678.013 + 0.05 * index:.6f} "
+                     f"IP 10.0.0.3.4200 > 10.0.0.2.4200: UDP, length 1200"
+                     for index in range(400)) + "\n")
 
     analysis = str(pathlib.Path(__file__).with_name("two-world-analysis.py"))
 
@@ -310,12 +318,28 @@ with tempfile.TemporaryDirectory() as workspace:
     check("end to end: a difference on a received flow exits 3, not 1",
           run("a", "lossy-inbound") == 3)
 
-    # Which host a capture was taken at decides which flows the verdict rests
-    # on, so a capture that does not say must be refused rather than guessed.
-    check("end to end: a one-directional capture fails closed",
-          run("one-way", "one-way") == 2)
-    check("end to end: an explicit host makes a one-directional capture judgeable",
-          run("one-way", "one-way", "10.0.0.2.4200") == 0)
+    # A capture in which no address both sends and receives was taken at an
+    # observation point, not at a participant. Every flow in it is some
+    # sender's emission, so every flow carries the verdict -- which is what the
+    # Go wire campaign produces, its observers being pure receivers.
+    check("end to end: an observation-point capture judges every flow",
+          run("one-way", "one-way") == 0)
+    check("end to end: an observation-point capture still catches a leak",
+          run("one-way", "one-way-leaky") == 1)
+
+    # More than one address doing both is a real ambiguity about where the
+    # capture was taken, and guessing would decide which flows the verdict
+    # rests on. That must be refused rather than guessed.
+    check("end to end: an ambiguous vantage fails closed",
+          run("two-way", "two-way") == 2)
+    check("end to end: an explicit host resolves an ambiguous vantage",
+          run("two-way", "two-way", "10.0.0.2.4200") == 0)
+
+    # Too little data is not a rejection either. A short world must not be
+    # reported as a leak, for the same reason an unreadable capture must not.
+    write_world(root / "tiny", jitter=0.0, inbound=False, cells=8)
+    check("end to end: too few cells is inconclusive, not a finding",
+          run("tiny", "tiny") == 2)
 
     # A capture the rule cannot read must not be reported as a rejection.
     (root / "unreadable").write_text("this is not a capture at all\n")
