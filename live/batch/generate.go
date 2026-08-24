@@ -277,8 +277,9 @@ func generateCertified(
 		Generation: hex.EncodeToString(generation[:]), K: uint16(encoder.K()),
 		SymbolSize: uint16(encoder.SymbolSize()), OriginalSize: uint32(encoder.OriginalSize()),
 		ContentHash: hex.EncodeToString(root[:]), PublisherKey: base64.StdEncoding.EncodeToString(publisher),
-		ObjectSignature: base64.StdEncoding.EncodeToString(objectSignature),
-		DKGCertificate:  certificate, MixRounds: rounds,
+		SourceCommitments: encodeSourceCommitments(encoder.SourceCommitments()),
+		ObjectSignature:   base64.StdEncoding.EncodeToString(objectSignature),
+		DKGCertificate:    certificate, MixRounds: rounds,
 	}
 	descriptor, err = SignDescriptor(descriptor, authority)
 	if err != nil {
@@ -313,4 +314,12 @@ func strictJSON(encoded []byte, destination any) error {
 		return errors.New("trailing JSON data")
 	}
 	return nil
+}
+
+func encodeSourceCommitments(commitments rlnc.SourceCommitments) []string {
+	encoded := make([]string, len(commitments))
+	for index, commitment := range commitments {
+		encoded[index] = hex.EncodeToString(commitment[:])
+	}
+	return encoded
 }

@@ -280,3 +280,44 @@ func TestCommitmentsMustCoverEverySource(t *testing.T) {
 		t.Fatal("a short commitment vector must be rejected")
 	}
 }
+
+// The commitments the encoder publishes must be exactly what the bounded
+// decoder checks admissions against: honest systematic symbols admitted,
+// any tampered byte refused before the basis sees it.
+func TestSourceCommitmentsBindSystematicSymbols(t *testing.T) {
+	data := make([]byte, 1000)
+	if _, err := rand.Read(data); err != nil {
+		t.Fatal(err)
+	}
+	enc, err := NewEncoder(data, 128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitments := enc.SourceCommitments()
+	if len(commitments) != enc.K() {
+		t.Fatalf("want %d commitments, got %d", enc.K(), len(commitments))
+	}
+	decoder, err := NewBoundedDecoder(enc.K(), enc.SymbolSize(), enc.OriginalSize(),
+		DefaultLimits(enc.K(), enc.SymbolSize()), commitments, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	honest, err := enc.Systematic(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if innovative, err := decoder.Add(honest, time.Now()); err != nil || !innovative {
+		t.Fatalf("honest systematic symbol refused: innovative=%v err=%v", innovative, err)
+	}
+	polluted, err := enc.Systematic(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	polluted.Data[3] ^= 0x40
+	if _, err := decoder.Add(polluted, time.Now()); !errors.Is(err, ErrCommitmentMismatch) {
+		t.Fatalf("polluted systematic symbol not refused: %v", err)
+	}
+	if decoder.Rank() != 1 {
+		t.Fatalf("polluted symbol reached the basis: rank %d", decoder.Rank())
+	}
+}

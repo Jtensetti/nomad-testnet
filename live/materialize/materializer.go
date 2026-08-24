@@ -207,18 +207,19 @@ type packetDecoder struct {
 }
 
 // newPacketDecoder builds the decoder for one generation, under the default
-// admission budgets. A fragment that raises the rank has already passed the
-// threshold committee and the shuffle proofs, but its data can still be
-// garbage that only the final envelope check rejects; the budgets bound what
-// such a fragment can spend of the materializer before that check runs. The
-// signed descriptor does not yet carry per-source-symbol commitments, so the
-// pre-admission systematic check is off (nil) rather than fabricated.
+// admission budgets and the descriptor's source commitments. A fragment that
+// raises the rank has already passed the threshold committee and the shuffle
+// proofs, but its data can still be garbage that only the final envelope
+// check rejects; the budgets bound what such a fragment can spend of the
+// materializer before that check runs, and the commitments -- signed by the
+// authority in the descriptor -- refuse a polluted systematic symbol before
+// it enters the basis at all.
 func newPacketDecoder(descriptor batch.VerifiedDescriptor) (*packetDecoder, error) {
 	k := int(descriptor.Descriptor.K)
 	symbolSize := int(descriptor.Descriptor.SymbolSize)
 	originalSize := int(descriptor.Descriptor.OriginalSize)
 	decoder, err := rlnc.NewBoundedDecoder(k, symbolSize, originalSize,
-		rlnc.DefaultLimits(k, symbolSize), nil, time.Now())
+		rlnc.DefaultLimits(k, symbolSize), descriptor.Commitments, time.Now())
 	if err != nil {
 		return nil, err
 	}

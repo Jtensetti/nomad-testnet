@@ -311,3 +311,16 @@ func (bounded *BoundedDecoder) Decode() ([]byte, error) {
 	}
 	return bounded.decoder.Decode()
 }
+
+// SourceCommitments returns the per-source-symbol commitments for this
+// encoder's generation, in source order. A signed descriptor carries them so
+// a decoder can refuse a polluted systematic symbol before it enters the
+// basis, at the cost of one hash, instead of discovering the pollution when
+// the finished object fails its envelope check.
+func (e *Encoder) SourceCommitments() SourceCommitments {
+	commitments := make(SourceCommitments, len(e.source))
+	for index, data := range e.source {
+		commitments[index] = commitSymbol(index, data)
+	}
+	return commitments
+}
