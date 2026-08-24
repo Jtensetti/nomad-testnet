@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 )
 
 const (
@@ -133,6 +134,13 @@ func Verify(encoded []byte, authority ed25519.PublicKey, now time.Time) (Verifie
 	}
 	if len(authority) != ed25519.PublicKeySize {
 		return Verified{}, errors.New("pinned topology authority key is invalid")
+	}
+	// Reject a document that more than one parser can read differently before
+	// anything is decoded from it. A signature check cannot catch this: each
+	// implementation verifies against whatever it parsed, so a duplicate key
+	// makes one accept what another refuses.
+	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
+		return Verified{}, fmt.Errorf("topology encoding is ambiguous: %w", err)
 	}
 	var signed Signed
 	decoder := json.NewDecoder(bytes.NewReader(encoded))

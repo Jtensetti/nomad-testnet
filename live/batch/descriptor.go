@@ -19,6 +19,7 @@ import (
 	"github.com/Jtensetti/nomad-rlnc/rlnc"
 	"github.com/Jtensetti/nomad-testnet/live/committee"
 	"github.com/Jtensetti/nomad-testnet/live/hop"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -112,6 +113,13 @@ func VerifyDescriptor(encoded []byte, authority ed25519.PublicKey, network topol
 	}
 	if len(authority) != ed25519.PublicKeySize {
 		return VerifiedDescriptor{}, errors.New("descriptor authority key is invalid")
+	}
+	// An encoding more than one parser can read differently is refused before
+	// anything is decoded: a signature check verifies against whatever this
+	// implementation parsed, so a duplicate key makes one implementation
+	// accept a descriptor another refuses.
+	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
+		return VerifiedDescriptor{}, fmt.Errorf("descriptor encoding is ambiguous: %w", err)
 	}
 	var descriptor Descriptor
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
