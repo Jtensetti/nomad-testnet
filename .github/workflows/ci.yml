@@ -96,6 +96,21 @@ jobs:
           done
       - name: Verify the published conformance corpus matches its encoders
         run: go run ./cmd/nomad-conformance -check conformance/wire-vectors.json
+      - name: Verify the corpus is identical on a different word size
+        run: |
+          # A golden vector that depends on the host's int width is not a
+          # golden vector. 386 has 32-bit int against amd64's 64-bit, so an
+          # encoder that leaked word size would produce a different digest
+          # here. This is the cross-platform half of PROD-16 that a single
+          # architecture cannot supply.
+          GOARCH=386 go run ./cmd/nomad-conformance -check conformance/wire-vectors.json
+          GOARCH=386 go test -count=1 ./live/conformance/ ./live/topology/ ./live/batch/
+      - name: Verify the supported platforms still build
+        run: |
+          for target in linux/amd64 linux/386 linux/arm64 linux/arm darwin/amd64 darwin/arm64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build ./... \
+              || { echo "$target does not build"; exit 1; }
+          done
       - name: Verify the traffic-analysis harness still detects differences
         run: python3 scripts/test-two-world-analysis.py
       - name: Verify the campaign verdict still separates noise from a finding
