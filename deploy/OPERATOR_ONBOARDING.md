@@ -146,6 +146,44 @@ This overwrites and unlinks the retired epoch's private material and emits a
 signed statement of exactly what was destroyed. It refuses to run before the
 retirement boundary. Send the statement; keep nothing else.
 
+## What your host may retain, and for how long
+
+A Nomad process is built to emit almost nothing. Enforcing that stops at the
+process boundary, so the last part is yours.
+
+**Set `GOTRACEBACK=none` for every Nomad service.** Without it a panic prints
+goroutine stacks whose frame arguments are raw machine words, which for a
+process holding your identity key or a threshold share can be key material,
+and your init system keeps it. The compose file sets it; a systemd unit needs
+`Environment=GOTRACEBACK=none` written in. Every Nomad binary checks at startup
+and warns on stderr if it is missing, so grep your logs for
+`will print goroutine stacks` after any deployment change. Note that no
+in-process call can do this for you: `debug.SetTraceback("none")` looks like it
+does and measurably does not.
+
+**What the software writes.** One health file per node, rewritten in place,
+containing only fields on a published allowlist with a written reason for each;
+fourteen counters are named as forbidden with the reason they are forbidden.
+There is no append-only log. A node that ran for a month writes the same number
+of bytes as one that ran for an hour.
+
+**What your platform writes anyway.** Service stdout and stderr, which for a
+healthy Nomad process is a startup line and nothing else; systemd journal
+metadata; and any crash output, which is the reason for the setting above.
+
+**Retention we ask for.** Cap the journal for Nomad units at seven days
+(`MaxRetentionSec=1week` in `journald.conf`, or a unit-level
+`LogRateLimitIntervalSec`/rotation policy). Do not ship Nomad logs to a central
+collector that retains longer, and do not enable systemd core dumps for these
+units (`LimitCORE=0`, and `Storage=none` in `coredump.conf` if the host allows
+it). A core file is the whole address space, which is every secret the process
+holds; nothing in the protocol survives that.
+
+**What we will not do for you.** We cannot verify your retention settings from
+here, and no claim in this project's evidence covers them. If you run Nomad on
+a platform that retains crash output indefinitely, the crash-data property is
+not true on your host regardless of what the code does.
+
 ## If something goes wrong
 
 `deploy/RECOVERY_RUNBOOK.md` covers ceremony failure, credential compromise,
