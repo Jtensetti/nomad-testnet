@@ -25,8 +25,10 @@ RUN mkdir -p /runtime/public \
     /runtime/operators/operator-c \
     /cache /state /partials /verified /config /operator /authority /dkg \
     /certificate /published /operators/a /operators/b /operators/c \
-    /epoch-chain /revocations /rotation/topologies /rotation/state /rotation/shares /rotation/certificates && \
+    /epoch-chain /revocations /rotation/topologies /rotation/secrets /rotation/state /rotation/shares /rotation/certificates \
+    /rotation/exchange /rotation/signature-journal && \
     chown -R 65532:65532 /runtime /cache /state /partials /verified /config /operator \
-    /authority /dkg /certificate /published /operators /epoch-chain /revocations /rotation
+    /authority /dkg /certificate /published /operators /epoch-chain /revocations /rotation && \
+    chmod 0700 /rotation/secrets
 USER 65532:65532
 ENTRYPOINT []

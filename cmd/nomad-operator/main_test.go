@@ -1,12 +1,78 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/Jtensetti/nomad-testnet/live/ceremony"
 	"github.com/Jtensetti/nomad-testnet/live/epoch"
+	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
+
+func TestRotateCreatesFreshEpochKeysAndSignedEnrollment(t *testing.T) {
+	root := t.TempDir()
+	previousPath := filepath.Join(root, "epoch-1.secrets.json")
+	secretPath := filepath.Join(root, "epoch-2.secrets.json")
+	enrollmentPath := filepath.Join(root, "epoch-2.enrollment.json")
+	previous, err := topology.GenerateSecrets("operator-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousBytes, err := topology.EncodeSecrets(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(previousPath, previousBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := rotate([]string{
+		"--from-secret", previousPath,
+		"--endpoint", "127.0.0.1:4200",
+		"--partial-endpoint", "http://127.0.0.1:4300",
+		"--dkg-endpoint", "http://127.0.0.1:4400",
+		"--secret", secretPath,
+		"--enrollment", enrollmentPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldKeys, err := topology.LoadPrivateKeys(previousPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newKeys, err := topology.LoadPrivateKeys(secretPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(oldKeys.Identity, newKeys.Identity) {
+		t.Fatal("rotation did not preserve the transition-signing identity")
+	}
+	if bytes.Equal(oldKeys.KEX.Bytes(), newKeys.KEX.Bytes()) || bytes.Equal(oldKeys.DKG[:], newKeys.DKG[:]) {
+		t.Fatal("rotation reused epoch-private KEX or DKG material")
+	}
+	enrollmentBytes, err := os.ReadFile(enrollmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrollment, err := ceremony.DecodeEnrollment(enrollmentBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enrollment.OperatorID != newKeys.OperatorID {
+		t.Fatal("rotated enrollment belongs to another operator")
+	}
+	if err := rotate([]string{
+		"--from-secret", previousPath,
+		"--endpoint", "127.0.0.1:4200",
+		"--partial-endpoint", "http://127.0.0.1:4300",
+		"--dkg-endpoint", "http://127.0.0.1:4400",
+		"--secret", secretPath,
+		"--enrollment", enrollmentPath,
+	}); err == nil {
+		t.Fatal("rotation overwrote an existing epoch secret or enrollment")
+	}
+}
 
 func TestValidateErasePathsProtectsControlPlaneFiles(t *testing.T) {
 	root := t.TempDir()

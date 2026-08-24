@@ -42,6 +42,26 @@ func TestEveryComposeServiceSuppressesCrashDumps(t *testing.T) {
 	}
 }
 
+func TestEveryNetworkNodeIsBoundToItsVerifiedEpochChain(t *testing.T) {
+	encoded, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, suffix := range []string{"a", "b", "c"} {
+		block := serviceBlock(text, "operator-"+suffix)
+		for _, required := range []string{
+			"--epoch-chain=/epoch-chain",
+			"epoch-chain-" + suffix + ":/epoch-chain:ro",
+			"epoch-init-" + suffix + ": {condition: service_completed_successfully}",
+		} {
+			if !strings.Contains(block, required) {
+				t.Fatalf("operator-%s is not chain-bound: missing %q", suffix, required)
+			}
+		}
+	}
+}
+
 func serviceNames(t *testing.T, text string) []string {
 	t.Helper()
 	inServices := false

@@ -12,6 +12,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -50,7 +52,7 @@ type Config struct {
 	Authority   ed25519.PublicKey
 	NetworkID   string
 	TopologyDir string
-	SecretsPath string
+	SecretsRoot string
 	Listen      string
 	StateRoot   string
 	ShareRoot   string
@@ -61,14 +63,15 @@ type Config struct {
 }
 
 type Outcome struct {
-	Status            string    `json:"status"`
-	Action            string    `json:"action"`
-	Epoch             uint64    `json:"epoch"`
-	Attempt           int       `json:"attempt,omitempty"`
-	DueAt             time.Time `json:"due_at,omitempty"`
-	CommitteeDigest   string    `json:"committee_digest,omitempty"`
-	CertificateSHA256 string    `json:"certificate_sha256,omitempty"`
-	Reason            string    `json:"reason"`
+	Status            string               `json:"status"`
+	Action            string               `json:"action"`
+	Epoch             uint64               `json:"epoch"`
+	Attempt           int                  `json:"attempt,omitempty"`
+	DueAt             time.Time            `json:"due_at,omitempty"`
+	CommitteeDigest   string               `json:"committee_digest,omitempty"`
+	CertificateSHA256 string               `json:"certificate_sha256,omitempty"`
+	Reason            string               `json:"reason"`
+	Coordination      *CoordinationOutcome `json:"coordination,omitempty"`
 }
 
 type resultMarker struct {
@@ -88,12 +91,15 @@ type resultMarker struct {
 // when PlanAtForOperator says PREPARE_NEXT on the public schedule.
 func (config Config) Step(ctx context.Context, now time.Time) (Outcome, error) {
 	if ctx == nil || config.Planner == nil || config.OperatorID == "" || config.NetworkID == "" ||
-		config.TopologyDir == "" || config.SecretsPath == "" || config.Listen == "" ||
+		config.TopologyDir == "" || config.SecretsRoot == "" || config.Listen == "" ||
 		config.StateRoot == "" || config.ShareRoot == "" || config.CertRoot == "" {
 		return Outcome{}, errors.New("complete rotation controller configuration is required")
 	}
 	if len(config.Authority) != ed25519.PublicKeySize {
 		return Outcome{}, errors.New("authority key is required")
+	}
+	if err := config.validateSecretsRoot(); err != nil {
+		return Outcome{}, err
 	}
 	planned, err := config.Planner.PlanAtForOperator(now.UTC(), config.Policy, config.OperatorID)
 	if err != nil {
@@ -154,17 +160,6 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 		return completionOutcome(out, verifiedCompletion, "recovered a durably completed successor DKG after controller restart"), nil
 	}
 
-	private, err := topology.LoadPrivateKeys(config.SecretsPath)
-	if err != nil {
-		return Outcome{}, fmt.Errorf("load local operator identity: %w", err)
-	}
-	if private.OperatorID != config.OperatorID {
-		return Outcome{}, errors.New("configured operator ID does not match local private material")
-	}
-	if err := config.discardEarlierFailedShares(planned.Epoch, planned.Attempt, private.Identity, now); err != nil {
-		return Outcome{}, err
-	}
-
 	attemptRoot := config.attemptRoot(planned.Epoch, planned.Attempt)
 	if exists, err := pathExists(attemptRoot); err != nil {
 		return Outcome{}, err
@@ -182,12 +177,32 @@ func (config Config) prepare(ctx context.Context, now time.Time, planned epoch.P
 	if network.Document.NetworkID != config.NetworkID || network.Document.Epoch != planned.Epoch {
 		return Outcome{}, errors.New("successor topology does not match planned network and epoch")
 	}
+	if err := topology.ValidateEpochControlEndpoints(network); err != nil {
+		return Outcome{}, fmt.Errorf("validate lifecycle endpoint reservation: %w", err)
+	}
+	if err := config.validateRetryLadder(planned.Epoch, planned.Attempt, network); err != nil {
+		return Outcome{}, err
+	}
 	if _, err := network.OperatorByID(config.OperatorID); err != nil {
 		out.Status = StatusNotParticipant
 		out.Reason = "local operator is not a member of the public successor topology and does not participate in its DKG"
 		return out, nil
 	}
-	secrets, err := topology.LoadSecrets(config.SecretsPath, network)
+	secretPath, err := config.epochSecretsPath(planned.Epoch)
+	if err != nil {
+		return Outcome{}, err
+	}
+	private, err := topology.LoadPrivateKeys(secretPath)
+	if err != nil {
+		return Outcome{}, fmt.Errorf("load local epoch identity: %w", err)
+	}
+	if private.OperatorID != config.OperatorID {
+		return Outcome{}, errors.New("configured operator ID does not match local epoch private material")
+	}
+	if err := config.discardEarlierFailedShares(planned.Epoch, planned.Attempt, private.Identity, now); err != nil {
+		return Outcome{}, err
+	}
+	secrets, err := topology.LoadSecrets(secretPath, network)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("local keys do not match successor membership: %w", err)
 	}
@@ -290,7 +305,11 @@ func (config Config) discardEarlierFailedShares(epochNumber uint64, currentAttem
 		if network.Document.NetworkID != config.NetworkID || network.Document.Epoch != epochNumber {
 			return errors.New("failed-attempt topology belongs to another network or epoch")
 		}
-		if _, err := topology.LoadSecrets(config.SecretsPath, network); err != nil {
+		secretPath, err := config.epochSecretsPath(epochNumber)
+		if err != nil {
+			return err
+		}
+		if _, err := topology.LoadSecrets(secretPath, network); err != nil {
 			return fmt.Errorf("failed-attempt private material does not match its signed topology: %w", err)
 		}
 		if _, err := DiscardFailedShare(config.NetworkID, epochNumber, attempt, fmt.Sprintf("%x", network.Digest), config.OperatorID, share, statement, identity, now); err != nil {
@@ -417,8 +436,90 @@ func (config Config) attemptRoot(epochNumber uint64, attempt int) string {
 	return filepath.Join(config.StateRoot, fmt.Sprintf("epoch-%020d-attempt-%02d", epochNumber, attempt))
 }
 
+func (config Config) epochSecretsPath(epochNumber uint64) (string, error) {
+	if epochNumber == 0 || config.SecretsRoot == "" {
+		return "", errors.New("epoch-scoped operator secret root and epoch are required")
+	}
+	if err := config.validateSecretsRoot(); err != nil {
+		return "", err
+	}
+	return filepath.Join(config.SecretsRoot, fmt.Sprintf("epoch-%020d.secrets.json", epochNumber)), nil
+}
+
+func (config Config) validateSecretsRoot() error {
+	info, err := os.Lstat(config.SecretsRoot)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("epoch-scoped operator secret root must be a real directory")
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		return errors.New("epoch-scoped operator secret root permissions must be 0700 or stricter")
+	}
+	return nil
+}
+
 func (config Config) attemptTopologyPath(epochNumber uint64, attempt int) string {
 	return filepath.Join(config.TopologyDir, fmt.Sprintf("epoch-%020d", epochNumber), fmt.Sprintf("attempt-%02d", attempt), "topology.json")
+}
+
+// validateRetryLadder enforces the protocol rule that public retry attempts
+// change only their fresh DKG session and start time. Membership, operator
+// keys, endpoints, peer plans, traffic policy, threshold, validity envelope
+// and phase duration cannot silently change inside a retry ladder.
+func (config Config) validateRetryLadder(epochNumber uint64, attempt int, current topology.Verified) error {
+	if attempt < 1 || attempt > 99 {
+		return errors.New("invalid DKG retry attempt")
+	}
+	if attempt == 1 {
+		return nil
+	}
+	seenSessions := map[string]struct{}{current.Document.DKG.SessionID: {}}
+	nextStart, err := time.Parse(time.RFC3339, current.Document.DKG.StartAt)
+	if err != nil {
+		return errors.New("current DKG retry has an invalid signed start")
+	}
+	next := current
+	for priorAttempt := attempt - 1; priorAttempt >= 1; priorAttempt-- {
+		encoded, err := readBoundedRegular(config.attemptTopologyPath(epochNumber, priorAttempt), topology.MaximumFileBytes)
+		if err != nil {
+			return fmt.Errorf("read predecessor DKG retry topology %d: %w", priorAttempt, err)
+		}
+		prior, err := topology.Verify(encoded, config.Authority, time.Time{})
+		if err != nil {
+			return fmt.Errorf("verify predecessor DKG retry topology %d: %w", priorAttempt, err)
+		}
+		if prior.Document.NetworkID != config.NetworkID || prior.Document.Epoch != epochNumber {
+			return errors.New("DKG retry ladder crosses a network or epoch boundary")
+		}
+		if !reflect.DeepEqual(retryInvariantDocument(prior.Document), retryInvariantDocument(next.Document)) {
+			return errors.New("DKG retry attempt changed membership or another invariant public field")
+		}
+		if _, duplicate := seenSessions[prior.Document.DKG.SessionID]; duplicate {
+			return errors.New("DKG retry attempt reused a session ID")
+		}
+		seenSessions[prior.Document.DKG.SessionID] = struct{}{}
+		priorStart, err := time.Parse(time.RFC3339, prior.Document.DKG.StartAt)
+		if err != nil || !priorStart.Before(nextStart) {
+			return errors.New("DKG retry start times must increase strictly")
+		}
+		next = prior
+		nextStart = priorStart
+	}
+	return nil
+}
+
+func retryInvariantDocument(document topology.Document) topology.Document {
+	copyDocument := document
+	copyDocument.DKG.SessionID = ""
+	copyDocument.DKG.StartAt = ""
+	copyDocument.Operators = append([]topology.Operator(nil), document.Operators...)
+	for index := range copyDocument.Operators {
+		copyDocument.Operators[index].Attestation = ""
+		copyDocument.Operators[index].PeerPlan = append([]uint16(nil), document.Operators[index].PeerPlan...)
+	}
+	return copyDocument
 }
 
 func (config Config) sharePath(epochNumber uint64, attempt int) string {
@@ -503,7 +604,7 @@ func ensureRealDirectory(path string) error {
 		return err
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("rotation controller state path must be a real directory")
+		return errors.New("rotation state path must be a real directory")
 	}
 	return nil
 }

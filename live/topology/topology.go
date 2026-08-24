@@ -465,6 +465,65 @@ func validCeremonyURL(endpoint *url.URL) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// EpochControlEndpoint derives the immutable lifecycle-artifact service from
+// an authority-signed DKG endpoint. The next TCP port is reserved so peers do
+// not need an unsigned discovery document or a fallback address. Production
+// topologies using the automatic lifecycle must also pass
+// ValidateEpochControlEndpoints.
+func EpochControlEndpoint(dkgEndpoint string) (string, error) {
+	parsed, err := url.Parse(dkgEndpoint)
+	if err != nil || !validCeremonyURL(parsed) {
+		return "", errors.New("invalid signed DKG endpoint for lifecycle derivation")
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port >= 65535 {
+		return "", errors.New("DKG endpoint leaves no valid lifecycle control port")
+	}
+	parsed.Host = net.JoinHostPort(parsed.Hostname(), strconv.Itoa(port+1))
+	parsed.Path = ""
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+// ValidateEpochControlEndpoints proves that every derived lifecycle socket is
+// usable and distinct from all signed DKG and partial-share sockets. Scheme is
+// deliberately excluded from the comparison because HTTP and HTTPS cannot
+// both own one TCP socket.
+func ValidateEpochControlEndpoints(network Verified) error {
+	occupied := make(map[string]string, 2*len(network.Document.Operators))
+	for _, operator := range network.Document.Operators {
+		for label, encoded := range map[string]string{
+			"partial": operator.PartialEndpoint,
+			"DKG":     operator.DKGEndpoint,
+		} {
+			parsed, err := url.Parse(encoded)
+			if err != nil {
+				return fmt.Errorf("operator %s has invalid %s endpoint", operator.ID, label)
+			}
+			canonical, err := canonicalURLEndpoint(parsed)
+			if err != nil {
+				return fmt.Errorf("operator %s has invalid %s endpoint: %w", operator.ID, label, err)
+			}
+			occupied[canonical] = operator.ID + " " + label
+		}
+	}
+	for _, operator := range network.Document.Operators {
+		control, err := EpochControlEndpoint(operator.DKGEndpoint)
+		if err != nil {
+			return fmt.Errorf("operator %s lifecycle endpoint: %w", operator.ID, err)
+		}
+		parsed, _ := url.Parse(control)
+		canonical, err := canonicalURLEndpoint(parsed)
+		if err != nil {
+			return fmt.Errorf("operator %s lifecycle endpoint: %w", operator.ID, err)
+		}
+		if owner, exists := occupied[canonical]; exists {
+			return fmt.Errorf("operator %s lifecycle endpoint collides with %s", operator.ID, owner)
+		}
+		occupied[canonical] = operator.ID + " lifecycle"
+	}
+	return nil
+}
+
 func validateStrongConnectivity(document Document) error {
 	forward := make([][]uint16, len(document.Operators))
 	reverse := make([][]uint16, len(document.Operators))

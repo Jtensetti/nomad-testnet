@@ -33,8 +33,10 @@ independent review remain separate production gates.
 | LIVE-17 | Every operator runs the official Kyber Pedersen DKG state machine with a dedicated topology-bound identity over signed, bounded, canonical all-to-all messages and a public phase schedule; replay, equivocation, missed deadlines, partial QUAL and interrupted-session reuse fail closed. | Three-process DKG race tests, schedule/equivocation/restart negatives and TLS Compose ceremony. | MET |
 | LIVE-18 | Epoch activation requires one Ed25519 attestation from every configured operator over one identical public committee and transcript; each private share is verified against its certified public polynomial share without reconstructing an aggregate secret. | Certificate agreement/tamper tests and distinct-share evidence. | MET |
 | LIVE-19 | Descriptor v2 embeds the distributed DKG certificate, and the live share services plus networkless materializer use those exact per-operator shares through the fixed-cadence fabric-to-cache path. | Compose certificate/descriptor equality, partial-proof, reconstruction and object-verification evidence. | MET |
+| LIVE-20 | Normal successor handling automatically runs only the public retry selected for N+1, exchanges immutable detached artifacts with one direct GET per peer and aligned tick, requires the outgoing approval quorum plus all incoming activations, imports READY before the boundary and never performs late catch-up. Nodes and share services stop serving at the chain-derived retirement boundary. | `TestAutomaticCoordinatorReachesReadyAcrossIndependentMailboxes`, missing-certificate/activation, restart, redirect/retry, late-start, in-flight-boundary, node and share retirement negatives. | MET |
+| LIVE-21 | Every transition rejects KEX or DKG identities used in any earlier epoch, including non-adjacent reuse, while retaining only the operator signing identity. The controller loads separate exact epoch files, retirement erases the verified old file and share, and later compromise of the complete next-epoch file cannot decrypt a retained live DKG deal. | `TestTransitionRejectsAnyPredecessorEpochKeyReuse`, `TestTransitionRejectsNonAdjacentHistoricalEpochKeyReuse`, `TestCoordinatorRequiresBothEpochScopedSecretsForContinuingOperator`, `TestRetainedDealResistsLaterEpochCredentialCompromise`, erasure transaction tests. | MET |
 
-At this draft head, 18 LIVE gates are `MET` and LIVE-15 is `PARTIAL`. The
+At this working tree, 20 LIVE gates are `MET` and LIVE-15 is `PARTIAL`. The
 release job is dependency-gated on both CI jobs, so it can tag only the same
 commit that produced unit and live packet/process evidence. Older measured
 baselines in `RELEASE_EVIDENCE.md` remain useful history, but cannot substitute
@@ -53,8 +55,9 @@ administrator:
   administration; the fixture bootstrap currently holds all demo identities;
 - third-party cryptographic, systems, browser and traffic-analysis review is
   closed with no unresolved critical or high findings;
-- publication airlock, Sybil/admission policy, forward-secure epoch rotation,
-  revocation, long-duration pcap evidence and operational response are live.
+- publication airlock, Sybil/admission policy, independently witnessed
+  rotation/revocation/erasure, long-duration pcap evidence and operational
+  response are live.
 
 The single-host Compose network is evidence for process/key separation and a
 reproducible integration path. It is not evidence of independent governance.

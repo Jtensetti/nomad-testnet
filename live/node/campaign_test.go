@@ -434,9 +434,10 @@ func buildCampaignNode(t *testing.T, network topology.Verified,
 			OutboundKeys: outbound, InboundKeys: inbound,
 		},
 		ListenAddress: endpoints[0], Cache: cache,
-		SequencePath: filepath.Join(scratch, "sequence"),
-		HealthPath:   filepath.Join(scratch, "health.json"),
-		CacheSweep:   time.Hour,
+		SequencePath:    filepath.Join(scratch, "sequence"),
+		HealthPath:      filepath.Join(scratch, "health.json"),
+		CacheSweep:      time.Hour,
+		ServingDeadline: func() time.Time { return time.Now().UTC().Add(time.Hour) },
 	})
 	if err != nil {
 		t.Fatalf("build node: %v", err)

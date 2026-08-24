@@ -1,6 +1,7 @@
 package epoch
 
 import (
+	"encoding/base64"
 	"errors"
 	"os"
 	"strings"
@@ -158,5 +159,70 @@ func TestSignatureArtifactDecoderRejectsAmbiguousJSON(t *testing.T) {
 	encoded := []byte(`{"version":"nomad-epoch-signature-artifact-v1","version":"nomad-epoch-signature-artifact-v1"}`)
 	if _, err := DecodeSignatureArtifact(encoded); err == nil || !strings.Contains(err.Error(), "duplicate JSON key") {
 		t.Fatalf("ambiguous signature artifact was not rejected: %v", err)
+	}
+}
+
+func TestIndividualSignatureArtifactVerification(t *testing.T) {
+	f, _, genesis, _, successor := buildTwoEpochChain(t)
+	draft := unsignedDescriptor(successor)
+	journal, err := OpenJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := journal.CreateApprovalArtifact(
+		draft, f.AuthorityPublic, &genesis, nil,
+		f.Operators[0].ID, f.Operators[0].Identity,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activation, err := journal.CreateActivationArtifact(
+		draft, f.AuthorityPublic, &genesis, nil,
+		f.Operators[0].ID, f.Operators[0].Identity,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, artifact := range []SignatureArtifact{approval, activation} {
+		if err := VerifySignatureArtifact(draft, artifact, f.AuthorityPublic, &genesis, nil); err != nil {
+			t.Fatalf("valid individual %s was rejected: %v", artifact.Role, err)
+		}
+	}
+
+	tampered := approval
+	signature, err := base64.StdEncoding.Strict().DecodeString(tampered.Signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature[0] ^= 0x80
+	tampered.Signature = base64.StdEncoding.EncodeToString(signature)
+	if err := VerifySignatureArtifact(draft, tampered, f.AuthorityPublic, &genesis, nil); err == nil {
+		t.Fatal("cryptographically invalid individual artifact was accepted")
+	}
+
+	other := draft
+	other.RetireAt = canonicalTime(successor.RetireAt.Add(time.Minute))
+	if err := VerifySignatureArtifact(other, approval, f.AuthorityPublic, &genesis, nil); err == nil || !strings.Contains(err.Error(), "different epoch descriptor") {
+		t.Fatalf("artifact transplant was not rejected before quorum assembly: %v", err)
+	}
+}
+
+func TestIndividualVerifierRejectsApprovalRoleOnGenesis(t *testing.T) {
+	f, _, genesis, _, _ := buildTwoEpochChain(t)
+	draft := unsignedDescriptor(genesis)
+	journal, err := OpenJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := journal.CreateActivationArtifact(
+		draft, f.AuthorityPublic, nil, nil,
+		f.Operators[0].ID, f.Operators[0].Identity,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact.Role = roleApproval
+	if err := VerifySignatureArtifact(draft, artifact, f.AuthorityPublic, nil, nil); err == nil || !strings.Contains(err.Error(), "genesis") {
+		t.Fatalf("genesis approval role was individually accepted: %v", err)
 	}
 }

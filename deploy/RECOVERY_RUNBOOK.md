@@ -25,10 +25,11 @@ membership cannot activate an epoch.
 
 1. Do nothing until the next public retry offset. The retry ladder is in the
    published rotation policy; `PlanAt` reports the attempt that is due.
-2. At the retry instant, run the ceremony again with a **fresh session** and
-   the same membership. Never resume an interrupted session: the ephemeral
-   dealer polynomial is deliberately not persisted, and the journal refuses
-   a resume.
+2. Pre-stage the independently attested retry topology. At the retry instant,
+   the rotation controller starts it with a **fresh session** and the same
+   membership, epoch keys, endpoints and policy. Never resume an interrupted
+   session: the ephemeral dealer polynomial is deliberately not persisted,
+   and the journal refuses a resume.
 3. If the ladder reaches its escalation offset with no certificate, the plan
    changes to `ESCALATE`. Proceed to procedure 3 (operator replacement).
 
@@ -72,35 +73,39 @@ recovery exactly when it is needed.
 
 1. The replacement operator generates its own private material locally
    (`nomad-operator init`). Nobody else ever sees it.
-2. It publishes a signed enrollment containing only public values.
+2. Every continuing operator runs `nomad-operator rotate` into a new
+   epoch-scoped file; only its stable identity is retained. The replacement
+   and continuing operators publish signed enrollments containing only public
+   values. A topology that reuses any earlier epoch's KEX or DKG key is
+   invalid, including reuse after an intervening epoch.
 3. The coordinator assembles a draft topology for epoch N+1 with the new
    membership. The coordinator holds no operator private key and cannot
    change membership by itself.
 4. Every operator of N+1 inspects and attests the exact draft.
 5. N+1 runs its DKG and produces a certificate.
-6. The coordinator runs `nomad-lifecycle descriptor-init` against the exact
-   successor topology and DKG certificate. It distributes that unsigned draft
-   and its digest through the public lifecycle channel.
-7. **A quorum of the previous epoch's operators approves the transition** with
-   `descriptor-approve`. Each operator verifies the complete unsigned draft
-   against its pinned authority, chain and revocation store before its durable
-   journal records the digest.
+6. Each rotation controller independently derives the same unsigned descriptor
+   from the exact successor topology and DKG certificate and publishes it on
+   its read-only lifecycle endpoint.
+7. **A quorum of the previous epoch's operators approves the transition.**
+   Each controller verifies the complete unsigned draft against its pinned
+   authority, chain and revocation store before its durable journal records
+   the digest.
    This is the step that makes membership a protocol action rather than a
    configuration edit: without `max(previous_threshold, majority)` distinct
    previous-epoch approvals, no verifier accepts the successor.
-8. Every operator of N+1 runs `descriptor-activate` over the same unsigned
-   draft. Signing goes through the local journal, which refuses a second
-   distinct descriptor for the epoch and role.
-9. The coordinator runs `descriptor-assemble` over the detached artifacts.
-   The command cryptographically verifies quorum, complete incoming
-   activation, membership, role, digest and revocation state before emitting
-   a descriptor.
-10. Distribute the descriptor. Verifiers run `epoch-import`; the descriptor
-    reaches READY immediately but becomes ACTIVE only at its public boundary.
+8. Every operator of N+1 activates the same draft through its local journal,
+   which refuses a second distinct descriptor for the epoch and role.
+9. Every controller makes one bounded GET per expected remote artifact on each
+   future UTC-aligned control tick. It verifies each detached signature and
+   assembles only after the previous quorum and all incoming activations exist.
+10. Each operator imports the identical assembled descriptor into its local
+    chain as READY. It becomes ACTIVE only at its signed public boundary. A
+    late descriptor is never imported as catch-up.
 
-The current draft still requires a public artifact-distribution mechanism to
-move the files between independent hosts. Do not replace that missing
-automation with shared private credentials or a coordinator-held operator key.
+The `nomad-lifecycle descriptor-*` commands implement the same validations for
+offline inspection and recovery. They are not a substitute transport and must
+not run concurrently with the controller. No step uses shared private
+credentials or a coordinator-held operator key.
 
 If more previous-epoch operators are lost than the quorum tolerates, no
 valid transition exists and the network must re-bootstrap from a new
@@ -138,11 +143,14 @@ transition retires an epoch early.
 1. Confirm the epoch is no longer ACTIVE. The share service refuses
    threshold work outside the serving window; a refusal is expected, not a
    fault.
-2. Run `nomad-operator erase` with `--chain`, `--epoch` and the mandatory
-   `--share` path. The share must cryptographically match the retired epoch
-   and local operator. Name any additional epoch-private DKG files
-   individually; a directory is deliberately refused. Each accepted file is
-   covered by the pre-erasure intent, overwritten, synced and unlinked.
+2. Ensure the next local custody secret exists. Run `nomad-operator erase`
+   with that file as `--secret`, plus `--chain`, `--epoch`, the mandatory
+   retired `--share` and mandatory `--retired-secret`. The share and retired
+   secret must cryptographically match the retired epoch and local operator;
+   the later signing file is protected from erasure and must carry the same
+   stable identity. Name any other epoch-private regular files individually;
+   a directory is deliberately refused. Each accepted file is covered by the
+   pre-erasure intent, overwritten, synced and unlinked.
 3. Keep the signed erasure statement. It records each file's pre-erasure
    digest and size, the method, the filesystem, and the standard
    limitations text.
@@ -155,9 +163,12 @@ physical destruction. The operative guarantee is destruction within an
 encrypted volume, so operators must use full-disk encryption and must not
 back up the share directory. Any claim beyond that is unsupported.
 
-The current drill does not test later compromise of the static DKG identity
-against retained live DKG packets. Therefore this procedure is not yet
-production forward-secrecy evidence, and PROD-08 remains PARTIAL.
+`TestRetainedDealResistsLaterEpochCredentialCompromise` persists a canonical
+deal envelope through the live DKG store, proves the retired identity can
+decrypt the ciphertext addressed to it, then proves that compromising the
+complete next-epoch secret cannot decrypt that retained ciphertext or join the
+retired membership. It is local adversarial evidence. PROD-08 remains PARTIAL
+until exact-head CI and independent witnessed lifecycle/WAN evidence exist.
 
 ## 6. Interrupted ceremony or restarted process
 
@@ -180,6 +191,7 @@ served. Run it with:
 
     go test -race ./live/epoch/ -run TestRecoveryDrill -v
 
-The drill and detached-assembly tests are protocol-level. They do not establish that independent
-administrators performed these steps on separate hosts; that remains
+The drill, automatic coordinator tests and detached-assembly tests are local.
+They do not establish that independent administrators performed these steps on
+separate hosts; that remains
 external (see `nomad-protocol/production/EXTERNAL_BLOCKERS.md`, EB-2).

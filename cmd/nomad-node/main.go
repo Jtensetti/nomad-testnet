@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/Jtensetti/nomad-testnet/live/bundle"
+	"github.com/Jtensetti/nomad-testnet/live/epoch"
 	"github.com/Jtensetti/nomad-testnet/live/node"
 	"github.com/Jtensetti/nomad-testnet/live/rawcache"
 	"github.com/Jtensetti/nomad-testnet/live/telemetry"
@@ -33,6 +35,7 @@ func main() {
 func run() error {
 	topologyPath := flag.String("topology", "", "signed public topology JSON")
 	authorityPath := flag.String("authority-key", "", "pinned topology authority public key")
+	epochChainPath := flag.String("epoch-chain", "", "persisted verified epoch-chain directory")
 	secretsPath := flag.String("secrets", "", "operator secret JSON")
 	listen := flag.String("listen", "", "local UDP listen address")
 	cachePath := flag.String("cache", "", "raw ciphertext cache directory")
@@ -43,7 +46,7 @@ func run() error {
 	cacheSweep := flag.Duration("cache-sweep", 30*time.Second, "public cache replication sweep")
 	flag.Parse()
 	for name, value := range map[string]string{
-		"--topology": *topologyPath, "--authority-key": *authorityPath, "--secrets": *secretsPath,
+		"--topology": *topologyPath, "--authority-key": *authorityPath, "--epoch-chain": *epochChainPath, "--secrets": *secretsPath,
 		"--listen": *listen, "--cache": *cachePath, "--state": *statePath, "--health": *healthPath,
 	} {
 		if value == "" {
@@ -58,15 +61,34 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// A valid signature and an unexpired window do not make a topology
-	// current: an older one inside its own window verifies just as well, and
-	// replaying it is how a removed operator or a rotated-away key is put
-	// back without forging anything. Refuse to move backwards, and fail
-	// closed on two topologies signed for the same network epoch.
+	chain, err := epoch.OpenChain(*epochChainPath, verifiedTopology.Document.NetworkID, authority, nil)
+	if err != nil {
+		return fmt.Errorf("open epoch chain: %w", err)
+	}
+	current, exists, err := chain.FreshEpoch(verifiedTopology.Document.Epoch)
+	if err != nil {
+		return err
+	}
+	if !exists || current.Topology.Digest != verifiedTopology.Digest {
+		return errors.New("epoch chain does not authorize the configured topology")
+	}
+	// Only a fully approved descriptor may advance the node watermark. Doing
+	// this before the chain comparison would let an authority-signed but
+	// unapproved topology burn a slot and deny the real membership transition.
 	watermarkPath := filepath.Join(filepath.Dir(*statePath), "topology-watermark.json")
 	if err := topology.AcceptMonotonic(watermarkPath, verifiedTopology); err != nil {
 		return err
 	}
+	guard := epoch.FreshGuard{Chain: chain}
+	if err := guard.ServesEpoch(current.Epoch, time.Now().UTC()); err != nil {
+		return fmt.Errorf("epoch chain does not authorize network service: %w", err)
+	}
+	servingDeadline, err := chain.FreshServingDeadline(current.Epoch)
+	if err != nil {
+		return err
+	}
+	var deadlineNanos atomic.Int64
+	deadlineNanos.Store(servingDeadline.UnixNano())
 	secrets, err := topology.LoadSecrets(*secretsPath, verifiedTopology)
 	if err != nil {
 		return err
@@ -87,14 +109,74 @@ func run() error {
 		Topology: verifiedTopology, Secrets: secrets, ListenAddress: *listen,
 		Cache: cache, SequencePath: *statePath, HealthPath: *healthPath,
 		CacheSweep: *cacheSweep, Seed: seed,
+		ServingDeadline: func() time.Time {
+			return time.Unix(0, deadlineNanos.Load()).UTC()
+		},
 	})
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := liveNode.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		return err
+	runContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	watchDone := make(chan error, 1)
+	go func() {
+		watchDone <- watchServingDeadline(runContext, cancel, chain, current.Epoch, &deadlineNanos)
+	}()
+	runErr := liveNode.Run(runContext)
+	cancel()
+	watchErr := <-watchDone
+	if watchErr != nil {
+		return watchErr
+	}
+	if runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, node.ErrEpochInactive) {
+		return runErr
 	}
 	return nil
+}
+
+// watchServingDeadline refreshes the public epoch chain on a fixed one-second
+// grid. It may only shorten the hot-path deadline when a verified emergency
+// successor appears. Neither cache contents nor user activity are inputs.
+func watchServingDeadline(ctx context.Context, cancel context.CancelFunc, chain *epoch.Chain, epochNumber uint64, deadlineNanos *atomic.Int64) error {
+	if ctx == nil || cancel == nil || chain == nil || deadlineNanos == nil {
+		return errors.New("complete epoch serving watcher configuration is required")
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		deadline := time.Unix(0, deadlineNanos.Load()).UTC()
+		wait := time.Until(deadline)
+		if wait <= 0 {
+			cancel()
+			return nil
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+			cancel()
+			return nil
+		case <-ticker.C:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			fresh, err := chain.FreshServingDeadline(epochNumber)
+			if err != nil {
+				cancel()
+				return fmt.Errorf("refresh epoch serving deadline: %w", err)
+			}
+			if fresh.Before(deadline) {
+				deadlineNanos.Store(fresh.UnixNano())
+			}
+		}
+	}
 }

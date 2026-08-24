@@ -56,6 +56,43 @@ func (chain *Chain) FreshEpoch(epochNumber uint64) (Verified, bool, error) {
 	return Verified{}, false, nil
 }
 
+// FreshServingDeadline returns the public instant after which an already
+// ACTIVE epoch must produce no more network work. Normally this is retire_at;
+// a verified emergency successor shortens it to that successor's activate_at.
+// The chain is refreshed first so a long-running node sees a descriptor
+// imported by the lifecycle controller without relying on private activity or
+// a process restart.
+func (chain *Chain) FreshServingDeadline(epochNumber uint64) (time.Time, error) {
+	chain.mu.Lock()
+	defer chain.mu.Unlock()
+
+	lock, err := acquireChainLock(chain.root)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer func() { _ = lock.release() }()
+	if err := chain.refreshLocked(); err != nil {
+		return time.Time{}, err
+	}
+	if chain.halted {
+		return time.Time{}, ErrHalted
+	}
+	for index, stored := range chain.epochs {
+		if stored.Epoch != epochNumber {
+			continue
+		}
+		deadline := stored.RetireAt
+		if index+1 < len(chain.epochs) {
+			successor := chain.epochs[index+1]
+			if successor.Descriptor.Transition == TransitionEmergency && successor.ActivateAt.Before(deadline) {
+				deadline = successor.ActivateAt
+			}
+		}
+		return deadline, nil
+	}
+	return time.Time{}, fmt.Errorf("epoch %d is not stored", epochNumber)
+}
+
 func (chain *Chain) stateOfLocked(epochNumber uint64, now time.Time) (State, error) {
 	if chain.halted {
 		return StateRetired, ErrHalted
@@ -92,7 +129,7 @@ func (guard FreshGuard) ServesEpoch(epochNumber uint64, now time.Time) error {
 		return err
 	}
 	if state != StateActive {
-		return fmt.Errorf("epoch %d is %s, not ACTIVE", epochNumber, state)
+		return fmt.Errorf("%w: epoch %d is %s", ErrEpochNotActive, epochNumber, state)
 	}
 	return nil
 }

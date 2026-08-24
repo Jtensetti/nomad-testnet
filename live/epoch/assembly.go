@@ -164,6 +164,43 @@ func validateSignatureArtifact(artifact SignatureArtifact) error {
 	return nil
 }
 
+// VerifySignatureArtifact authenticates one detached artifact without
+// requiring the rest of the quorum. Network collectors use it to ignore one
+// malicious peer's invalid response while continuing to gather the remaining
+// independently signed artifacts; final assembly still enforces the complete
+// quorum/all-members rules.
+func VerifySignatureArtifact(descriptor Descriptor, artifact SignatureArtifact, authority ed25519.PublicKey, previous *Verified, revoked RevocationSet) error {
+	verified, err := ValidateUnsignedDraft(descriptor, authority, previous, revoked)
+	if err != nil {
+		return err
+	}
+	if err := validateSignatureArtifact(artifact); err != nil {
+		return err
+	}
+	if artifact.NetworkID != verified.NetworkID || artifact.Epoch != verified.Epoch ||
+		artifact.DescriptorDigest != hex.EncodeToString(verified.Digest[:]) {
+		return fmt.Errorf("operator %s signed a different epoch descriptor", artifact.OperatorID)
+	}
+	probe := descriptor
+	switch artifact.Role {
+	case roleApproval:
+		if descriptor.Transition == TransitionGenesis || previous == nil {
+			return errors.New("genesis descriptors do not accept transition approvals")
+		}
+		probe.Approvals = []Approval{{
+			OperatorID: artifact.OperatorID, Index: artifact.Index, Signature: artifact.Signature,
+		}}
+		return verifyApprovalSet(probe, verified.Digest, previous, revoked, false)
+	case roleActivation:
+		probe.Activations = []Activation{{
+			OperatorID: artifact.OperatorID, Index: artifact.Index, Signature: artifact.Signature,
+		}}
+		return verifyActivationSet(probe, verified.Digest, verified.Topology, false)
+	default:
+		return errors.New("unsupported epoch signature role")
+	}
+}
+
 func strictDecode(encoded []byte, destination any, label string) error {
 	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
 		return fmt.Errorf("%s is ambiguous: %w", label, err)

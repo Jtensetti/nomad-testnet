@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -34,11 +35,13 @@ func main() {
 
 func run(arguments []string) error {
 	if len(arguments) == 0 {
-		return errors.New("required subcommand: init, inspect, attest, verify or erase")
+		return errors.New("required subcommand: init, rotate, inspect, attest, verify or erase")
 	}
 	switch arguments[0] {
 	case "init":
 		return initialize(arguments[1:])
+	case "rotate":
+		return rotate(arguments[1:])
 	case "inspect":
 		return inspect(arguments[1:])
 	case "attest":
@@ -50,6 +53,68 @@ func run(arguments []string) error {
 	default:
 		return fmt.Errorf("unknown subcommand %q", arguments[0])
 	}
+}
+
+// rotate creates a new epoch-scoped secret file without ever overwriting the
+// predecessor. The stable Ed25519 operator identity is retained so it can
+// approve the transition; KEX and DKG private material are freshly generated.
+func rotate(arguments []string) error {
+	flags := flag.NewFlagSet("rotate", flag.ContinueOnError)
+	previousPath := flags.String("from-secret", "", "previous epoch private operator-secret path")
+	endpoint := flags.String("endpoint", "", "public UDP host:port")
+	partialEndpoint := flags.String("partial-endpoint", "", "public threshold-partial URL")
+	dkgEndpoint := flags.String("dkg-endpoint", "", "public inter-operator DKG URL")
+	secretPath := flags.String("secret", "", "new epoch private operator-secret path")
+	enrollmentPath := flags.String("enrollment", "", "new public epoch enrollment path")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *previousPath == "" || *endpoint == "" || *partialEndpoint == "" || *dkgEndpoint == "" || *secretPath == "" || *enrollmentPath == "" {
+		return errors.New("--from-secret, --endpoint, --partial-endpoint, --dkg-endpoint, --secret and --enrollment are required")
+	}
+	paths := map[string]struct{}{}
+	for _, path := range []string{*previousPath, *secretPath, *enrollmentPath} {
+		clean := filepath.Clean(path)
+		if _, exists := paths[clean]; exists {
+			return errors.New("previous secret, new secret and enrollment paths must differ")
+		}
+		paths[clean] = struct{}{}
+	}
+	previous, err := topology.LoadPrivateKeys(*previousPath)
+	if err != nil {
+		return err
+	}
+	secrets, err := topology.RotateEpochSecrets(previous)
+	if err != nil {
+		return err
+	}
+	secretBytes, err := topology.EncodeSecrets(secrets)
+	if err != nil {
+		return err
+	}
+	keys, err := topology.DecodePrivateKeys(secretBytes)
+	if err != nil {
+		return err
+	}
+	enrollment, err := ceremony.NewEnrollment(keys, *endpoint, *partialEndpoint, *dkgEndpoint)
+	if err != nil {
+		return err
+	}
+	enrollmentBytes, err := ceremony.EncodeEnrollment(enrollment)
+	if err != nil {
+		return err
+	}
+	if err := writeNew(*secretPath, secretBytes, 0o600); err != nil {
+		return err
+	}
+	if err := writeNew(*enrollmentPath, enrollmentBytes, 0o644); err != nil {
+		_ = os.Remove(*secretPath)
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(struct {
+		OperatorID string `json:"operator_id"`
+		Enrollment string `json:"enrollment"`
+	}{keys.OperatorID, *enrollmentPath})
 }
 
 func initialize(arguments []string) error {
@@ -147,14 +212,15 @@ func erase(arguments []string) error {
 	networkID := flags.String("network", "", "network identifier")
 	filesystem := flags.String("filesystem", "", "filesystem type of the erased paths, recorded in the statement")
 	sharePath := flags.String("share", "", "retired threshold-share path; must verify against the selected epoch")
+	retiredSecretPath := flags.String("retired-secret", "", "retired epoch secret path; must match the selected epoch and is erased")
 	outputPath := flags.String("out", "", "signed erasure-statement path")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	if *secretPath == "" || *chainPath == "" || *epochNumber == 0 || *authorityPath == "" || *networkID == "" || *filesystem == "" || *sharePath == "" || *outputPath == "" {
-		return errors.New("--secret, --chain, --epoch, --authority-key, --network, --filesystem, --share and --out are required")
+	if *secretPath == "" || *chainPath == "" || *epochNumber == 0 || *authorityPath == "" || *networkID == "" || *filesystem == "" || *sharePath == "" || *retiredSecretPath == "" || *outputPath == "" {
+		return errors.New("--secret, --chain, --epoch, --authority-key, --network, --filesystem, --share, --retired-secret and --out are required")
 	}
-	erasePaths := append([]string{*sharePath}, flags.Args()...)
+	erasePaths := append([]string{*sharePath, *retiredSecretPath}, flags.Args()...)
 	authority, err := topology.LoadAuthorityKey(*authorityPath)
 	if err != nil {
 		return err
@@ -243,6 +309,9 @@ func erase(arguments []string) error {
 			return err
 		}
 	} else {
+		if err := validateRetiredEpochSecret(*retiredSecretPath, retired, keys); err != nil {
+			return err
+		}
 		share, err := committee.LoadShare(*sharePath, retired.Certificate, retired.Topology)
 		if err != nil {
 			return fmt.Errorf("verify retired threshold share before erasure: %w", err)
@@ -281,6 +350,17 @@ func erase(arguments []string) error {
 		return err
 	}
 	return emitErasureResult(statement, false)
+}
+
+func validateRetiredEpochSecret(path string, retired epoch.Verified, signer topology.PrivateKeys) error {
+	verified, err := topology.LoadSecrets(path, retired.Topology)
+	if err != nil {
+		return fmt.Errorf("verify retired epoch secret before erasure: %w", err)
+	}
+	if verified.Operator.ID != signer.OperatorID || !bytes.Equal(verified.Identity, signer.Identity) {
+		return errors.New("retired epoch secret and erasure signer do not share the verified operator identity")
+	}
+	return nil
 }
 
 func emitErasureResult(statement epoch.ErasureStatement, recovered bool) error {

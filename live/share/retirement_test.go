@@ -1,7 +1,7 @@
 package share
 
 import (
-	"errors"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,12 +11,32 @@ import (
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"github.com/Jtensetti/nomad-testnet/live/batch"
+	"github.com/Jtensetti/nomad-testnet/live/epoch"
+	"github.com/Jtensetti/nomad-testnet/live/rawcache"
 )
 
 type retirementDenyingGuard struct{}
 
 func (retirementDenyingGuard) ServesEpoch(uint64, time.Time) error {
-	return errors.New("epoch retired")
+	return epoch.ErrEpochNotActive
+}
+
+func TestRetiredShareServiceExitsCleanlyInsteadOfRestarting(t *testing.T) {
+	cache, err := rawcache.Open(filepath.Join(t.TempDir(), "raw"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := Service{
+		Cache: cache,
+		Descriptor: batch.VerifiedDescriptor{
+			Committee: mix.ThresholdCommittee{Epoch: 7},
+		},
+		OutputDir: t.TempDir(), Interval: time.Second,
+		ListenAddress: "127.0.0.1:0", Guard: retirementDenyingGuard{},
+	}
+	if err := service.Run(context.Background()); err != nil {
+		t.Fatalf("normal public retirement looked like a crash: %v", err)
+	}
 }
 
 func TestHTTPDoesNotServeExistingPartialAfterRetirement(t *testing.T) {

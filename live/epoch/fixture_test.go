@@ -3,6 +3,7 @@ package epoch
 import (
 	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
@@ -25,6 +26,8 @@ type fixture struct {
 	AuthorityPublic  ed25519.PublicKey
 	AuthorityPrivate ed25519.PrivateKey
 	Operators        []fixtureOperator
+	materialEpoch    uint64
+	epochOperators   map[uint64][]fixtureOperator
 }
 
 func newFixture(t *testing.T, operatorCount int) *fixture {
@@ -58,7 +61,10 @@ func newNamedFixture(t *testing.T, setName string, operatorCount int) *fixture {
 		}
 		operators[index] = fixtureOperator{ID: id, Identity: identity, KEX: kex, DKG: dkgPrivate}
 	}
-	return &fixture{AuthorityPublic: authority.Public().(ed25519.PublicKey), AuthorityPrivate: authority, Operators: operators}
+	return &fixture{
+		AuthorityPublic: authority.Public().(ed25519.PublicKey), AuthorityPrivate: authority,
+		Operators: operators, epochOperators: make(map[uint64][]fixtureOperator),
+	}
 }
 
 type epochTimes struct {
@@ -82,6 +88,25 @@ func (f *fixture) buildSignedTopology(t *testing.T, epochNumber uint64, threshol
 
 func (f *fixture) buildSignedTopologyWithNetwork(t *testing.T, networkID string, epochNumber uint64, threshold uint32, times epochTimes, session [32]byte, basePort int) ([]byte, topology.Verified) {
 	t.Helper()
+	if f.materialEpoch != epochNumber {
+		for index := range f.Operators {
+			kex, err := ecdh.X25519().GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, dkgPrivate, err := mix.GenerateDKGIdentity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.Operators[index].KEX = kex
+			f.Operators[index].DKG = dkgPrivate
+		}
+		f.materialEpoch = epochNumber
+		if f.epochOperators == nil {
+			f.epochOperators = make(map[uint64][]fixtureOperator)
+		}
+		f.epochOperators[epochNumber] = append([]fixtureOperator(nil), f.Operators...)
+	}
 	document := topology.Document{
 		Version:   topology.Version,
 		NetworkID: networkID,
@@ -140,8 +165,12 @@ func (f *fixture) buildCertificate(t *testing.T, network topology.Verified) ([]b
 	if err != nil {
 		t.Fatal(err)
 	}
-	privates := make([]mix.DKGPrivateIdentity, len(f.Operators))
-	for index, operator := range f.Operators {
+	operators := f.epochOperators[network.Document.Epoch]
+	if len(operators) != len(f.Operators) {
+		t.Fatalf("fixture has no private material for epoch %d", network.Document.Epoch)
+	}
+	privates := make([]mix.DKGPrivateIdentity, len(operators))
+	for index, operator := range operators {
 		privates[index] = operator.DKG
 	}
 	publicCommittee, secrets, transcript, err := mix.RunAuthenticatedDKGWithIdentities(
@@ -156,7 +185,7 @@ func (f *fixture) buildCertificate(t *testing.T, network topology.Verified) ([]b
 	}
 	attestations := make([]committee.Attestation, len(network.Document.Operators))
 	for index, operator := range network.Document.Operators {
-		attestations[index], err = committee.CreateAttestation(manifest, operator, f.Operators[index].Identity)
+		attestations[index], err = committee.CreateAttestation(manifest, operator, operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}

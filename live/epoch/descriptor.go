@@ -71,6 +71,13 @@ type Verified struct {
 	NetworkID   string
 	ActivateAt  time.Time
 	RetireAt    time.Time
+
+	// These cumulative sets are derived only from the verified descriptor
+	// chain. They prevent an epoch-private key from being retired and then
+	// reintroduced after an intervening epoch, which would make a later
+	// compromise disclose material from the earlier epoch.
+	historicalKEXKeys map[string]struct{}
+	historicalDKGKeys map[string]struct{}
 }
 
 // RevocationSet lists revoked operator identity keys (base64 Ed25519 public
@@ -276,11 +283,13 @@ func ValidateDraft(descriptor Descriptor, authority ed25519.PublicKey, previous 
 	if err := verifyChainLink(descriptor, network, previous, activateAt); err != nil {
 		return Verified{}, err
 	}
+	historicalKEX, historicalDKG := extendEpochKeyHistory(previous, network)
 
 	return Verified{
 		Descriptor: descriptor, Digest: digest, Topology: network, Certificate: certified,
 		Epoch: network.Document.Epoch, NetworkID: network.Document.NetworkID,
 		ActivateAt: activateAt, RetireAt: retireAt,
+		historicalKEXKeys: historicalKEX, historicalDKGKeys: historicalDKG,
 	}, nil
 }
 
@@ -309,6 +318,9 @@ func verifyChainLink(descriptor Descriptor, network topology.Verified, previous 
 	if network.Document.Epoch != previous.Epoch+1 {
 		return errors.New("epoch numbers must increase by exactly one")
 	}
+	if err := verifyFreshEpochKeys(*previous, network); err != nil {
+		return err
+	}
 	switch descriptor.Transition {
 	case TransitionScheduled:
 		if !activateAt.Equal(previous.RetireAt) {
@@ -327,6 +339,58 @@ func verifyChainLink(descriptor Descriptor, network topology.Verified, previous 
 		return errors.New("unsupported transition kind for a chained epoch")
 	}
 	return nil
+}
+
+// verifyFreshEpochKeys makes the topology's epoch-scoped key declaration a
+// protocol invariant. A later compromise of an operator's current secret file
+// must not reveal a DKG identity or hop-MAC secret from any earlier epoch,
+// including one separated by intervening rotations. Identity signing keys are
+// intentionally excluded: they are the stable operator identities that
+// authorize the cross-epoch transition.
+func verifyFreshEpochKeys(previous Verified, incoming topology.Verified) error {
+	previousKEX, previousDKG := epochKeyHistory(previous)
+	for _, operator := range incoming.Document.Operators {
+		if _, reused := previousKEX[operator.KEXKey]; reused {
+			return fmt.Errorf("operator %s reuses an earlier epoch key-agreement key", operator.ID)
+		}
+		if _, reused := previousDKG[operator.DKGIdentityKey]; reused {
+			return fmt.Errorf("operator %s reuses an earlier epoch DKG identity", operator.ID)
+		}
+	}
+	return nil
+}
+
+func epochKeyHistory(previous Verified) (map[string]struct{}, map[string]struct{}) {
+	kex := make(map[string]struct{}, len(previous.historicalKEXKeys)+len(previous.Topology.Document.Operators))
+	dkg := make(map[string]struct{}, len(previous.historicalDKGKeys)+len(previous.Topology.Document.Operators))
+	for key := range previous.historicalKEXKeys {
+		kex[key] = struct{}{}
+	}
+	for key := range previous.historicalDKGKeys {
+		dkg[key] = struct{}{}
+	}
+	// A zero-value history can arise only in focused package tests or callers
+	// that constructed Verified directly. Fail safely for the direct
+	// predecessor even in that case; production chains always carry the full
+	// cumulative sets produced by ValidateDraft.
+	for _, operator := range previous.Topology.Document.Operators {
+		kex[operator.KEXKey] = struct{}{}
+		dkg[operator.DKGIdentityKey] = struct{}{}
+	}
+	return kex, dkg
+}
+
+func extendEpochKeyHistory(previous *Verified, incoming topology.Verified) (map[string]struct{}, map[string]struct{}) {
+	kex := make(map[string]struct{}, len(incoming.Document.Operators))
+	dkg := make(map[string]struct{}, len(incoming.Document.Operators))
+	if previous != nil {
+		kex, dkg = epochKeyHistory(*previous)
+	}
+	for _, operator := range incoming.Document.Operators {
+		kex[operator.KEXKey] = struct{}{}
+		dkg[operator.DKGIdentityKey] = struct{}{}
+	}
+	return kex, dkg
 }
 
 func verifyApprovals(descriptor Descriptor, digest [32]byte, previous *Verified, revoked RevocationSet) error {

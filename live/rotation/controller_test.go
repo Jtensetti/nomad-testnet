@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,38 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/epoch"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
+
+func TestEpochSecretPathIsCanonicalAndRootIsPrivate(t *testing.T) {
+	config := baseConfig(t, epoch.Plan{Action: epoch.ActionIdle, Epoch: 2})
+	path, err := config.epochSecretsPath(17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(path) != "epoch-00000000000000000017.secrets.json" {
+		t.Fatalf("non-canonical epoch secret path %q", path)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(config.SecretsRoot, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := config.epochSecretsPath(17); err == nil || !strings.Contains(err.Error(), "0700") {
+			t.Fatalf("world-readable epoch secret root was accepted: %v", err)
+		}
+	}
+
+	realRoot := filepath.Join(t.TempDir(), "real-secrets")
+	if err := os.Mkdir(realRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "secret-link")
+	if err := os.Symlink(realRoot, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	config.SecretsRoot = alias
+	if _, err := config.epochSecretsPath(17); err == nil || !strings.Contains(err.Error(), "real directory") {
+		t.Fatalf("symlinked epoch secret root was accepted: %v", err)
+	}
+}
 
 type fixedPlanner struct{ plan epoch.Plan }
 
@@ -31,7 +64,8 @@ func baseConfig(t *testing.T, planned epoch.Plan) Config {
 	shares := filepath.Join(root, "shares")
 	certs := filepath.Join(root, "certs")
 	topologies := filepath.Join(root, "topologies")
-	for _, directory := range []string{state, shares, certs, topologies} {
+	secretsRoot := filepath.Join(root, "secrets")
+	for _, directory := range []string{state, shares, certs, topologies, secretsRoot} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -44,14 +78,14 @@ func baseConfig(t *testing.T, planned epoch.Plan) Config {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secretPath := filepath.Join(root, "operator.json")
+	secretPath := filepath.Join(secretsRoot, "epoch-00000000000000000002.secrets.json")
 	if err := os.WriteFile(secretPath, encoded, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return Config{
 		Planner: fixedPlanner{plan: planned}, Policy: epoch.DefaultPolicy(), OperatorID: "operator-a",
 		Authority: authority, NetworkID: "nomad-test", TopologyDir: topologies,
-		SecretsPath: secretPath, Listen: "127.0.0.1:0",
+		SecretsRoot: secretsRoot, Listen: "127.0.0.1:0",
 		StateRoot: state, ShareRoot: shares, CertRoot: certs,
 	}
 }

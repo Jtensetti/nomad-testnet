@@ -207,6 +207,7 @@ services:
       - nomad-node
       - --topology=/config/topology.json
       - --authority-key=/config/authority.pub
+      - --epoch-chain=/epoch-chain
       - --secrets=/operator/node-secrets.json
       - --listen=:4200
       - --cache=/cache
@@ -216,11 +217,13 @@ services:
       - --cache-sweep=10s
     depends_on:
       fixture-publisher: {condition: service_completed_successfully}
+      epoch-init-a: {condition: service_completed_successfully}
     networks: [fabric]
     volumes:
       - public-config:/config:ro
       - published-config:/published:ro
       - operator-a-secret:/operator:ro
+      - epoch-chain-a:/epoch-chain:ro
       - raw-a:/cache
       - state-a:/state
     healthcheck:
@@ -235,6 +238,7 @@ services:
       - nomad-node
       - --topology=/config/topology.json
       - --authority-key=/config/authority.pub
+      - --epoch-chain=/epoch-chain
       - --secrets=/operator/node-secrets.json
       - --listen=:4200
       - --cache=/cache
@@ -243,11 +247,13 @@ services:
       - --cache-sweep=10s
     depends_on:
       fixture-publisher: {condition: service_completed_successfully}
+      epoch-init-b: {condition: service_completed_successfully}
     networks: [fabric]
     volumes:
       - public-config:/config:ro
       - published-config:/published:ro
       - operator-b-secret:/operator:ro
+      - epoch-chain-b:/epoch-chain:ro
       - raw-b:/cache
       - state-b:/state
     healthcheck:
@@ -262,6 +268,7 @@ services:
       - nomad-node
       - --topology=/config/topology.json
       - --authority-key=/config/authority.pub
+      - --epoch-chain=/epoch-chain
       - --secrets=/operator/node-secrets.json
       - --listen=:4200
       - --cache=/cache
@@ -270,11 +277,13 @@ services:
       - --cache-sweep=10s
     depends_on:
       fixture-publisher: {condition: service_completed_successfully}
+      epoch-init-c: {condition: service_completed_successfully}
     networks: [fabric]
     volumes:
       - public-config:/config:ro
       - published-config:/published:ro
       - operator-c-secret:/operator:ro
+      - epoch-chain-c:/epoch-chain:ro
       - raw-c:/cache
       - state-c:/state
     healthcheck:

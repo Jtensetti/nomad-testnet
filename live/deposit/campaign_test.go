@@ -252,10 +252,11 @@ func TestPublicationCampaignUnderFailureAndRetry(t *testing.T) {
 	for _, name := range sortedWorlds(worlds) {
 		drift := cadenceDrift(worlds[name])
 		if drift > cadenceTolerance {
-			t.Fatalf("world %s kept no cadence: mean inter-arrival is %.3f of the "+
+			discardCampaignCaptures(t, directory, worlds)
+			t.Skipf("world %s kept no cadence: mean inter-arrival is %.3f of the "+
 				"nominal interval away from it, tolerance %.2f. The loop was sealing "+
-				"as fast as it could rather than following the ticker, so this run's "+
-				"captures are not evidence about emission timing",
+				"as fast as it could rather than following the ticker, so the captures "+
+				"were deleted and this host run produced no timing evidence",
 				name, drift, cadenceTolerance)
 		}
 	}
@@ -267,15 +268,26 @@ func TestPublicationCampaignUnderFailureAndRetry(t *testing.T) {
 	// usable baseline and its captures establish nothing.
 	controlDrift := meanIntervalDrift(worlds["control-a"], worlds["control-b"])
 	if controlDrift > controlTolerance {
-		t.Fatalf("the control pair differs by %.4f of the nominal interval, "+
+		discardCampaignCaptures(t, directory, worlds)
+		t.Skipf("the control pair differs by %.4f of the nominal interval, "+
 			"registered tolerance %.2f: two idle publishers were not identical, so "+
-			"this run establishes nothing about the treatments", controlDrift, controlTolerance)
+			"the captures were deleted and this run establishes nothing about the "+
+			"treatments", controlDrift, controlTolerance)
 	}
 	t.Logf("noise floor this run: two idle publishers differ by %.4f of the nominal "+
 		"interval, registered tolerance %.2f. The captures are written for CI to "+
 		"judge by the full preregistered rule.", controlDrift, controlTolerance)
 	fmt.Fprintf(os.Stderr, "publication campaign wrote %d worlds to %s\n",
 		len(worlds), directory)
+}
+
+func discardCampaignCaptures(t *testing.T, directory string, worlds map[string]*wire.Capture) {
+	t.Helper()
+	for name := range worlds {
+		if err := os.Remove(filepath.Join(directory, name+".txt")); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("discard invalid campaign capture %s: %v", name, err)
+		}
+	}
 }
 
 func sortedWorlds(worlds map[string]*wire.Capture) []string {

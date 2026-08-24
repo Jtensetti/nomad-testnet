@@ -24,15 +24,47 @@ threshold secret.
 nomad-operator init --id=operator-a --endpoint=host-a:4200 \
   --partial-endpoint=https://host-a:4300 \
   --dkg-endpoint=https://host-a:4400 \
-  --secret=node-secrets.json --enrollment=enrollment.json
+  --secret=secrets/epoch-00000000000000000001.secrets.json \
+  --enrollment=epoch-1.enrollment.json
 
 nomad-topology draft --network-id=nomad-live --epoch=1 \
   --dkg-start-delay=10m --dkg-phase-duration=2m --dkg-threshold=2 \
   --enrollments=a.json,b.json,c.json --out=topology-draft.json
 
-nomad-operator attest --secret=node-secrets.json \
+nomad-operator attest \
+  --secret=secrets/epoch-00000000000000000001.secrets.json \
   --draft=topology-draft.json --out=operator-a.attestation.json
 ```
+
+Normal post-genesis rotation is automatic. `nomad-rotation-controller` runs
+the public retry ladder, re-verifies a completed DKG, exchanges immutable
+certificate/approval/activation artifacts over a read-only lifecycle service,
+assembles one descriptor and imports it as READY before the signed activation
+boundary. The lifecycle service is the signed DKG endpoint's TCP port plus
+one (for example `https://operator-a.example:4400` implies
+`https://operator-a.example:4401`). It has GET endpoints only, follows no
+redirect, uses no proxy, performs one request per operator per aligned control
+round and has no fallback or catch-up path. Retry attempts may change only the
+fresh DKG session and later public start time; membership and every other
+public field remain fixed.
+
+KEX and DKG identities are private to one epoch. Before staging N+1, each
+continuing operator runs `nomad-operator rotate` from its N secret into a new
+`epoch-%020d.secrets.json` file. The stable Ed25519 operator identity is the
+only retained key. Descriptor validation rejects any N+1 topology that reuses
+any earlier epoch's KEX or DKG public key, even after an intervening epoch or
+under another operator ID, and the
+controller loads the exact file for each epoch from `--secrets-dir`. A retained
+canonical live DKG deal is an adversarial test fixture: the retired identity
+decrypts its addressed ciphertext as a control, while the complete later-epoch
+secret file cannot decrypt it or join the old DKG membership.
+
+If the descriptor is not READY by `activate_at`, the outgoing epoch retires
+and the controller refuses a late import that would become ACTIVE
+immediately. This availability loss is intentional. See
+`deploy/MULTI_OPERATOR.md` for the complete command and storage layout; the
+manual `nomad-lifecycle descriptor-*` commands remain inspection/recovery
+tools, not the normal rotation transport.
 
 After collecting exactly one attestation from every member, the authority uses
 `nomad-topology finalize`; every operator runs `nomad-operator verify` before

@@ -173,6 +173,13 @@ func TestChainEmergencyRetiresPredecessor(t *testing.T) {
 	if state, err := chain.StateOf(1, probe); err != nil || state != StateRetired {
 		t.Fatalf("predecessor must be RETIRED under an active emergency successor, got %v %v", state, err)
 	}
+	deadline, err := chain.FreshServingDeadline(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deadline.Equal(successor.ActivateAt) {
+		t.Fatalf("serving deadline = %s, want emergency activation %s", deadline, successor.ActivateAt)
+	}
 }
 
 // TestJournalRefusesSecondActivation exercises the enforced signing path.

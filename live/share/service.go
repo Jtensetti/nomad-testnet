@@ -16,6 +16,7 @@ import (
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"github.com/Jtensetti/nomad-testnet/live/batch"
+	"github.com/Jtensetti/nomad-testnet/live/epoch"
 	"github.com/Jtensetti/nomad-testnet/live/hop"
 	"github.com/Jtensetti/nomad-testnet/live/rawcache"
 )
@@ -56,6 +57,9 @@ func (service Service) Run(ctx context.Context) error {
 		return errors.New("share service requires an epoch guard")
 	}
 	if err := service.Guard.ServesEpoch(service.Descriptor.Committee.Epoch, service.now()); err != nil {
+		if errors.Is(err, epoch.ErrEpochNotActive) {
+			return nil
+		}
 		return fmt.Errorf("refusing to start threshold service for epoch %d: %w", service.Descriptor.Committee.Epoch, err)
 	}
 	if err := ensureOutputDirectory(service.OutputDir); err != nil {
@@ -78,6 +82,9 @@ func (service Service) Run(ctx context.Context) error {
 	}()
 	for {
 		if _, err := service.ProcessOnce(); err != nil {
+			if errors.Is(err, epoch.ErrEpochNotActive) {
+				return nil
+			}
 			return err
 		}
 		select {

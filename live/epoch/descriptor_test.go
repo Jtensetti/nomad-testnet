@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
+	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
 func TestGenesisAndScheduledTransitionVerify(t *testing.T) {
@@ -437,5 +438,83 @@ func TestMembershipTransitionRequiresPreviousCommittee(t *testing.T) {
 	}
 	if verified.Topology.Document.Operators[4].IdentityKey == genesis.Topology.Document.Operators[4].IdentityKey {
 		t.Fatal("fixture did not actually change membership")
+	}
+}
+
+func TestTransitionRejectsAnyPredecessorEpochKeyReuse(t *testing.T) {
+	f := newFixture(t, 3)
+	session1 := sha256.Sum256([]byte("key-rotation-1"))
+	topologyBytes1, network1 := f.buildSignedTopology(t, 1, 2, genesisTimes(), session1, 10)
+	certificateBytes1, _ := f.buildCertificate(t, network1)
+	_, genesis := f.buildDescriptor(t, nil, nil, TransitionGenesis, genesisTimes(), network1, topologyBytes1, certificateBytes1)
+
+	session2 := sha256.Sum256([]byte("key-rotation-2"))
+	topologyBytes2, network2 := f.buildSignedTopology(t, 2, 2, successorTimes(), session2, 30)
+	certificateBytes2, _ := f.buildCertificate(t, network2)
+	_, _ = topologyBytes2, certificateBytes2
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*topology.Document)
+	}{
+		{"KEX", func(document *topology.Document) {
+			document.Operators[0].KEXKey = genesis.Topology.Document.Operators[1].KEXKey
+		}},
+		{"DKG", func(document *topology.Document) {
+			document.Operators[0].DKGIdentityKey = genesis.Topology.Document.Operators[1].DKGIdentityKey
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reused := network2.Document
+			reused.Operators = append([]topology.Operator(nil), network2.Document.Operators...)
+			test.mutate(&reused)
+			if err := verifyFreshEpochKeys(genesis, topology.Verified{Document: reused}); err == nil || !strings.Contains(err.Error(), "reuses an earlier epoch") {
+				t.Fatalf("predecessor %s key reuse was accepted: %v", test.name, err)
+			}
+		})
+	}
+}
+
+func TestTransitionRejectsNonAdjacentHistoricalEpochKeyReuse(t *testing.T) {
+	f := newFixture(t, 3)
+	session1 := sha256.Sum256([]byte("historical-key-rotation-1"))
+	topologyBytes1, network1 := f.buildSignedTopology(t, 1, 2, genesisTimes(), session1, 10)
+	certificateBytes1, _ := f.buildCertificate(t, network1)
+	_, genesis := f.buildDescriptor(t, nil, nil, TransitionGenesis, genesisTimes(), network1, topologyBytes1, certificateBytes1)
+
+	session2 := sha256.Sum256([]byte("historical-key-rotation-2"))
+	topologyBytes2, network2 := f.buildSignedTopology(t, 2, 2, successorTimes(), session2, 30)
+	certificateBytes2, _ := f.buildCertificate(t, network2)
+	_, successor := f.buildDescriptor(t, &genesis, f, TransitionScheduled, successorTimes(), network2, topologyBytes2, certificateBytes2)
+
+	thirdTimes := epochTimes{
+		NotBefore: fixtureBase.Add(2 * time.Hour),
+		NotAfter:  fixtureBase.Add(14 * time.Hour),
+		DKGStart:  fixtureBase.Add(2*time.Hour + 2*time.Minute),
+		Activate:  fixtureBase.Add(4 * time.Hour),
+		Retire:    fixtureBase.Add(6 * time.Hour),
+	}
+	session3 := sha256.Sum256([]byte("historical-key-rotation-3"))
+	_, network3 := f.buildSignedTopology(t, 3, 2, thirdTimes, session3, 50)
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*topology.Document)
+	}{
+		{"KEX", func(document *topology.Document) {
+			document.Operators[0].KEXKey = genesis.Topology.Document.Operators[0].KEXKey
+		}},
+		{"DKG", func(document *topology.Document) {
+			document.Operators[0].DKGIdentityKey = genesis.Topology.Document.Operators[0].DKGIdentityKey
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reused := network3.Document
+			reused.Operators = append([]topology.Operator(nil), network3.Document.Operators...)
+			test.mutate(&reused)
+			if err := verifyFreshEpochKeys(successor, topology.Verified{Document: reused}); err == nil || !strings.Contains(err.Error(), "reuses an earlier epoch") {
+				t.Fatalf("non-adjacent historical %s key reuse was accepted: %v", test.name, err)
+			}
+		})
 	}
 }
