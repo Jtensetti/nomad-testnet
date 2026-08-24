@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -49,6 +50,15 @@ func run() error {
 	}
 	verifiedTopology, err := topology.Load(*topologyPath, authority, time.Now().UTC())
 	if err != nil {
+		return err
+	}
+	// A valid signature and an unexpired window do not make a topology
+	// current: an older one inside its own window verifies just as well, and
+	// replaying it is how a removed operator or a rotated-away key is put
+	// back without forging anything. Refuse to move backwards, and fail
+	// closed on two topologies signed for the same network epoch.
+	watermarkPath := filepath.Join(filepath.Dir(*statePath), "topology-watermark.json")
+	if err := topology.AcceptMonotonic(watermarkPath, verifiedTopology); err != nil {
 		return err
 	}
 	secrets, err := topology.LoadSecrets(*secretsPath, verifiedTopology)
