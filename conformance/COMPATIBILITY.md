@@ -79,6 +79,7 @@ in a document a peer parses by name.
 | `nomad-mix-round-context-v1` | one shuffle round's committee, epoch, batch and round |
 | `nomad-mix-round-receipt-v1` | a mixer's signed receipt for a round |
 | `nomad-mix-receipt-digest-v1` | the receipt digest |
+| `nomad-mix-non-receipt-v1` | one observer's signed statement that a mixer's round had not arrived by the round's public deadline |
 | `nomad-neff-sequence-shuffle-v1` | a Neff sequence shuffle proof |
 | `nomad-contextual-neff-shuffle-v1` | the same proof bound to its round context |
 | `nomad-mix-sequence-challenge-v1` | the shuffle challenge derivation |
