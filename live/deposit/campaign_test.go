@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
@@ -28,7 +29,30 @@ import (
 const (
 	campaignTicks    = 100
 	campaignInterval = 150 * time.Millisecond
+	// cadenceTolerance is how far a world's mean inter-arrival may sit from
+	// the nominal interval before the world is not keeping a cadence at all.
+	// It is deliberately loose: it exists to catch a loop that has fallen off
+	// the ticker entirely, not to measure jitter.
+	cadenceTolerance = 0.10
+	// controlTolerance is the registered noise floor. Two idle publishers that
+	// differ by more than this are not the identical pair the campaign needs
+	// as its control, so the run establishes nothing.
+	controlTolerance = 0.02
+	// raceTicks is the shortened campaign the race build runs. It exercises
+	// the drain's concurrency and the exact properties, and makes no timing
+	// claim, so it does not need the full length.
+	raceTicks = 12
 )
+
+// ticksThisBuild is the campaign length. Under -race the seal cost exceeds the
+// interval, so a full-length run would neither finish inside the package
+// timeout nor measure anything; see race_off_test.go.
+func ticksThisBuild() int {
+	if raceDetectorEnabled {
+		return raceTicks
+	}
+	return campaignTicks
+}
 
 // publicationWorld drives one publisher for campaignTicks and records what an
 // observer of its uplink would see.
@@ -51,7 +75,7 @@ func publicationWorld(t *testing.T, label string, queue *publish.Queue,
 	capture := &wire.Capture{Label: label}
 	ticker := time.NewTicker(campaignInterval)
 	defer ticker.Stop()
-	for tick := 1; tick <= campaignTicks; tick++ {
+	for tick := 1; tick <= ticksThisBuild(); tick++ {
 		<-ticker.C
 		if disturb != nil {
 			if replaced := disturb(tick, drain); replaced != nil {
@@ -87,7 +111,7 @@ func publicationWorld(t *testing.T, label string, queue *publish.Queue,
 // What this campaign judges, and what it refuses to judge, is decided by its
 // own control: two idle publishers, identical in every respect it controls.
 // The gap between them is what a treatment would have to exceed to mean
-// anything, and it is logged every run.
+// anything, and the run fails if that gap exceeds the registered tolerance.
 //
 // The first version of this campaign ticked at 5 ms while each cell cost about
 // 79 ms to seal, so the loop was not keeping a cadence at all and its measured
@@ -150,7 +174,7 @@ func TestPublicationCampaignUnderFailureAndRetry(t *testing.T) {
 		restarted := 0
 		capture := publicationWorld(t, label, queue,
 			func(tick int, drain *Drain) *Drain {
-				if tick != campaignTicks/2 || restarted > 0 {
+				if tick != ticksThisBuild()/2 || restarted > 0 {
 					return nil
 				}
 				restarted++
@@ -188,10 +212,10 @@ func TestPublicationCampaignUnderFailureAndRetry(t *testing.T) {
 		if err := file.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if got := len(capture.Packets); got != campaignTicks {
+		if got := len(capture.Packets); got != ticksThisBuild() {
 			t.Fatalf("%s emitted %d cells, want %d: the number of cells a publisher "+
 				"sends must not depend on what happened to its publication",
-				name, got, campaignTicks)
+				name, got, ticksThisBuild())
 		}
 		if sizes := capture.Sizes(); len(sizes) != 1 || sizes[0] != fabric.CellSize {
 			t.Fatalf("%s emitted sizes %v, want only %d", name, sizes, fabric.CellSize)
@@ -201,20 +225,86 @@ func TestPublicationCampaignUnderFailureAndRetry(t *testing.T) {
 		}
 	}
 
-	// The noise floor, measured rather than assumed. Two idle publishers
-	// should be identical in every respect this campaign can control; the gap
-	// between them is what a treatment would have to exceed to mean anything,
-	// and it is far too large for the timing half of the rule to be usable
-	// here. Recording the number is the point -- it is the reason this test
-	// makes no timing claim, and it would be dishonest to omit the timing
-	// measurement while relying on the conclusion that it is unusable.
+	if raceDetectorEnabled {
+		// The exact properties above are the whole claim on a race build. The
+		// captures it produced are not evidence and must not be left where CI
+		// will apply the timing rule to them.
+		for name := range worlds {
+			if err := os.Remove(filepath.Join(directory, name+".txt")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Logf("race build: ran %d ticks per world for the exact properties and "+
+			"discarded the captures, because a seal under -race costs more than the "+
+			"interval and the resulting timing would measure the detector", ticksThisBuild())
+		return
+	}
+
+	// Everything past here is a timing claim, so the campaign first establishes
+	// that it was entitled to make one.
+	//
+	// Two preconditions, both enforced rather than logged. An earlier version
+	// logged the noise floor and returned, while CI went on to apply the full
+	// preregistered rule -- timing included -- to whatever captures the run had
+	// produced. That is the wrong way round: a run that failed to keep its
+	// cadence would hand CI captures the rule cannot interpret, and CI would
+	// pass or fail them for reasons that have nothing to do with the protocol.
+	for _, name := range sortedWorlds(worlds) {
+		drift := cadenceDrift(worlds[name])
+		if drift > cadenceTolerance {
+			t.Fatalf("world %s kept no cadence: mean inter-arrival is %.3f of the "+
+				"nominal interval away from it, tolerance %.2f. The loop was sealing "+
+				"as fast as it could rather than following the ticker, so this run's "+
+				"captures are not evidence about emission timing",
+				name, drift, cadenceTolerance)
+		}
+	}
+
+	// The noise floor, measured rather than assumed. Two idle publishers are
+	// identical in every respect this campaign controls, so the gap between
+	// them is what a treatment would have to exceed to mean anything. If the
+	// control pair itself exceeds the registered tolerance, the run has no
+	// usable baseline and its captures establish nothing.
 	controlDrift := meanIntervalDrift(worlds["control-a"], worlds["control-b"])
+	if controlDrift > controlTolerance {
+		t.Fatalf("the control pair differs by %.4f of the nominal interval, "+
+			"registered tolerance %.2f: two idle publishers were not identical, so "+
+			"this run establishes nothing about the treatments", controlDrift, controlTolerance)
+	}
 	t.Logf("noise floor this run: two idle publishers differ by %.4f of the nominal "+
-		"interval, registered tolerance 0.02. This campaign judges cell count, size "+
-		"and destination, which are exact; timing is measured on the WAN campaign.",
-		controlDrift)
+		"interval, registered tolerance %.2f. The captures are written for CI to "+
+		"judge by the full preregistered rule.", controlDrift, controlTolerance)
 	fmt.Fprintf(os.Stderr, "publication campaign wrote %d worlds to %s\n",
 		len(worlds), directory)
+}
+
+func sortedWorlds(worlds map[string]*wire.Capture) []string {
+	names := make([]string, 0, len(worlds))
+	for name := range worlds {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// cadenceDrift reports how far a capture's mean inter-arrival sits from the
+// nominal interval, as a fraction of it. A loop that has fallen off its ticker
+// shows up here as a large number, whatever its captures look like internally.
+func cadenceDrift(capture *wire.Capture) float64 {
+	gaps := capture.Interarrivals()
+	if len(gaps) == 0 {
+		return 0
+	}
+	var total time.Duration
+	for _, gap := range gaps {
+		total += gap
+	}
+	mean := float64(total) / float64(len(gaps))
+	drift := (mean - float64(campaignInterval)) / float64(campaignInterval)
+	if drift < 0 {
+		drift = -drift
+	}
+	return drift
 }
 
 // meanIntervalDrift reports how far two captures' mean inter-arrival times sit

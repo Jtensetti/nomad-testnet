@@ -209,6 +209,17 @@ func TestPublisherToObjectMappingIsNotRecoverableFromDepositOrder(t *testing.T) 
 	if testing.Short() {
 		t.Skip("correlation experiment runs a full mix per trial")
 	}
+	if raceDetectorEnabled {
+		// This is a distribution measurement, not a concurrency test: it runs
+		// no goroutines of its own, so the detector has nothing here to find.
+		// What it does have is thirty-six full mixes of elliptic-curve work,
+		// which the detector's instrumentation multiplies by about eight, and
+		// that alone pushed the package past the ten-minute default timeout.
+		// Drain's concurrency is exercised under -race by the emission and
+		// close tests, and by the shortened campaign.
+		t.Skip("correlation experiment measures a distribution and runs no goroutines; " +
+			"under -race it costs eight times as much and measures nothing more")
+	}
 
 	chance := 1.0 / float64(publisherCount)
 

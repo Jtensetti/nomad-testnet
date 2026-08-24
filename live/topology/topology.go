@@ -552,6 +552,18 @@ func decodeFixed(encoded string, size int) ([]byte, error) {
 	return decoded, nil
 }
 
+// OperatorIdentity decodes an operator's signing key from the signed topology.
+// Callers that verify or accuse an operator must resolve its key this way
+// rather than carrying one alongside, so the key they act on is always the one
+// the topology signature covers.
+func OperatorIdentity(operator Operator) (ed25519.PublicKey, error) {
+	decoded, err := decodeFixed(operator.IdentityKey, ed25519.PublicKeySize)
+	if err != nil {
+		return nil, errors.New("invalid operator identity key")
+	}
+	return ed25519.PublicKey(decoded), nil
+}
+
 // StableOperatorIDs is used in evidence and bootstrap output. It deliberately
 // returns public topology state only.
 func (v Verified) StableOperatorIDs() []string {

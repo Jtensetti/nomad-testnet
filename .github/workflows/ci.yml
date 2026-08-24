@@ -15,10 +15,10 @@ jobs:
         run: sha256sum --check --quiet COMPONENTS.sha256
       - name: Verify generated formatting and module graph
         run: |
-          unformatted="$(gofmt -l cmd live testnet components)"
+          unformatted="$(gofmt -l cmd live testnet components supplychain deploy)"
           if test -n "$unformatted"; then
             printf 'unformatted Go files:\n%s\n' "$unformatted"
-            gofmt -d cmd live testnet components
+            gofmt -d cmd live testnet components supplychain deploy
             exit 1
           fi
           go mod tidy
@@ -71,6 +71,15 @@ jobs:
             echo "publication airlock imports transport, peer selection or scheduling"
             exit 1
           fi
+          # An availability report is an externally observable artefact, so
+          # whatever decides to emit one must be public. If the observer could
+          # reach a query, a basin or a reconstruction, the presence or shape
+          # of a report would carry private activity onto the network.
+          availability_deps="$(go list -deps github.com/Jtensetti/nomad-testnet/live/availability)"
+          if printf '%s\n' "$availability_deps" | grep -Eq 'nomad-(semantic-basins|local-reconstruction|selection-firewall)|nomad-testnet/live/(fetchplan|partialfetch|materialize|publish)'; then
+            echo "availability observer reaches private selection, reconstruction or the reader path"
+            exit 1
+          fi
           materializer_imports="$(go list -f '{{join .Imports "\n"}}' github.com/Jtensetti/nomad-testnet/live/materialize)"
           if printf '%s\n' "$materializer_imports" | grep -Eq '(^net$|nomad-testnet/live/node|nomad-constant-rate-fabric|nomad-selection-firewall|nomad-semantic-basins)'; then
             echo "materializer directly imports network control or query code"
@@ -115,6 +124,24 @@ jobs:
         run: python3 scripts/test-two-world-analysis.py
       - name: Verify the campaign verdict still separates noise from a finding
         run: python3 scripts/wan/test-wan-verdict.py
+      - name: Run the deposit-path experiments and produce campaign evidence
+        run: |
+          # Deliberately not under -race, and this is the run that counts for
+          # both experiments in this package.
+          #
+          # The campaign times emissions against a 150 ms interval calibrated
+          # on the real ~87 ms seal cost. The race detector instruments every
+          # memory access and pushes a seal past the interval, so the loop
+          # stops following its ticker and the capture measures the detector
+          # rather than the protocol. The correlation experiment runs
+          # thirty-six full mixes and no goroutines at all, so the detector has
+          # nothing to find there and costs about eight times as much looking.
+          # Together they took the package past Go's ten-minute default
+          # timeout, which is how this split came about.
+          #
+          # Under -race both are shortened or skipped, and Drain's concurrency
+          # is still covered there by the emission, close and campaign tests.
+          go test -count=1 -timeout 25m ./live/deposit/
       - name: Apply the preregistered rule to the publication campaign
         run: |
           directory=runtime/evidence/publication-campaign
