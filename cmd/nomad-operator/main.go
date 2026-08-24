@@ -14,6 +14,7 @@ import (
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"github.com/Jtensetti/nomad-testnet/live/ceremony"
+	"github.com/Jtensetti/nomad-testnet/live/committee"
 	"github.com/Jtensetti/nomad-testnet/live/epoch"
 	"github.com/Jtensetti/nomad-testnet/live/telemetry"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
@@ -145,16 +146,15 @@ func erase(arguments []string) error {
 	authorityPath := flags.String("authority-key", "", "pinned public authority-key path")
 	networkID := flags.String("network", "", "network identifier")
 	filesystem := flags.String("filesystem", "", "filesystem type of the erased paths, recorded in the statement")
+	sharePath := flags.String("share", "", "retired threshold-share path; must verify against the selected epoch")
 	outputPath := flags.String("out", "", "signed erasure-statement path")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	if *secretPath == "" || *chainPath == "" || *epochNumber == 0 || *authorityPath == "" || *networkID == "" || *filesystem == "" || *outputPath == "" {
-		return errors.New("--secret, --chain, --epoch, --authority-key, --network, --filesystem and --out are required")
+	if *secretPath == "" || *chainPath == "" || *epochNumber == 0 || *authorityPath == "" || *networkID == "" || *filesystem == "" || *sharePath == "" || *outputPath == "" {
+		return errors.New("--secret, --chain, --epoch, --authority-key, --network, --filesystem, --share and --out are required")
 	}
-	if flags.NArg() == 0 {
-		return errors.New("at least one path to erase is required")
-	}
+	erasePaths := append([]string{*sharePath}, flags.Args()...)
 	authority, err := topology.LoadAuthorityKey(*authorityPath)
 	if err != nil {
 		return err
@@ -182,8 +182,12 @@ func erase(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	operator, err := retired.Topology.OperatorByID(keys.OperatorID)
+	if err != nil {
+		return fmt.Errorf("local operator is not a member of retired epoch %d: %w", retired.Epoch, err)
+	}
 	pendingPath := *outputPath + ".pending"
-	if err := validateErasePaths(*chainPath, *secretPath, *authorityPath, *outputPath, pendingPath, flags.Args()); err != nil {
+	if err := validateErasePaths(*chainPath, *secretPath, *authorityPath, *outputPath, pendingPath, erasePaths); err != nil {
 		return err
 	}
 
@@ -201,6 +205,9 @@ func erase(arguments []string) error {
 			return errors.New("existing erasure statement belongs to another operator")
 		}
 		if err := epoch.VerifyErasureStatement(statement, retired); err != nil {
+			return err
+		}
+		if err := statementMatchesPaths(statement, erasePaths); err != nil {
 			return err
 		}
 		if err := chain.RecordErasureStatement(statement, keys.OperatorID); err != nil {
@@ -232,11 +239,18 @@ func erase(arguments []string) error {
 		if intent.OperatorID != keys.OperatorID || intent.Filesystem != *filesystem {
 			return errors.New("pending erasure intent does not match this operator or filesystem")
 		}
-		if err := intentMatchesPaths(intent, flags.Args()); err != nil {
+		if err := intentMatchesPaths(intent, erasePaths); err != nil {
 			return err
 		}
 	} else {
-		intent, err = epoch.NewErasureIntent(retired, keys.OperatorID, flags.Args(), *filesystem, keys.Identity, now)
+		share, err := committee.LoadShare(*sharePath, retired.Certificate, retired.Topology)
+		if err != nil {
+			return fmt.Errorf("verify retired threshold share before erasure: %w", err)
+		}
+		if share.Index != uint32(operator.Index) {
+			return errors.New("retired threshold share belongs to another operator")
+		}
+		intent, err = epoch.NewErasureIntent(retired, keys.OperatorID, erasePaths, *filesystem, keys.Identity, now)
 		if err != nil {
 			return err
 		}
@@ -299,15 +313,59 @@ func intentMatchesPaths(intent epoch.ErasureIntent, paths []string) error {
 	return nil
 }
 
+func statementMatchesPaths(statement epoch.ErasureStatement, paths []string) error {
+	requested := make([]string, 0, len(paths))
+	for _, path := range paths {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		requested = append(requested, filepath.Clean(absolute))
+	}
+	sort.Strings(requested)
+	recorded := make([]string, 0, len(statement.Files))
+	for _, file := range statement.Files {
+		recorded = append(recorded, filepath.Clean(file.Path))
+	}
+	sort.Strings(recorded)
+	if len(requested) != len(recorded) {
+		return errors.New("existing erasure statement names a different path set")
+	}
+	for index := range requested {
+		if requested[index] != recorded[index] {
+			return errors.New("existing erasure statement names a different path set")
+		}
+	}
+	return nil
+}
+
 func validateErasePaths(chainPath, secretPath, authorityPath, outputPath, pendingPath string, paths []string) error {
 	protectedFiles := []string{secretPath, authorityPath, outputPath, pendingPath}
 	protected := make(map[string]struct{}, len(protectedFiles))
+	protectedInodes := make([]os.FileInfo, 0, len(protectedFiles))
 	for _, path := range protectedFiles {
 		absolute, err := filepath.Abs(path)
 		if err != nil {
 			return err
 		}
-		protected[filepath.Clean(absolute)] = struct{}{}
+		clean := filepath.Clean(absolute)
+		protected[clean] = struct{}{}
+		if info, err := os.Lstat(clean); err == nil {
+			protectedInodes = append(protectedInodes, info)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if err := filepath.Walk(chainPath, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			protectedInodes = append(protectedInodes, info)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("inspect protected epoch chain: %w", err)
 	}
 	seen := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
@@ -325,6 +383,18 @@ func validateErasePaths(chainPath, secretPath, authorityPath, outputPath, pendin
 		}
 		if insideChain {
 			return fmt.Errorf("refusing to erase epoch-chain path %q", path)
+		}
+		if info, err := os.Lstat(clean); err == nil {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("refusing non-regular erasure path %q", path)
+			}
+			for _, protectedInfo := range protectedInodes {
+				if os.SameFile(info, protectedInfo) {
+					return fmt.Errorf("refusing erasure path %q because it aliases protected state", path)
+				}
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
 		if _, duplicate := seen[clean]; duplicate {
 			return fmt.Errorf("duplicate erasure path %q", path)

@@ -1,5 +1,12 @@
 # Nomad operator onboarding
 
+> **Draft handoff, not yet an operator-ready release.** The lifecycle
+> controller and commands described here are on draft PR #16. The checked
+> descriptor ceremony exists, but automatic artifact exchange, automatic
+> import by the rotation controller and exact-head CI are not yet complete.
+> Operators may use this document to estimate requirements, but must not
+> collect production evidence against it yet.
+
 You are being asked to run a Nomad mix operator. This document is written
 for you, the operator's administrator, and is meant to be followed without
 reading the rest of the project.
@@ -110,17 +117,88 @@ The topology names an absolute start time. Run:
 
 ```
 nomad-dkg --topology ./topology.json --authority-key ./authority.pub \
-  --secret /etc/nomad/operator-secret.json \
-  --state /var/lib/nomad/dkg --share /etc/nomad/share.json \
-  --certificate ./certificate.json --listen :8443
+  --secrets /etc/nomad/operator-secret.json \
+  --state /var/lib/nomad/dkg \
+  --share-out /var/lib/nomad/shares/epoch-N.share.json \
+  --certificate-out ./certificate.json --listen :8443 \
+  --tls-certificate /etc/nomad/tls/dkg.crt \
+  --tls-private-key /etc/nomad/tls/dkg.key
 ```
 
 Every configured operator must be online and complete the ceremony; there is
 no partial success. If it aborts, do not improvise — wait for the next
-public retry offset. `/etc/nomad/share.json` is your threshold share and is
+public retry offset. The `epoch-N.share.json` output is your threshold share and is
 as private as your operator secret.
 
-## Step 5 — Serve
+## Step 5 — Sign, assemble and import the epoch
+
+After the DKG, the coordinator creates one unsigned descriptor from the exact
+signed topology and certified DKG result:
+
+```
+nomad-lifecycle descriptor-init \
+  --chain /var/lib/nomad/epoch-chain \
+  --revocations /var/lib/nomad/revocations \
+  --authority-key ./authority.pub --network <network-id> \
+  --transition scheduled \
+  --activate-at <previous-retire-at> --retire-at <new-public-boundary> \
+  --topology ./topology.json --dkg-certificate ./certificate.json \
+  --out ./epoch-draft.json
+```
+
+Every required operator receives the same `epoch-draft.json` and checks its
+digest and public boundaries out of band. An operator in epoch N approves the
+transition:
+
+```
+nomad-lifecycle descriptor-approve \
+  --chain /var/lib/nomad/epoch-chain \
+  --revocations /var/lib/nomad/revocations \
+  --authority-key ./authority.pub --network <network-id> \
+  --secret /etc/nomad/operator-secret.json \
+  --journal /var/lib/nomad/signature-journal \
+  --in ./epoch-draft.json --out ./approval-<operator>.json
+```
+
+An operator in N+1 activates it with the corresponding
+`descriptor-activate` command and an `activation-<operator>.json` output. An
+operator present in both epochs performs both roles. The journal is durable
+security state: never delete it, roll it back from a snapshot or use a second
+journal for the same identity. It permits an idempotent repeat for the same
+digest and permanently refuses a different digest for the same epoch and
+role.
+
+The coordinator combines the detached public artifacts. Assembly fails unless
+the previous committee reaches its required quorum, every incoming operator
+activated, every signature targets the exact draft and no signer is duplicated
+or revoked:
+
+```
+nomad-lifecycle descriptor-assemble \
+  --chain /var/lib/nomad/epoch-chain \
+  --revocations /var/lib/nomad/revocations \
+  --authority-key ./authority.pub --network <network-id> \
+  --in ./epoch-draft.json --out ./epoch-descriptor.json \
+  ./approval-*.json ./activation-*.json
+```
+
+Obtain the fully signed `epoch-descriptor.json` through the public lifecycle
+channel. Import it into the same persisted chain the share service will read:
+
+```
+install -d -m 0700 /var/lib/nomad/epoch-chain /var/lib/nomad/revocations
+nomad-lifecycle epoch-import \
+  --chain /var/lib/nomad/epoch-chain \
+  --revocations /var/lib/nomad/revocations \
+  --authority-key ./authority.pub \
+  --network <network-id> \
+  ./epoch-descriptor.json
+```
+
+This verifies the complete descriptor, including the signed topology, DKG
+certificate, previous-epoch approvals and successor activations. It does not
+activate early: before `activate_at` the chain reports READY, and after the
+public boundary it reports ACTIVE.
 
 Start the node, share service and partial-fetch endpoints per
 `deploy/MULTI_OPERATOR.md`. Your host now carries fixed-cadence traffic
@@ -136,15 +214,26 @@ retires:
 ```
 nomad-operator erase \
   --secret /etc/nomad/operator-secret.json \
-  --epoch-descriptor ./epoch-N.json --authority-key ./authority.pub \
+  --chain /var/lib/nomad/epoch-chain --epoch N \
+  --authority-key ./authority.pub \
   --network <network-id> --filesystem ext4 \
+  --share /var/lib/nomad/shares/epoch-N.share.json \
   --out ./erasure-N.json \
-  /etc/nomad/share.json /var/lib/nomad/dkg
+  /var/lib/nomad/dkg-N/private-state.json
 ```
 
-This overwrites and unlinks the retired epoch's private material and emits a
-signed statement of exactly what was destroyed. It refuses to run before the
-retirement boundary. Send the statement; keep nothing else.
+`--share` is mandatory and must decode as this operator's threshold share for
+the selected retired epoch; a dummy or foreign file cannot satisfy the normal
+tool path. Additional positional targets must be regular files. Directories,
+symlinks, duplicate paths, the operator secret, authority key, epoch chain,
+output files and hard-link aliases to protected state are refused. The command
+writes a signed intent before destruction, overwrites/unlinks the named files,
+fsyncs parent directories, persists the statement and records the retirement
+acknowledgement. A retry resumes from the original signed intent.
+
+This does not yet establish the full forward-secrecy claim: the live later-key-
+compromise experiment against retained DKG state is still missing. Do not
+archive or back up epoch DKG state while that gap is open.
 
 ## What your host may retain, and for how long
 

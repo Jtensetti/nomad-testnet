@@ -80,6 +80,7 @@ func TestRecoveryDrill(t *testing.T) {
 
 	// --- Procedure 3: replacement via emergency membership transition. ---
 	replacement := newNamedFixture(t, "drill-replacement", 5)
+	replacement.Operators[compromised].ID = "op-f"
 	incoming := &fixture{AuthorityPublic: outgoing.AuthorityPublic, AuthorityPrivate: outgoing.AuthorityPrivate}
 	incoming.Operators = append(incoming.Operators, outgoing.Operators[:compromised]...)
 	incoming.Operators = append(incoming.Operators, replacement.Operators[compromised])
@@ -99,14 +100,14 @@ func TestRecoveryDrill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tainted, err := Approve(successor, genesis, genesis.Topology.Document.Operators[compromised], outgoing.Operators[compromised].Identity)
+	tainted, err := signApproval(successor, genesis, genesis.Topology.Document.Operators[compromised], outgoing.Operators[compromised].Identity)
 	if err != nil {
 		t.Fatal(err)
 	}
 	taintedDescriptor := successor
 	taintedDescriptor.Approvals = []Approval{tainted}
 	for index, member := range network2.Document.Operators {
-		activation, err := Activate(taintedDescriptor, member, incoming.Operators[index].Identity)
+		activation, err := signActivation(taintedDescriptor, member, incoming.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +118,7 @@ func TestRecoveryDrill(t *testing.T) {
 	}
 
 	for _, index := range []int{0, 1, 2} {
-		approval, err := Approve(successor, genesis, genesis.Topology.Document.Operators[index], outgoing.Operators[index].Identity)
+		approval, err := signApproval(successor, genesis, genesis.Topology.Document.Operators[index], outgoing.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -128,7 +129,7 @@ func TestRecoveryDrill(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		activation, err := journal.ActivateWithJournal(successor, member, incoming.Operators[index].Identity)
+		activation, err := journal.activateWithJournalUnchecked(successor, member, incoming.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}

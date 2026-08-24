@@ -24,9 +24,12 @@ coordinated epoch change rather than a silent split.
 | `nomad-epoch-descriptor-digest-v1` | v1 only | digest domain separator | digest mismatch, descriptor refused |
 | `nomad-epoch-activation-v1` | v1 only | activation statement | activation refused |
 | `nomad-epoch-approval-v1` | v1 only | quorum approval | approval not counted toward quorum |
+| `nomad-epoch-signature-artifact-v1` | v1 only | detached approval or activation artifact | artifact refused before descriptor assembly |
 | `nomad-epoch-erasure-v1` | v1 only | erasure statement | statement refused |
+| `nomad-epoch-erasure-intent-v1` | v1 only | operator-local crash-recovery record | destructive phase does not start or resume |
 | `nomad-dkg-manifest-v1` | v1 only | DKG session manifest | DKG does not start |
 | `nomad-dkg-envelope-v1` | v1 only | DKG transport envelope | packet refused |
+| `nomad-dkg-discard-v1` | v1 only | signed failed-attempt share-discard evidence | next public retry is refused |
 | `nomad-dkg-result-vote-v1` | v1 only | DKG result vote | vote not counted |
 | `nomad-dkg-certificate-v1` | v1 only | committee certificate | certificate refused, no committee |
 | `nomad-threshold-share-v2` | v2 only | operator-local threshold share | share refused before first use |

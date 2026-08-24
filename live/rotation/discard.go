@@ -93,10 +93,10 @@ func VerifyDiscard(statement DiscardStatement, expectedOperatorID string, identi
 
 // DiscardFailedShare is a crash-resumable three-phase local transaction:
 //
-//   final absent, .pending present: original digest is durably pinned;
-//   .erasing present: the original path has been moved to quarantine and may
-//                     already be partly/fully overwritten;
-//   final present: quarantine was unlinked and directory metadata synced.
+//	final absent, .pending present: original digest is durably pinned;
+//	.erasing present: the original path has been moved to quarantine and may
+//	                  already be partly/fully overwritten;
+//	final present: quarantine was unlinked and directory metadata synced.
 //
 // The DKG journal and public certificate are retained as failure evidence.
 func DiscardFailedShare(networkID string, epochNumber uint64, attempt int, topologyDigest, operatorID, sharePath, statementPath string, identity ed25519.PrivateKey, now time.Time) (DiscardStatement, error) {
@@ -242,7 +242,7 @@ func createDiscardIntent(networkID string, epochNumber uint64, attempt int, topo
 		TopologyDigest: topologyDigest, OperatorID: operatorID, File: filepath.Base(sharePath),
 		SizeBytes: info.Size(), FileSHA256: hex.EncodeToString(digest[:]),
 		DiscardedAt: now.UTC().Truncate(time.Second).Format(time.RFC3339),
-		Method: "overwrite-random-then-unlink", Limitations: DiscardLimitations,
+		Method:      "overwrite-random-then-unlink", Limitations: DiscardLimitations,
 	}
 	message, err := discardMessage(statement)
 	if err != nil {

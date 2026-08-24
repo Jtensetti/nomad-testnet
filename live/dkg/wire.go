@@ -9,6 +9,7 @@ import (
 	"io"
 	"sort"
 
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"go.dedis.ch/kyber/v4"
 	"go.dedis.ch/kyber/v4/group/edwards25519"
 	dkg "go.dedis.ch/kyber/v4/share/dkg/pedersen"
@@ -254,6 +255,9 @@ func requireCanonical(packet dkg.Packet, original []byte) (dkg.Packet, error) {
 }
 
 func strictJSON(encoded []byte, destination any) error {
+	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
+		return fmt.Errorf("DKG packet is ambiguous: %w", err)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {

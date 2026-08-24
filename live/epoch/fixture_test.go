@@ -188,7 +188,7 @@ func (f *fixture) buildDescriptor(t *testing.T, previous *Verified, previousFixt
 			if err != nil {
 				t.Fatal(err)
 			}
-			approval, err := Approve(descriptor, *previous, operator, previousFixture.Operators[index].Identity)
+			approval, err := signApproval(descriptor, *previous, operator, previousFixture.Operators[index].Identity)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -196,7 +196,7 @@ func (f *fixture) buildDescriptor(t *testing.T, previous *Verified, previousFixt
 		}
 	}
 	for index, operator := range network.Document.Operators {
-		activation, err := Activate(descriptor, operator, f.Operators[index].Identity)
+		activation, err := signActivation(descriptor, operator, f.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}

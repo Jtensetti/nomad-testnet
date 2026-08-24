@@ -110,7 +110,7 @@ func (chain *Chain) planAtLocked(now time.Time, policy Policy) Plan {
 	if now.Before(tip.ActivateAt) {
 		return Plan{
 			Action: ActionAwaitActivation, Epoch: tip.Epoch, Attempt: 1,
-			DueAt: tip.ActivateAt,
+			DueAt:  tip.ActivateAt,
 			Reason: "successor assembled and waiting for its public activation boundary",
 		}
 	}

@@ -82,11 +82,10 @@ func (journal *Journal) record(networkID string, epochNumber uint64, role string
 	return syncDir(journal.root)
 }
 
-// ActivateWithJournal is the only supported way to produce an activation
-// signature. It derives the network and epoch from the descriptor's own
-// embedded topology rather than trusting the caller, records the intent, and
-// signs only if the journal permits it.
-func (journal *Journal) ActivateWithJournal(descriptor Descriptor, operator topology.Operator, identity ed25519.PrivateKey) (Activation, error) {
+// activateWithJournalUnchecked is retained only for focused journal unit
+// tests. Production signing uses CreateActivationArtifact, which validates
+// the full draft before recording the digest.
+func (journal *Journal) activateWithJournalUnchecked(descriptor Descriptor, operator topology.Operator, identity ed25519.PrivateKey) (Activation, error) {
 	if journal == nil {
 		return Activation{}, errors.New("a signature journal is required to activate an epoch")
 	}
@@ -101,12 +100,12 @@ func (journal *Journal) ActivateWithJournal(descriptor Descriptor, operator topo
 	if err := journal.record(networkID, epochNumber, roleActivation, digest); err != nil {
 		return Activation{}, err
 	}
-	return Activate(descriptor, operator, identity)
+	return signActivation(descriptor, operator, identity)
 }
 
-// ApproveWithJournal is the only supported way to produce a transition
-// approval, with the same fail-closed journal semantics.
-func (journal *Journal) ApproveWithJournal(descriptor Descriptor, previous Verified, operator topology.Operator, identity ed25519.PrivateKey) (Approval, error) {
+// approveWithJournalUnchecked is the approval-side journal primitive for
+// package tests. It is not part of the exported production API.
+func (journal *Journal) approveWithJournalUnchecked(descriptor Descriptor, previous Verified, operator topology.Operator, identity ed25519.PrivateKey) (Approval, error) {
 	if journal == nil {
 		return Approval{}, errors.New("a signature journal is required to approve a transition")
 	}
@@ -121,5 +120,5 @@ func (journal *Journal) ApproveWithJournal(descriptor Descriptor, previous Verif
 	if err := journal.record(networkID, epochNumber, roleApproval, digest); err != nil {
 		return Approval{}, err
 	}
-	return Approve(descriptor, previous, operator, identity)
+	return signApproval(descriptor, previous, operator, identity)
 }

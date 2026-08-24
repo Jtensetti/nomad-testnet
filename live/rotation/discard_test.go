@@ -70,7 +70,7 @@ func TestPendingDiscardResumesAfterCrashBeforeDestruction(t *testing.T) {
 		TopologyDigest: topologyDigest, OperatorID: "operator-a", File: filepath.Base(share),
 		SizeBytes: int64(len(contents)), FileSHA256: hex.EncodeToString(digest[:]),
 		DiscardedAt: time.Date(2026, 8, 21, 4, 0, 0, 0, time.UTC).Format(time.RFC3339),
-		Method: "overwrite-random-then-unlink", Limitations: DiscardLimitations,
+		Method:      "overwrite-random-then-unlink", Limitations: DiscardLimitations,
 	}
 	message, err := discardMessage(statement)
 	if err != nil {
@@ -108,7 +108,7 @@ func TestPendingDiscardRefusesChangedShare(t *testing.T) {
 		TopologyDigest: topologyDigest, OperatorID: "operator-a", File: filepath.Base(share),
 		SizeBytes: int64(len(contents)), FileSHA256: hex.EncodeToString(digest[:]),
 		DiscardedAt: time.Date(2026, 8, 21, 4, 0, 0, 0, time.UTC).Format(time.RFC3339),
-		Method: "overwrite-random-then-unlink", Limitations: DiscardLimitations,
+		Method:      "overwrite-random-then-unlink", Limitations: DiscardLimitations,
 	}
 	message, _ := discardMessage(statement)
 	statement.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(identity, message))

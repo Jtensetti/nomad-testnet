@@ -12,6 +12,7 @@ import (
 	"runtime"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -63,6 +64,9 @@ func LoadShare(path string, certificate Verified, network topology.Verified) (mi
 func VerifyShare(encoded []byte, certificate Verified, network topology.Verified) (mix.MemberSecret, error) {
 	if len(encoded) == 0 || len(encoded) > MaximumFileBytes {
 		return mix.MemberSecret{}, errors.New("threshold share is empty or too large")
+	}
+	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
+		return mix.MemberSecret{}, fmt.Errorf("threshold share is ambiguous: %w", err)
 	}
 	var file ShareFile
 	decoder := json.NewDecoder(bytes.NewReader(encoded))

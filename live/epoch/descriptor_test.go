@@ -112,14 +112,14 @@ func TestVerifyRejectsEpochSkip(t *testing.T) {
 	}
 	for index := 0; index < ApprovalQuorum(genesis); index++ {
 		operator, _ := genesis.Topology.Operator(uint16(index))
-		approval, err := Approve(descriptor, genesis, operator, f.Operators[index].Identity)
+		approval, err := signApproval(descriptor, genesis, operator, f.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
 		descriptor.Approvals = append(descriptor.Approvals, approval)
 	}
 	for index, operator := range network3.Document.Operators {
-		activation, err := Activate(descriptor, operator, f.Operators[index].Identity)
+		activation, err := signActivation(descriptor, operator, f.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -151,7 +151,7 @@ func TestVerifyRejectsTransplantedApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	operator, _ := genesis.Topology.Operator(0)
-	otherApproval, err := Approve(other, genesis, operator, f.Operators[0].Identity)
+	otherApproval, err := signApproval(other, genesis, operator, f.Operators[0].Identity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,14 +180,14 @@ func TestVerifyRejectsScheduledBoundaryMismatch(t *testing.T) {
 	}
 	for index := 0; index < ApprovalQuorum(genesis); index++ {
 		operator, _ := genesis.Topology.Operator(uint16(index))
-		approval, err := Approve(descriptor, genesis, operator, f.Operators[index].Identity)
+		approval, err := signApproval(descriptor, genesis, operator, f.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
 		descriptor.Approvals = append(descriptor.Approvals, approval)
 	}
 	for index, operator := range network.Document.Operators {
-		activation, err := Activate(descriptor, operator, f.Operators[index].Identity)
+		activation, err := signActivation(descriptor, operator, f.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,7 +245,7 @@ func TestVerifyRejectsActivationBeforeDKGCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index, operator := range network.Document.Operators {
-		activation, err := Activate(descriptor, operator, f.Operators[index].Identity)
+		activation, err := signActivation(descriptor, operator, f.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -340,7 +340,7 @@ func TestApprovalQuorumCannotBeForgedByOneOperator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	approval, err := Approve(descriptor, genesis, operator, f.Operators[1].Identity)
+	approval, err := signApproval(descriptor, genesis, operator, f.Operators[1].Identity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +351,7 @@ func TestApprovalQuorumCannotBeForgedByOneOperator(t *testing.T) {
 		{OperatorID: approval.OperatorID, Index: approval.Index + 2<<16, Signature: approval.Signature},
 	}
 	for index, member := range network2.Document.Operators {
-		activation, err := Activate(descriptor, member, f.Operators[index].Identity)
+		activation, err := signActivation(descriptor, member, f.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -392,6 +392,7 @@ func TestMembershipTransitionRequiresPreviousCommittee(t *testing.T) {
 	// Epoch 2 keeps four operators and replaces the fifth with a newcomer
 	// holding genuinely different keys.
 	replacement := newNamedFixture(t, "replacement", 5)
+	replacement.Operators[4].ID = "op-f"
 	incoming := &fixture{AuthorityPublic: outgoing.AuthorityPublic, AuthorityPrivate: outgoing.AuthorityPrivate}
 	incoming.Operators = append(incoming.Operators, outgoing.Operators[:4]...)
 	incoming.Operators = append(incoming.Operators, replacement.Operators[4])
@@ -409,14 +410,14 @@ func TestMembershipTransitionRequiresPreviousCommittee(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			approval, err := Approve(descriptor, genesis, operator, signWith.Operators[index].Identity)
+			approval, err := signApproval(descriptor, genesis, operator, signWith.Operators[index].Identity)
 			if err != nil {
 				t.Fatal(err)
 			}
 			descriptor.Approvals = append(descriptor.Approvals, approval)
 		}
 		for index, member := range network2.Document.Operators {
-			activation, err := Activate(descriptor, member, incoming.Operators[index].Identity)
+			activation, err := signActivation(descriptor, member, incoming.Operators[index].Identity)
 			if err != nil {
 				t.Fatal(err)
 			}

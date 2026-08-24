@@ -78,14 +78,29 @@ recovery exactly when it is needed.
    change membership by itself.
 4. Every operator of N+1 inspects and attests the exact draft.
 5. N+1 runs its DKG and produces a certificate.
-6. **A quorum of the previous epoch's operators approves the transition.**
+6. The coordinator runs `nomad-lifecycle descriptor-init` against the exact
+   successor topology and DKG certificate. It distributes that unsigned draft
+   and its digest through the public lifecycle channel.
+7. **A quorum of the previous epoch's operators approves the transition** with
+   `descriptor-approve`. Each operator verifies the complete unsigned draft
+   against its pinned authority, chain and revocation store before its durable
+   journal records the digest.
    This is the step that makes membership a protocol action rather than a
    configuration edit: without `max(previous_threshold, majority)` distinct
    previous-epoch approvals, no verifier accepts the successor.
-7. Every operator of N+1 signs the activation. Signing goes through the
-   local journal, which refuses a second distinct descriptor for the epoch.
-8. Distribute the descriptor. Verifiers append it; it activates at its
-   public boundary.
+8. Every operator of N+1 runs `descriptor-activate` over the same unsigned
+   draft. Signing goes through the local journal, which refuses a second
+   distinct descriptor for the epoch and role.
+9. The coordinator runs `descriptor-assemble` over the detached artifacts.
+   The command cryptographically verifies quorum, complete incoming
+   activation, membership, role, digest and revocation state before emitting
+   a descriptor.
+10. Distribute the descriptor. Verifiers run `epoch-import`; the descriptor
+    reaches READY immediately but becomes ACTIVE only at its public boundary.
+
+The current draft still requires a public artifact-distribution mechanism to
+move the files between independent hosts. Do not replace that missing
+automation with shared private credentials or a coordinator-held operator key.
 
 If more previous-epoch operators are lost than the quorum tolerates, no
 valid transition exists and the network must re-bootstrap from a new
@@ -123,8 +138,11 @@ transition retires an epoch early.
 1. Confirm the epoch is no longer ACTIVE. The share service refuses
    threshold work outside the serving window; a refusal is expected, not a
    fault.
-2. Run the erasure procedure over the epoch's private share file and its
-   DKG journal. Each file is overwritten, synced and unlinked.
+2. Run `nomad-operator erase` with `--chain`, `--epoch` and the mandatory
+   `--share` path. The share must cryptographically match the retired epoch
+   and local operator. Name any additional epoch-private DKG files
+   individually; a directory is deliberately refused. Each accepted file is
+   covered by the pre-erasure intent, overwritten, synced and unlinked.
 3. Keep the signed erasure statement. It records each file's pre-erasure
    digest and size, the method, the filesystem, and the standard
    limitations text.
@@ -136,6 +154,10 @@ levelling, or where snapshots or backups exist, it does not guarantee
 physical destruction. The operative guarantee is destruction within an
 encrypted volume, so operators must use full-disk encryption and must not
 back up the share directory. Any claim beyond that is unsupported.
+
+The current drill does not test later compromise of the static DKG identity
+against retained live DKG packets. Therefore this procedure is not yet
+production forward-secrecy evidence, and PROD-08 remains PARTIAL.
 
 ## 6. Interrupted ceremony or restarted process
 
@@ -158,6 +180,6 @@ served. Run it with:
 
     go test -race ./live/epoch/ -run TestRecoveryDrill -v
 
-The drill is protocol-level. It does not establish that independent
+The drill and detached-assembly tests are protocol-level. They do not establish that independent
 administrators performed these steps on separate hosts; that remains
 external (see `nomad-protocol/production/EXTERNAL_BLOCKERS.md`, EB-2).

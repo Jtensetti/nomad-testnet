@@ -16,6 +16,7 @@ import (
 	"sort"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -239,6 +240,9 @@ func Encode(certificate Certificate) ([]byte, error) {
 func Decode(encoded []byte, network topology.Verified) (Certificate, Verified, error) {
 	if len(encoded) == 0 || len(encoded) > MaximumFileBytes {
 		return Certificate{}, Verified{}, errors.New("DKG certificate is empty or too large")
+	}
+	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
+		return Certificate{}, Verified{}, fmt.Errorf("DKG certificate is ambiguous: %w", err)
 	}
 	var certificate Certificate
 	decoder := json.NewDecoder(bytes.NewReader(encoded))

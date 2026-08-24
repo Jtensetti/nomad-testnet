@@ -23,7 +23,7 @@ func (planner fixedPlanner) PlanAtForOperator(time.Time, epoch.Policy, string) (
 func baseConfig(t *testing.T, planned epoch.Plan) Config {
 	t.Helper()
 	root := t.TempDir()
-	_, authority, err := ed25519.GenerateKey(nil)
+	authority, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

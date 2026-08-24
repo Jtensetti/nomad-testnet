@@ -98,7 +98,10 @@ func run() error {
 		return err
 	}
 
-	epochDescriptor, err := buildGenesisEpochDescriptor(network, topologyBytes, certificateBytes, identities)
+	epochDescriptor, err := buildGenesisEpochDescriptor(
+		network, topologyBytes, certificateBytes, identities, authority,
+		filepath.Join(*output, ".epoch-signing-journals"),
+	)
 	if err != nil {
 		return err
 	}
@@ -161,7 +164,7 @@ func run() error {
 	}{network.Document.NetworkID, generated.Descriptor.StreamID, fmt.Sprintf("%x", certified.Digest)})
 }
 
-func buildGenesisEpochDescriptor(network topology.Verified, topologyBytes, certificateBytes []byte, identities map[string]ed25519.PrivateKey) (epoch.Descriptor, error) {
+func buildGenesisEpochDescriptor(network topology.Verified, topologyBytes, certificateBytes []byte, identities map[string]ed25519.PrivateKey, authority ed25519.PublicKey, journalRoot string) (epoch.Descriptor, error) {
 	dkgStart, err := time.Parse(time.RFC3339, network.Document.DKG.StartAt)
 	if err != nil {
 		return epoch.Descriptor{}, err
@@ -173,18 +176,30 @@ func buildGenesisEpochDescriptor(network topology.Verified, topologyBytes, certi
 	if err != nil {
 		return epoch.Descriptor{}, err
 	}
-	for _, operator := range network.Document.Operators {
+	if err := os.Mkdir(journalRoot, 0o700); err != nil {
+		return epoch.Descriptor{}, err
+	}
+	artifacts := make([]epoch.SignatureArtifact, 0, len(network.Document.Operators))
+	for index, operator := range network.Document.Operators {
 		identity, exists := identities[operator.ID]
 		if !exists {
 			return epoch.Descriptor{}, fmt.Errorf("missing fixture identity for epoch activation by %s", operator.ID)
 		}
-		activation, err := epoch.Activate(descriptor, operator, identity)
+		journal, err := epoch.OpenJournal(filepath.Join(journalRoot, fmt.Sprintf("operator-%03d", index)))
 		if err != nil {
 			return epoch.Descriptor{}, err
 		}
-		descriptor.Activations = append(descriptor.Activations, activation)
+		artifact, err := journal.CreateActivationArtifact(descriptor, authority, nil, nil, operator.ID, identity)
+		if err != nil {
+			return epoch.Descriptor{}, err
+		}
+		artifacts = append(artifacts, artifact)
 	}
-	return descriptor, nil
+	_, verified, err := epoch.Assemble(descriptor, artifacts, authority, nil, nil)
+	if err != nil {
+		return epoch.Descriptor{}, err
+	}
+	return verified.Descriptor, nil
 }
 
 func splitList(value string) []string {

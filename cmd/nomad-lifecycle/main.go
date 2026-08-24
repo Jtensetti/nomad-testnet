@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jtensetti/nomad-testnet/live/committee"
 	"github.com/Jtensetti/nomad-testnet/live/epoch"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
@@ -25,9 +26,17 @@ func main() {
 
 func run(arguments []string) error {
 	if len(arguments) == 0 {
-		return errors.New("required subcommand: epoch-import, plan, revoke-init, revoke-sign or revoke-accept")
+		return errors.New("required subcommand: descriptor-init, descriptor-approve, descriptor-activate, descriptor-assemble, epoch-import, plan, revoke-init, revoke-sign or revoke-accept")
 	}
 	switch arguments[0] {
+	case "descriptor-init":
+		return descriptorInit(arguments[1:])
+	case "descriptor-approve":
+		return descriptorSign(arguments[1:], true)
+	case "descriptor-activate":
+		return descriptorSign(arguments[1:], false)
+	case "descriptor-assemble":
+		return descriptorAssemble(arguments[1:])
 	case "epoch-import":
 		return importEpochs(arguments[1:])
 	case "plan":
@@ -41,6 +50,238 @@ func run(arguments []string) error {
 	default:
 		return fmt.Errorf("unknown subcommand %q", arguments[0])
 	}
+}
+
+type descriptorContext struct {
+	Authority ed25519.PublicKey
+	Previous  *epoch.Verified
+	Revoked   epoch.RevocationSet
+}
+
+type descriptorResult struct {
+	NetworkID string `json:"network_id"`
+	Epoch     uint64 `json:"epoch"`
+	Digest    string `json:"descriptor_digest"`
+}
+
+func descriptorInit(arguments []string) error {
+	flags := flag.NewFlagSet("descriptor-init", flag.ContinueOnError)
+	chainPath := flags.String("chain", "", "persisted verified epoch-chain directory")
+	revocationPath := flags.String("revocations", "", "persisted accepted-revocation directory")
+	authorityPath := flags.String("authority-key", "", "pinned authority public-key path")
+	networkID := flags.String("network", "", "network identifier")
+	transition := flags.String("transition", "", "genesis, scheduled or emergency")
+	activateAt := flags.String("activate-at", "", "public activation boundary in canonical RFC3339")
+	retireAt := flags.String("retire-at", "", "public retirement boundary in canonical RFC3339")
+	topologyPath := flags.String("topology", "", "authority-signed successor topology")
+	certificatePath := flags.String("dkg-certificate", "", "all-operator-certified successor DKG certificate")
+	outputPath := flags.String("out", "", "new unsigned descriptor draft")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *chainPath == "" || *revocationPath == "" || *authorityPath == "" || *networkID == "" ||
+		*transition == "" || *activateAt == "" || *retireAt == "" || *topologyPath == "" || *certificatePath == "" || *outputPath == "" {
+		return errors.New("--chain, --revocations, --authority-key, --network, --transition, --activate-at, --retire-at, --topology, --dkg-certificate and --out are required")
+	}
+	authority, err := topology.LoadAuthorityKey(*authorityPath)
+	if err != nil {
+		return err
+	}
+	topologyBytes, err := readArtifact(*topologyPath, topology.MaximumFileBytes)
+	if err != nil {
+		return err
+	}
+	network, err := topology.Verify(topologyBytes, authority, time.Time{})
+	if err != nil {
+		return fmt.Errorf("verify successor topology: %w", err)
+	}
+	if network.Document.NetworkID != *networkID {
+		return errors.New("successor topology belongs to a different network")
+	}
+	context, err := loadDescriptorContext(*chainPath, *revocationPath, *authorityPath, *networkID, network.Document.Epoch)
+	if err != nil {
+		return err
+	}
+	certificateBytes, err := readArtifact(*certificatePath, committee.MaximumFileBytes)
+	if err != nil {
+		return err
+	}
+	descriptor, err := epoch.New(context.Previous, *transition, *activateAt, *retireAt, topologyBytes, certificateBytes)
+	if err != nil {
+		return err
+	}
+	verified, err := epoch.ValidateUnsignedDraft(descriptor, context.Authority, context.Previous, context.Revoked)
+	if err != nil {
+		return err
+	}
+	encoded, err := epoch.Encode(descriptor)
+	if err != nil {
+		return err
+	}
+	if err := writeNew(*outputPath, encoded, 0o644); err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(descriptorResult{
+		NetworkID: verified.NetworkID, Epoch: verified.Epoch, Digest: fmt.Sprintf("%x", verified.Digest),
+	})
+}
+
+func descriptorSign(arguments []string, approval bool) error {
+	name := "descriptor-activate"
+	if approval {
+		name = "descriptor-approve"
+	}
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	chainPath := flags.String("chain", "", "persisted verified epoch-chain directory")
+	revocationPath := flags.String("revocations", "", "persisted accepted-revocation directory")
+	authorityPath := flags.String("authority-key", "", "pinned authority public-key path")
+	networkID := flags.String("network", "", "network identifier")
+	secretPath := flags.String("secret", "", "local operator secret path")
+	journalPath := flags.String("journal", "", "durable local anti-equivocation journal directory")
+	inputPath := flags.String("in", "", "unsigned descriptor draft")
+	outputPath := flags.String("out", "", "new detached signature artifact")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *chainPath == "" || *revocationPath == "" || *authorityPath == "" || *networkID == "" ||
+		*secretPath == "" || *journalPath == "" || *inputPath == "" || *outputPath == "" {
+		return errors.New("--chain, --revocations, --authority-key, --network, --secret, --journal, --in and --out are required")
+	}
+	encodedDraft, err := readArtifact(*inputPath, epoch.MaximumFileBytes)
+	if err != nil {
+		return err
+	}
+	descriptor, err := epoch.DecodeDescriptor(encodedDraft)
+	if err != nil {
+		return err
+	}
+	claimedNetwork, targetEpoch, err := epoch.DescriptorIdentity(encodedDraft)
+	if err != nil {
+		return err
+	}
+	if claimedNetwork != *networkID {
+		return errors.New("descriptor draft belongs to a different network")
+	}
+	context, err := loadDescriptorContext(*chainPath, *revocationPath, *authorityPath, *networkID, targetEpoch)
+	if err != nil {
+		return err
+	}
+	keys, err := topology.LoadPrivateKeys(*secretPath)
+	if err != nil {
+		return err
+	}
+	journal, err := epoch.OpenJournal(*journalPath)
+	if err != nil {
+		return err
+	}
+	var artifact epoch.SignatureArtifact
+	if approval {
+		artifact, err = journal.CreateApprovalArtifact(descriptor, context.Authority, context.Previous, context.Revoked, keys.OperatorID, keys.Identity)
+	} else {
+		artifact, err = journal.CreateActivationArtifact(descriptor, context.Authority, context.Previous, context.Revoked, keys.OperatorID, keys.Identity)
+	}
+	if err != nil {
+		return err
+	}
+	encoded, err := epoch.EncodeSignatureArtifact(artifact)
+	if err != nil {
+		return err
+	}
+	if err := writeNew(*outputPath, encoded, 0o644); err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(artifact)
+}
+
+func descriptorAssemble(arguments []string) error {
+	flags := flag.NewFlagSet("descriptor-assemble", flag.ContinueOnError)
+	chainPath := flags.String("chain", "", "persisted verified epoch-chain directory")
+	revocationPath := flags.String("revocations", "", "persisted accepted-revocation directory")
+	authorityPath := flags.String("authority-key", "", "pinned authority public-key path")
+	networkID := flags.String("network", "", "network identifier")
+	inputPath := flags.String("in", "", "unsigned descriptor draft")
+	outputPath := flags.String("out", "", "new fully signed descriptor")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if *chainPath == "" || *revocationPath == "" || *authorityPath == "" || *networkID == "" || *inputPath == "" || *outputPath == "" || flags.NArg() == 0 {
+		return errors.New("--chain, --revocations, --authority-key, --network, --in, --out and one or more signature artifact paths are required")
+	}
+	encodedDraft, err := readArtifact(*inputPath, epoch.MaximumFileBytes)
+	if err != nil {
+		return err
+	}
+	descriptor, err := epoch.DecodeDescriptor(encodedDraft)
+	if err != nil {
+		return err
+	}
+	claimedNetwork, targetEpoch, err := epoch.DescriptorIdentity(encodedDraft)
+	if err != nil {
+		return err
+	}
+	if claimedNetwork != *networkID {
+		return errors.New("descriptor draft belongs to a different network")
+	}
+	context, err := loadDescriptorContext(*chainPath, *revocationPath, *authorityPath, *networkID, targetEpoch)
+	if err != nil {
+		return err
+	}
+	artifacts := make([]epoch.SignatureArtifact, 0, flags.NArg())
+	for _, path := range flags.Args() {
+		encoded, err := readArtifact(path, epoch.MaximumFileBytes)
+		if err != nil {
+			return fmt.Errorf("read signature artifact %s: %w", path, err)
+		}
+		artifact, err := epoch.DecodeSignatureArtifact(encoded)
+		if err != nil {
+			return fmt.Errorf("decode signature artifact %s: %w", path, err)
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	encoded, verified, err := epoch.Assemble(descriptor, artifacts, context.Authority, context.Previous, context.Revoked)
+	if err != nil {
+		return err
+	}
+	if err := writeNew(*outputPath, encoded, 0o644); err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(descriptorResult{
+		NetworkID: verified.NetworkID, Epoch: verified.Epoch, Digest: fmt.Sprintf("%x", verified.Digest),
+	})
+}
+
+func loadDescriptorContext(chainPath, revocationPath, authorityPath, networkID string, targetEpoch uint64) (descriptorContext, error) {
+	authority, err := topology.LoadAuthorityKey(authorityPath)
+	if err != nil {
+		return descriptorContext{}, err
+	}
+	historical, err := epoch.OpenChain(chainPath, networkID, authority, nil)
+	if err != nil {
+		return descriptorContext{}, err
+	}
+	if historical.Halted() {
+		return descriptorContext{}, epoch.ErrHalted
+	}
+	revocations, err := epoch.OpenRevocationStore(revocationPath)
+	if err != nil {
+		return descriptorContext{}, err
+	}
+	if err := revocations.Revalidate(historical); err != nil {
+		return descriptorContext{}, fmt.Errorf("revalidate persisted revocations: %w", err)
+	}
+	scope, err := revocations.ScopedSet(targetEpoch)
+	if err != nil {
+		return descriptorContext{}, err
+	}
+	chain, err := epoch.OpenChain(chainPath, networkID, authority, scope)
+	if err != nil {
+		return descriptorContext{}, err
+	}
+	var previous *epoch.Verified
+	if tip, exists := chain.Tip(); exists {
+		previous = &tip
+	}
+	return descriptorContext{Authority: authority, Previous: previous, Revoked: scope}, nil
 }
 
 func importEpochs(arguments []string) error {
