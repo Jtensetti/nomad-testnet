@@ -21,16 +21,45 @@ func watermarkFixture(t *testing.T, epoch uint64, networkID string) Verified {
 	if err != nil {
 		t.Fatal(err)
 	}
+	document, identities := unattestedDocument(t, networkID, 3)
+	document.Epoch = epoch
+	attested := document
+	for _, operator := range document.Operators {
+		attested, err = Attest(attested, operator.ID, identities[operator.ID])
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	signed, err := Finalize(attested, authorityPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := Encode(signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := Verify(encoded, authorityPublic, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return verified
+}
+
+// unattestedDocument builds a valid multi-operator document with fresh keys
+// and returns the operator identities, so a test can attest it, mutate it, or
+// deliberately leave an attestation off.
+func unattestedDocument(t *testing.T, networkID string, operators int) (Document, map[string]ed25519.PrivateKey) {
+	t.Helper()
 	identities := make(map[string]ed25519.PrivateKey)
 	dkgSession := [32]byte{1}
 	now := time.Now().UTC().Truncate(time.Second)
 	document := Document{
-		Version: Version, NetworkID: networkID, Epoch: epoch,
+		Version: Version, NetworkID: networkID, Epoch: 1,
 		NotBefore: now.Add(-time.Hour).Format(time.RFC3339),
 		NotAfter:  now.Add(time.Hour).Format(time.RFC3339),
 		Traffic:   TrafficClass{CellSize: CellSize, CellIntervalMillis: 10, MaxLatenessMillis: 40, QueueCapacity: 64},
 		DKG:       DKGProfile{Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(dkgSession[:]), StartAt: now.Format(time.RFC3339), PhaseDurationMillis: 1_000},
-		Operators: make([]Operator, 3),
+		Operators: make([]Operator, operators),
 	}
 	for index := range document.Operators {
 		id := "operator-" + string(rune('a'+index))
@@ -54,29 +83,10 @@ func watermarkFixture(t *testing.T, epoch uint64, networkID string) Verified {
 			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey),
 			KEXKey:          base64.StdEncoding.EncodeToString(kexKey.PublicKey().Bytes()),
 			DKGIdentityKey:  base64.StdEncoding.EncodeToString(dkgPublic[:]),
-			PeerPlan:        []uint16{uint16((index + 1) % 3)},
+			PeerPlan:        []uint16{uint16((index + 1) % operators)},
 		}
 	}
-	attested := document
-	for _, operator := range document.Operators {
-		attested, err = Attest(attested, operator.ID, identities[operator.ID])
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	signed, err := Finalize(attested, authorityPrivate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := Encode(signed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	verified, err := Verify(encoded, authorityPublic, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return verified
+	return document, identities
 }
 
 // A signature and a validity window do not stop a rollback: an older topology
