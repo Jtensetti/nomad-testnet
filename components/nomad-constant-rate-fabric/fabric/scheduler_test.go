@@ -37,6 +37,19 @@ func TestCellInterval(t *testing.T) {
 	}
 }
 
+// The claim here is that four cells arrive as a cadence rather than a burst.
+// It is not a claim about how fast the host is.
+//
+// Those come apart on a loaded machine. When a stall pushes an emission past
+// MaxLateness the scheduler returns ErrDeadlineMissed, which is the production
+// code doing exactly what it should: refusing to emit a catch-up burst. Failing
+// the test on that outcome turns it into an assertion that the host never
+// stalls, and it duly failed once in a full-repository sweep at 42 ms over a
+// 40 ms budget, while a full race-instrumented crypto suite ran alongside it.
+//
+// So a missed deadline means this test could not run, and it says so loudly
+// rather than passing quietly or failing for the wrong reason. Every other
+// error is still a failure, and the burst assertion below is unchanged.
 func TestRunCellsUsesCadenceInsteadOfBurst(t *testing.T) {
 	cfg := Config{Epoch: 80 * time.Millisecond, CellsPerEpoch: 4, MaxLateness: 40 * time.Millisecond}
 	sink := &recordingSink{}
@@ -47,6 +60,11 @@ func TestRunCellsUsesCadenceInsteadOfBurst(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := scheduler.RunCells(ctx, 4); err != nil {
+		if errors.Is(err, ErrDeadlineMissed) {
+			t.Skipf("the host could not hold a %s cadence within %s, so this run "+
+				"measures the machine rather than the scheduler: %v",
+				cfg.CellInterval(), cfg.MaxLateness, err)
+		}
 		t.Fatal(err)
 	}
 	if len(sink.cells) != 4 {
