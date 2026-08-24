@@ -82,6 +82,18 @@ jobs:
           # public. This fails the build rather than a review comment.
           go test ./live/telemetry/ ./live/node/ -run 'Telemetry|telemetry|SecretScan|OperationalOutput' -count=1
       - run: go test -race ./...
+      - name: Test every vendored component module
+        run: |
+          # components/* are separate Go modules wired in via replace
+          # directives, so `go test ./...` at the root never touches them.
+          # The rlnc decoder shipped a silent wrong-decode defect through this
+          # gap: the fix and its regression test existed in the standalone
+          # repo's suite while the vendored copy CI actually built went
+          # untested. What ships is what must be tested.
+          for module in components/*/; do
+            echo "== $module =="
+            (cd "$module" && go build ./... && go vet ./... && go test -race -count=1 ./...)
+          done
       - name: Verify the published conformance corpus matches its encoders
         run: go run ./cmd/nomad-conformance -check conformance/wire-vectors.json
       - name: Verify the traffic-analysis harness still detects differences
