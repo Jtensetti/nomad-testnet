@@ -95,6 +95,57 @@ in a document a peer parses by name.
 | `nomad-selection-firewall-plan-v1` | an emission plan |
 | `nomad-observable-plan-v1` | the public observable plan |
 
+## Operator endpoint grammar and canonical form
+
+Two implementations must agree on which topologies are admissible, and the
+operator distinctness check makes that depend on how an endpoint is parsed. A
+document one implementation admits as three operators and another as two has not
+been agreed on, which is the same failure duplicate JSON keys produce and is
+refused for the same reason.
+
+An operator's `endpoint` is `host:port`; `partial_endpoint` and `dkg_endpoint`
+are URLs whose host and port are subject to the identical rules. **No lookup is
+performed at any point**: admission is a function of the document's bytes.
+
+**Port.** Base-ten digits only, 1 to 65535. Leading zeros are accepted and
+denote the same port. `+4200`, `0x1068`, `4_200`, whitespace and non-ASCII
+digits are refused. Port `0` is refused: it names nothing a peer can send to.
+
+**Host, as an address.** Any address `netip.ParseAddr` accepts, then:
+
+- IPv4-mapped IPv6 is folded to the IPv4 address it means, so `127.0.0.1` and
+  `[::ffff:127.0.0.1]` are one host.
+- Textual variation is folded by RFC 5952 canonical form, so `[::1]`,
+  `[0:0:0:0:0:0:0:1]` and `[2001:0db8::0001]` fold as expected.
+- A zone (`fe80::1%eth0`) is **refused**. A node keys inbound peers on address
+  and port with the zone dropped, so admitting one would promise a distinctness
+  the runtime does not deliver.
+- Unspecified (`0.0.0.0`, `::`), multicast and the IPv4 limited broadcast
+  address are **refused**: none names a peer.
+- Loopback (`127.0.0.0/8`, `::1`) folds to a single reserved host key.
+
+**Host, as a name.** Letter-digit-hyphen only, ASCII: labels of 1 to 63 bytes
+from `[A-Za-z0-9-]`, no label beginning or ending with a hyphen, at most 253
+bytes in total, and at most one trailing dot, which is the root label and is
+removed. Case folds ASCII-only. The top-level label must not be all digits
+(RFC 1123 2.1), so `2130706433` and `0177.0.0.1` are refused rather than
+admitted as names that other parsers read as `127.0.0.1`. `localhost`
+(RFC 6761) folds to the same reserved key as a loopback literal.
+
+**No fallback.** A bracketed host that is not a valid address is refused, never
+reinterpreted as a name. Embedded NUL bytes, spaces, underscores and non-ASCII
+characters are refused.
+
+**Distinctness.** Two operators may not share one canonical `host:port`. For the
+URL fields the key is the canonical authority alone: the scheme and the path are
+validated but are not part of the identity, so `http://h:4300`,
+`https://h:4300` and `http://h:4300/` are one endpoint.
+
+**What this does not establish.** Two operators at different ports on one host
+are two entries; two hostnames pointing at one machine are indistinguishable
+from the document. Neither operator independence nor trust-domain separation
+follows from this check.
+
 ## Unversioned formats
 
 Three wire objects carry no version string, because they are fixed-width binary
