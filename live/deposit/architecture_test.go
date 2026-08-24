@@ -6,6 +6,12 @@ import (
 	"testing"
 )
 
+// A gate that skips has not passed. These resolve the package graph with
+// go/build, a library call over source that is present whenever tests run
+// at all, so a failure here means the capability boundary was not checked
+// rather than that this environment is unusual -- and an unchecked boundary
+// on the emission path is exactly what must not pass quietly.
+
 // The drain bridges the publication queue and the uplink, which makes it the
 // one package that legitimately touches both. That is exactly why it must not
 // also own a socket: a component that can read the queue and write to the
@@ -29,7 +35,8 @@ func TestDepositPathDoesNotImportTheNetworkItself(t *testing.T) {
 	forbiddenDirect := []string{"net", "net/http", "net/url", "os/exec"}
 	pkg, err := build.ImportDir(".", 0)
 	if err != nil {
-		t.Skipf("cannot read this package: %v", err)
+		t.Fatalf("cannot read this package, so the direct-import boundary went "+
+			"unchecked: %v", err)
 	}
 	for _, imported := range append(pkg.Imports, pkg.TestImports...) {
 		for _, banned := range forbiddenDirect {
@@ -78,7 +85,8 @@ func TestDepositPathCannotReachSelectionOrScheduling(t *testing.T) {
 	root := "github.com/Jtensetti/nomad-testnet/live/deposit"
 	pkg, err := build.Import(root, "", 0)
 	if err != nil {
-		t.Skipf("cannot resolve the package graph in this environment: %v", err)
+		t.Fatalf("cannot resolve the package graph, so the capability boundary went "+
+			"unchecked: %v", err)
 	}
 	for _, next := range pkg.Imports {
 		if strings.HasPrefix(next, "golang.org/x/") {
