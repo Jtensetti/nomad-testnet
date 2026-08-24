@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Jtensetti/nomad-testnet/live/committee"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -197,6 +198,9 @@ func Encode(descriptor Descriptor) ([]byte, error) {
 func Verify(encoded []byte, authority ed25519.PublicKey, previous *Verified, revoked RevocationSet) (Verified, error) {
 	if len(encoded) == 0 || len(encoded) > MaximumFileBytes {
 		return Verified{}, errors.New("epoch descriptor is empty or too large")
+	}
+	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
+		return Verified{}, fmt.Errorf("epoch descriptor is ambiguous: %w", err)
 	}
 	var descriptor Descriptor
 	decoder := json.NewDecoder(bytes.NewReader(encoded))

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -314,6 +315,9 @@ func embeddedIdentity(descriptor Descriptor) (string, uint64, error) {
 	if err != nil {
 		return "", 0, errors.New("invalid embedded topology encoding")
 	}
+	if err := strictjson.RejectDuplicateKeys(topologyBytes); err != nil {
+		return "", 0, fmt.Errorf("embedded topology is ambiguous: %w", err)
+	}
 	var signed topology.Signed
 	decoder := json.NewDecoder(bytes.NewReader(topologyBytes))
 	decoder.DisallowUnknownFields()
@@ -327,6 +331,9 @@ func embeddedIdentity(descriptor Descriptor) (string, uint64, error) {
 }
 
 func decodeDescriptor(encoded []byte) (Descriptor, error) {
+	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
+		return Descriptor{}, fmt.Errorf("epoch descriptor is ambiguous: %w", err)
+	}
 	var descriptor Descriptor
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()

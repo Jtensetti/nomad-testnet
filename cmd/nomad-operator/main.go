@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
@@ -100,9 +101,6 @@ func initialize(arguments []string) error {
 	}{*operatorID, *enrollmentPath})
 }
 
-// inspect prints the PUBLIC identity an operator holds, so an administrator
-// can confirm what they enrolled without ever opening the secret by hand.
-// It prints public keys only; no private material reaches stdout.
 func inspect(arguments []string) error {
 	flags := flag.NewFlagSet("inspect", flag.ContinueOnError)
 	secretPath := flags.String("secret", "", "private operator-secret path")
@@ -133,23 +131,26 @@ func inspect(arguments []string) error {
 	})
 }
 
-// erase destroys this operator's private material for a retired epoch and
-// emits the signed statement that records what was destroyed, including the
-// standard limitations text. It refuses to run against an epoch that is
-// still serving.
+// erase destroys epoch-private material only after the persisted verified
+// chain says the epoch is RETIRED. A signed pending intent is written before
+// destruction so a crash between unlink and statement persistence can resume
+// with the original pre-erasure digests. The public statement is persisted
+// before the chain acknowledgement; a retry can therefore repair a missing
+// acknowledgement without destroying anything again.
 func erase(arguments []string) error {
 	flags := flag.NewFlagSet("erase", flag.ContinueOnError)
 	secretPath := flags.String("secret", "", "private operator-secret path")
-	descriptorPath := flags.String("epoch-descriptor", "", "retired epoch descriptor path")
+	chainPath := flags.String("chain", "", "persisted verified epoch-chain directory")
+	epochNumber := flags.Uint64("epoch", 0, "retired epoch number")
 	authorityPath := flags.String("authority-key", "", "pinned public authority-key path")
 	networkID := flags.String("network", "", "network identifier")
 	filesystem := flags.String("filesystem", "", "filesystem type of the erased paths, recorded in the statement")
-	outputPath := flags.String("out", "", "new signed erasure-statement path")
+	outputPath := flags.String("out", "", "signed erasure-statement path")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	if *secretPath == "" || *descriptorPath == "" || *authorityPath == "" || *networkID == "" || *filesystem == "" || *outputPath == "" {
-		return errors.New("--secret, --epoch-descriptor, --authority-key, --network, --filesystem and --out are required")
+	if *secretPath == "" || *chainPath == "" || *epochNumber == 0 || *authorityPath == "" || *networkID == "" || *filesystem == "" || *outputPath == "" {
+		return errors.New("--secret, --chain, --epoch, --authority-key, --network, --filesystem and --out are required")
 	}
 	if flags.NArg() == 0 {
 		return errors.New("at least one path to erase is required")
@@ -158,24 +159,97 @@ func erase(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	encodedDescriptor, err := readBoundedRegular(*descriptorPath)
+	chain, err := epoch.OpenChain(*chainPath, *networkID, authority, nil)
+	if err != nil {
+		return fmt.Errorf("open epoch chain: %w", err)
+	}
+	retired, exists, err := chain.FreshEpoch(*epochNumber)
 	if err != nil {
 		return err
 	}
-	retired, err := epoch.Verify(encodedDescriptor, authority, nil, nil)
-	if err != nil {
-		return err
+	if !exists {
+		return fmt.Errorf("epoch %d is not present in the verified chain", *epochNumber)
 	}
 	now := time.Now().UTC()
-	if now.Before(retired.RetireAt) {
-		return fmt.Errorf("refusing to erase material for epoch %d before its retirement boundary %s",
-			retired.Epoch, retired.RetireAt.Format(time.RFC3339))
+	state, err := chain.FreshStateOf(*epochNumber, now)
+	if err != nil {
+		return err
+	}
+	if state != epoch.StateRetired {
+		return fmt.Errorf("refusing to erase material for epoch %d while state is %s", *epochNumber, state)
 	}
 	keys, err := topology.LoadPrivateKeys(*secretPath)
 	if err != nil {
 		return err
 	}
-	statement, err := epoch.EraseEpochMaterial(*networkID, keys.OperatorID, retired, flags.Args(), *filesystem, keys.Identity, now)
+	pendingPath := *outputPath + ".pending"
+	if err := validateErasePaths(*chainPath, *secretPath, *authorityPath, *outputPath, pendingPath, flags.Args()); err != nil {
+		return err
+	}
+
+	// Crash recovery path 1: the public statement reached disk but the chain
+	// acknowledgement did not. Verify and acknowledge it without touching
+	// private files again.
+	if encoded, found, err := readOptionalBounded(*outputPath); err != nil {
+		return err
+	} else if found {
+		statement, err := epoch.DecodeErasureStatement(encoded)
+		if err != nil {
+			return err
+		}
+		if statement.OperatorID != keys.OperatorID {
+			return errors.New("existing erasure statement belongs to another operator")
+		}
+		if err := epoch.VerifyErasureStatement(statement, retired); err != nil {
+			return err
+		}
+		if err := chain.RecordErasureStatement(statement, keys.OperatorID); err != nil {
+			return err
+		}
+		if err := removeDurable(pendingPath); err != nil {
+			return err
+		}
+		return emitErasureResult(statement, true)
+	}
+
+	if recorded, err := chain.ErasureRecorded(*epochNumber, keys.OperatorID); err != nil {
+		return err
+	} else if recorded {
+		return errors.New("chain already records erasure but the requested evidence output is missing; restore the recorded statement instead of creating new evidence")
+	}
+
+	var intent epoch.ErasureIntent
+	if encoded, found, err := readOptionalBounded(pendingPath); err != nil {
+		return err
+	} else if found {
+		intent, err = epoch.DecodeErasureIntent(encoded)
+		if err != nil {
+			return err
+		}
+		if err := epoch.VerifyErasureIntent(intent, retired); err != nil {
+			return err
+		}
+		if intent.OperatorID != keys.OperatorID || intent.Filesystem != *filesystem {
+			return errors.New("pending erasure intent does not match this operator or filesystem")
+		}
+		if err := intentMatchesPaths(intent, flags.Args()); err != nil {
+			return err
+		}
+	} else {
+		intent, err = epoch.NewErasureIntent(retired, keys.OperatorID, flags.Args(), *filesystem, keys.Identity, now)
+		if err != nil {
+			return err
+		}
+		encoded, err := epoch.EncodeErasureIntent(intent)
+		if err != nil {
+			return err
+		}
+		if err := writeNew(pendingPath, encoded, 0o600); err != nil {
+			return fmt.Errorf("persist erasure intent before destruction: %w", err)
+		}
+	}
+
+	statement, err := epoch.ExecuteErasureIntent(intent, retired, keys.Identity, time.Now().UTC())
 	if err != nil {
 		return err
 	}
@@ -184,13 +258,80 @@ func erase(arguments []string) error {
 		return err
 	}
 	if err := writeNew(*outputPath, encoded, 0o644); err != nil {
+		return fmt.Errorf("persist erasure statement: %w", err)
+	}
+	if err := chain.RecordErasureStatement(statement, keys.OperatorID); err != nil {
+		return fmt.Errorf("record erasure acknowledgement: %w", err)
+	}
+	if err := removeDurable(pendingPath); err != nil {
 		return err
 	}
+	return emitErasureResult(statement, false)
+}
+
+func emitErasureResult(statement epoch.ErasureStatement, recovered bool) error {
 	return json.NewEncoder(os.Stdout).Encode(struct {
 		OperatorID string `json:"operator_id"`
 		Epoch      uint64 `json:"epoch"`
 		Files      int    `json:"files_erased"`
-	}{statement.OperatorID, statement.Epoch, len(statement.Files)})
+		Recovered  bool   `json:"recovered"`
+	}{statement.OperatorID, statement.Epoch, len(statement.Files), recovered})
+}
+
+func intentMatchesPaths(intent epoch.ErasureIntent, paths []string) error {
+	requested := make([]string, 0, len(paths))
+	for _, path := range paths {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		requested = append(requested, filepath.Clean(absolute))
+	}
+	sort.Strings(requested)
+	if len(requested) != len(intent.Files) {
+		return errors.New("pending erasure intent names a different path set")
+	}
+	for index := range requested {
+		if requested[index] != intent.Files[index].Path {
+			return errors.New("pending erasure intent names a different path set")
+		}
+	}
+	return nil
+}
+
+func validateErasePaths(chainPath, secretPath, authorityPath, outputPath, pendingPath string, paths []string) error {
+	protectedFiles := []string{secretPath, authorityPath, outputPath, pendingPath}
+	protected := make(map[string]struct{}, len(protectedFiles))
+	for _, path := range protectedFiles {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		protected[filepath.Clean(absolute)] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		clean := filepath.Clean(absolute)
+		if _, exists := protected[clean]; exists {
+			return fmt.Errorf("refusing to erase protected operator path %q", path)
+		}
+		insideChain, err := epoch.PathWithin(chainPath, clean)
+		if err != nil {
+			return err
+		}
+		if insideChain {
+			return fmt.Errorf("refusing to erase epoch-chain path %q", path)
+		}
+		if _, duplicate := seen[clean]; duplicate {
+			return fmt.Errorf("duplicate erasure path %q", path)
+		}
+		seen[clean] = struct{}{}
+	}
+	return nil
 }
 
 func attest(arguments []string) error {
@@ -275,6 +416,21 @@ func readBoundedRegular(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+func readOptionalBounded(path string) ([]byte, bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > ceremony.MaximumArtifact {
+		return nil, false, errors.New("existing recovery artifact must be a non-empty bounded regular file")
+	}
+	encoded, err := os.ReadFile(path)
+	return encoded, true, err
+}
+
 func writeNew(path string, data []byte, mode os.FileMode) error {
 	parent := filepath.Dir(path)
 	info, err := os.Lstat(parent)
@@ -305,5 +461,23 @@ func writeNew(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	written = true
-	return nil
+	return syncDirectory(parent)
+}
+
+func removeDurable(path string) error {
+	if err := os.Remove(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(path))
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = directory.Close() }()
+	return directory.Sync()
 }

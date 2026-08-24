@@ -155,6 +155,52 @@ services:
       - dkg-certificate-a:/certificate:ro
       - published-config:/published
 
+  epoch-init-a:
+    <<: *locked-service
+    restart: "no"
+    network_mode: none
+    command: &epoch-init-command
+      - nomad-lifecycle
+      - epoch-import
+      - --chain=/epoch-chain
+      - --revocations=/revocations
+      - --authority-key=/config/authority.pub
+      - --network=nomad-live-demo
+      - /published/epoch-descriptor.json
+    depends_on:
+      fixture-publisher: {condition: service_completed_successfully}
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - epoch-chain-a:/epoch-chain
+      - revocations-a:/revocations
+
+  epoch-init-b:
+    <<: *locked-service
+    restart: "no"
+    network_mode: none
+    command: *epoch-init-command
+    depends_on:
+      fixture-publisher: {condition: service_completed_successfully}
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - epoch-chain-b:/epoch-chain
+      - revocations-b:/revocations
+
+  epoch-init-c:
+    <<: *locked-service
+    restart: "no"
+    network_mode: none
+    command: *epoch-init-command
+    depends_on:
+      fixture-publisher: {condition: service_completed_successfully}
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - epoch-chain-c:/epoch-chain
+      - revocations-c:/revocations
+
   operator-a:
     <<: *locked-service
     command:
@@ -243,6 +289,7 @@ services:
       - nomad-share
       - --topology=/config/topology.json
       - --authority-key=/config/authority.pub
+      - --epoch-chain=/epoch-chain
       - --descriptor=/published/descriptor.json
       - --share=/operator/distributed-threshold-share.json
       - --cache=/cache
@@ -251,6 +298,7 @@ services:
       - --listen=:4300
     depends_on:
       operator-a: {condition: service_healthy}
+      epoch-init-a: {condition: service_completed_successfully}
     networks: [fabric]
     volumes:
       - public-config:/config:ro
@@ -258,12 +306,14 @@ services:
       - operator-a-secret:/operator:ro
       - raw-a:/cache:ro
       - partial-a:/partials
+      - epoch-chain-a:/epoch-chain:ro
 
   share-b:
     <<: *locked-service
     command: *share-command
     depends_on:
       operator-b: {condition: service_healthy}
+      epoch-init-b: {condition: service_completed_successfully}
     networks: [fabric]
     volumes:
       - public-config:/config:ro
@@ -271,12 +321,14 @@ services:
       - operator-b-secret:/operator:ro
       - raw-b:/cache:ro
       - partial-b:/partials
+      - epoch-chain-b:/epoch-chain:ro
 
   share-c:
     <<: *locked-service
     command: *share-command
     depends_on:
       operator-c: {condition: service_healthy}
+      epoch-init-c: {condition: service_completed_successfully}
     networks: [fabric]
     volumes:
       - public-config:/config:ro
@@ -284,6 +336,7 @@ services:
       - operator-c-secret:/operator:ro
       - raw-c:/cache:ro
       - partial-c:/partials
+      - epoch-chain-c:/epoch-chain:ro
 
   partial-fetcher:
     <<: *locked-service
@@ -353,3 +406,9 @@ volumes:
   partial-b:
   partial-c:
   partials-local:
+  epoch-chain-a:
+  epoch-chain-b:
+  epoch-chain-c:
+  revocations-a:
+  revocations-b:
+  revocations-c:

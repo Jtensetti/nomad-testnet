@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Jtensetti/nomad-testnet/live/batch"
+	"github.com/Jtensetti/nomad-testnet/live/epoch"
 	"github.com/Jtensetti/nomad-testnet/live/rawcache"
 	"github.com/Jtensetti/nomad-testnet/live/share"
 	"github.com/Jtensetti/nomad-testnet/live/telemetry"
@@ -32,6 +33,7 @@ func main() {
 func run() error {
 	topologyPath := flag.String("topology", "", "signed public topology JSON")
 	authorityPath := flag.String("authority-key", "", "pinned topology authority public key")
+	epochChainPath := flag.String("epoch-chain", "", "persisted verified epoch-chain directory")
 	descriptorPath := flag.String("descriptor", "", "signed batch descriptor")
 	sharePath := flag.String("share", "", "operator threshold share")
 	cachePath := flag.String("cache", "", "operator raw cache")
@@ -40,8 +42,9 @@ func run() error {
 	interval := flag.Duration("interval", time.Second, "fixed local cache scan interval")
 	flag.Parse()
 	for name, value := range map[string]string{
-		"--topology": *topologyPath, "--authority-key": *authorityPath, "--descriptor": *descriptorPath,
-		"--share": *sharePath, "--cache": *cachePath, "--out": *outputPath, "--listen": *listen,
+		"--topology": *topologyPath, "--authority-key": *authorityPath, "--epoch-chain": *epochChainPath,
+		"--descriptor": *descriptorPath, "--share": *sharePath, "--cache": *cachePath,
+		"--out": *outputPath, "--listen": *listen,
 	} {
 		if value == "" {
 			return fmt.Errorf("%s is required", name)
@@ -54,6 +57,24 @@ func run() error {
 	network, err := topology.Load(*topologyPath, authority, time.Now().UTC())
 	if err != nil {
 		return err
+	}
+	chain, err := epoch.OpenChain(*epochChainPath, network.Document.NetworkID, authority, nil)
+	if err != nil {
+		return fmt.Errorf("open epoch chain: %w", err)
+	}
+	current, exists, err := chain.FreshEpoch(network.Document.Epoch)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("epoch %d is not present in the local verified chain; import it with nomad-lifecycle first", network.Document.Epoch)
+	}
+	if current.Topology.Digest != network.Digest {
+		return errors.New("epoch chain does not authorize the configured topology")
+	}
+	guard := epoch.FreshGuard{Chain: chain}
+	if err := guard.ServesEpoch(network.Document.Epoch, time.Now().UTC()); err != nil {
+		return fmt.Errorf("epoch chain does not authorize threshold service: %w", err)
 	}
 	descriptor, err := batch.LoadDescriptor(*descriptorPath, authority, network)
 	if err != nil {
@@ -69,13 +90,9 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// Threshold work is refused outside the epoch's signed validity window,
-	// so a retired epoch's share stops being usable at a public boundary
-	// rather than remaining usable for as long as the file exists.
 	service := share.Service{
 		Cache: cache, Descriptor: descriptor, Secret: secret, OutputDir: *outputPath,
-		Interval: *interval, ListenAddress: *listen,
-		Guard: share.TopologyWindowGuard{Network: network},
+		Interval: *interval, ListenAddress: *listen, Guard: guard,
 	}
 	if err := service.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err
