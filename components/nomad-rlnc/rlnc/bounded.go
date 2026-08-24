@@ -318,9 +318,5 @@ func (bounded *BoundedDecoder) Decode() ([]byte, error) {
 // basis, at the cost of one hash, instead of discovering the pollution when
 // the finished object fails its envelope check.
 func (e *Encoder) SourceCommitments() SourceCommitments {
-	commitments := make(SourceCommitments, len(e.source))
-	for index, data := range e.source {
-		commitments[index] = commitSymbol(index, data)
-	}
-	return commitments
+	return CommitSource(e.source)
 }
