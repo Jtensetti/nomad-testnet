@@ -1,5 +1,5 @@
 # Nomad integration snapshot lock v1
-github.com/Jtensetti/nomad-anytrust-mix-sim 7556b09 claude/nomad-production-ready-dxv4ql
+github.com/Jtensetti/nomad-anytrust-mix-sim 6a1324e claude/nomad-production-ready-dxv4ql
 github.com/Jtensetti/nomad-constant-rate-fabric bee0cab claude/nomad-production-ready-dxv4ql
 github.com/Jtensetti/nomad-local-reconstruction 032f6f1ad3984e86d5812bd6ae07143d7a806a24 agent/nomad-v0.1
 github.com/Jtensetti/nomad-rlnc b395aa0b0dbd129a2820dbe02ee96d2a87f87273 agent/nomad-v0.1

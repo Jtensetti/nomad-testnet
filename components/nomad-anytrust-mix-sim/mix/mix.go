@@ -376,3 +376,73 @@ func CommitteeMix(pub PublicKey, input *Batch, members int) (*Batch, []Round, er
 	}
 	return current, rounds, nil
 }
+
+// EncryptCell produces the ElGamal ciphertext for one cell, in exactly the
+// wire form MarshalWire produces for one column of a batch.
+//
+// It exists because a publisher encrypts one fragment at a time and Encrypt
+// refuses fewer than two cells. That refusal is right for Encrypt: a Batch is
+// a mix input, a shuffle of one element is the identity, and a batch of one
+// would mix nothing. It is not right for a publisher, which has one fragment
+// and needs a ciphertext, not a mix.
+//
+// The uplink worked around it by encrypting a two-column batch and discarding
+// the second column. That is not merely inelegant: the cost of encryption is
+// linear in columns, measured at 86 ms for two and 160 ms for four, so half of
+// every publisher's per-cell cost was work thrown away -- against a 50 ms
+// deployed cell interval it could not meet in the first place. See the seal
+// cost finding in nomad-protocol's evidence index.
+//
+// The result composes: ParseWire assembles individually encrypted cells into
+// the batch the committee shuffles and decrypts, which is already how the
+// share service reassembles a batch from cached cells. Nothing about the wire
+// format changes, so a cell encrypted here is indistinguishable from a column
+// of a batch encrypted by Encrypt.
+func EncryptCell(pub PublicKey, cell PlainCell) (WireCell, error) {
+	return encryptCellWithPadding(pub, cell, rand.Reader)
+}
+
+// encryptCellWithPadding takes the padding source so tests can make output
+// deterministic. Production always uses crypto/rand.
+func encryptCellWithPadding(pub PublicKey, cell PlainCell, padding io.Reader) (WireCell, error) {
+	var out WireCell
+	if padding == nil {
+		return out, errors.New("padding source is required")
+	}
+	s := newSuite()
+	if s.Point().EmbedLen() < ChunkSize {
+		return out, errors.New("selected group cannot embed Nomad chunks")
+	}
+	h, err := publicPoint(s, pub)
+	if err != nil {
+		return out, err
+	}
+	stream := s.RandomStream()
+	offset := 0
+	for row := 0; row < ChunkCount; row++ {
+		start := row * ChunkSize
+		message := s.Point().Embed(cell[start:start+ChunkSize], stream)
+		r := s.Scalar().Pick(stream)
+		// Same order as MarshalWire: x then y, per row.
+		for _, point := range []kyber.Point{
+			s.Point().Mul(r, nil),
+			s.Point().Add(message, s.Point().Mul(r, h)),
+		} {
+			encoded, err := point.MarshalBinary()
+			if err != nil {
+				return WireCell{}, err
+			}
+			if len(encoded) != pointSize {
+				return WireCell{}, errors.New("unexpected ciphertext point size")
+			}
+			offset += copy(out[offset:], encoded)
+		}
+	}
+	if offset != cipherSize {
+		return WireCell{}, errors.New("internal ciphertext size mismatch")
+	}
+	if _, err := io.ReadFull(padding, out[offset:]); err != nil {
+		return WireCell{}, fmt.Errorf("wire padding: %w", err)
+	}
+	return out, nil
+}

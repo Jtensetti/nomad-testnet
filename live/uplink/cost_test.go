@@ -31,9 +31,15 @@ func benchSession(tb testing.TB) *uplink.Session {
 }
 
 // BenchmarkSealCover measures what a publisher pays per emitted cell. The
-// number is the point: sealing performs a full ElGamal encryption of a
-// two-column mix batch, and it decides whether a publisher can hold the
-// cadence the topology sets.
+// number is the point: sealing performs a full ElGamal encryption of the
+// fragment, and it decides whether a publisher can hold the cadence the
+// topology sets.
+//
+// It was 87 ms when this benchmark was written, because seal built a
+// two-column mix batch and discarded one column to satisfy mix.Encrypt's
+// two-cell minimum. mix.EncryptCell removed that, halving it to about 43 ms.
+// Half of a number that was already too large is still too large, which is why
+// the test below still records a finding rather than a clean result.
 func BenchmarkSealCover(b *testing.B) {
 	session := benchSession(b)
 	b.ResetTimer()
@@ -75,9 +81,22 @@ func TestSealCostAgainstTheCadenceItMustHold(t *testing.T) {
 		t.Fatalf("sealing one cell takes %s, beyond the longest cell interval the "+
 			"topology permits: no deployment could emit at cadence", perCell)
 	}
-	t.Logf("sealing one uplink cell takes %s. The shortest interval the topology "+
-		"permits is %s and the deployed testnet uses 50ms, so a publisher on "+
-		"hardware like this cannot hold either: half the cost is a companion mix "+
-		"column that seal encrypts and discards, because mix.Encrypt requires at "+
-		"least two columns.", perCell, shortestInterval)
+	const deployedInterval = 50 * time.Millisecond
+	switch {
+	case perCell >= deployedInterval:
+		t.Logf("sealing one uplink cell takes %s, at or beyond the %s the deployed "+
+			"testnet uses: a publisher on hardware like this cannot hold its cadence "+
+			"at all.", perCell, deployedInterval)
+	case perCell >= shortestInterval:
+		t.Logf("sealing one uplink cell takes %s. That fits inside the deployed %s "+
+			"with no useful headroom, and is far beyond the %s the topology permits "+
+			"as its shortest interval, so a publisher's emission timing still tracks "+
+			"machine load rather than schedule at anything but the slowest cadences. "+
+			"Discarding the companion mix column halved this from about 87ms; the "+
+			"remainder is the fragment's own ElGamal encryption.",
+			perCell, deployedInterval, shortestInterval)
+	default:
+		t.Logf("sealing one uplink cell takes %s, inside the shortest interval the "+
+			"topology permits (%s).", perCell, shortestInterval)
+	}
 }
