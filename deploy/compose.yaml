@@ -4,6 +4,13 @@ x-locked-service: &locked-service
   build:
     context: ..
   image: nomad-live:testnet
+  # A panic otherwise prints goroutine stacks whose frame arguments are raw
+  # machine words, which for these processes can be key material, and the
+  # container runtime keeps whatever a crashing service wrote. Only the Go
+  # runtime's own variable turns this off, and it is read at startup, so it
+  # has to be set here rather than in the program.
+  environment:
+    GOTRACEBACK: none
   read_only: true
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
@@ -49,6 +56,10 @@ services:
       - --tls-certificate=/operator/dkg-tls.crt
       - --tls-private-key=/operator/dkg-tls.key
     environment:
+      # A merge key replaces this mapping rather than deep-merging it, so the
+      # anchor's GOTRACEBACK is lost unless it is repeated here. These are the
+      # processes holding DKG private identities.
+      GOTRACEBACK: none
       SSL_CERT_FILE: /config/dkg-test-ca.pem
     depends_on:
       bootstrap: {condition: service_completed_successfully}
@@ -74,6 +85,10 @@ services:
       - --tls-certificate=/operator/dkg-tls.crt
       - --tls-private-key=/operator/dkg-tls.key
     environment:
+      # A merge key replaces this mapping rather than deep-merging it, so the
+      # anchor's GOTRACEBACK is lost unless it is repeated here. These are the
+      # processes holding DKG private identities.
+      GOTRACEBACK: none
       SSL_CERT_FILE: /config/dkg-test-ca.pem
     depends_on:
       bootstrap: {condition: service_completed_successfully}
@@ -99,6 +114,10 @@ services:
       - --tls-certificate=/operator/dkg-tls.crt
       - --tls-private-key=/operator/dkg-tls.key
     environment:
+      # A merge key replaces this mapping rather than deep-merging it, so the
+      # anchor's GOTRACEBACK is lost unless it is repeated here. These are the
+      # processes holding DKG private identities.
+      GOTRACEBACK: none
       SSL_CERT_FILE: /config/dkg-test-ca.pem
     depends_on:
       bootstrap: {condition: service_completed_successfully}
