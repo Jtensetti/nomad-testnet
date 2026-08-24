@@ -15,10 +15,10 @@ jobs:
         run: sha256sum --check --quiet COMPONENTS.sha256
       - name: Verify generated formatting and module graph
         run: |
-          unformatted="$(gofmt -l cmd live testnet)"
+          unformatted="$(gofmt -l cmd live testnet components)"
           if test -n "$unformatted"; then
             printf 'unformatted Go files:\n%s\n' "$unformatted"
-            gofmt -d cmd live testnet
+            gofmt -d cmd live testnet components
             exit 1
           fi
           go mod tidy

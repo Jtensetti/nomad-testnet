@@ -13,7 +13,7 @@ import (
 const contextualShuffleProofLabel = "nomad-contextual-neff-shuffle-v1"
 
 var (
-	ErrRoundReplay      = errors.New("mix round receipt replay")
+	ErrRoundReplay     = errors.New("mix round receipt replay")
 	ErrRoundEquivocate = errors.New("mix round receipt equivocation")
 )
 
@@ -30,12 +30,12 @@ type RoundContext struct {
 // committee, epoch, batch and round. Output remains separate so applications
 // can stream or store it independently of the accountability transcript.
 type RoundReceipt struct {
-	Context       RoundContext
-	MixerPublic   [ed25519.PublicKeySize]byte
-	InputDigest   [32]byte
-	OutputDigest  [32]byte
-	ProofDigest   [32]byte
-	Signature     [ed25519.SignatureSize]byte
+	Context      RoundContext
+	MixerPublic  [ed25519.PublicKeySize]byte
+	InputDigest  [32]byte
+	OutputDigest [32]byte
+	ProofDigest  [32]byte
+	Signature    [ed25519.SignatureSize]byte
 }
 
 func ShuffleAndSign(ctx RoundContext, encryptionKey PublicKey, input *Batch, identity ed25519.PrivateKey) (*Batch, []byte, RoundReceipt, error) {
