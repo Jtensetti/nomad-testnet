@@ -115,6 +115,36 @@ jobs:
         run: python3 scripts/test-two-world-analysis.py
       - name: Verify the campaign verdict still separates noise from a finding
         run: python3 scripts/wan/test-wan-verdict.py
+      - name: Apply the preregistered rule to the publication campaign
+        run: |
+          directory=runtime/evidence/publication-campaign
+          test -f "$directory/control-a.txt" || {
+            echo "the publication campaign produced no captures"; exit 1; }
+          findings=0
+          # Against the steady control: publication succeeding, timing out or
+          # being lost must not change what an observer sees.
+          for world in control-b success timeout loss; do
+            echo "== control-a vs $world =="
+            status=0
+            python3 scripts/two-world-analysis.py "$directory/control-a.txt" \
+              "$directory/$world.txt" 1200 150 || status=$?
+            if [ "$status" -eq 2 ]; then echo "the rule could not run"; exit 1; fi
+            if [ "$status" -ne 0 ]; then findings=$((findings + 1)); fi
+          done
+          # A restart is externally observable by construction, so the pair
+          # that answers the criterion is restart-with-work against
+          # restart-without-work: the interruption is common to both and the
+          # private variable is the only difference.
+          echo "== restart-idle vs restart =="
+          status=0
+          python3 scripts/two-world-analysis.py "$directory/restart-idle.txt" \
+            "$directory/restart.txt" 1200 150 || status=$?
+          if [ "$status" -eq 2 ]; then echo "the rule could not run"; exit 1; fi
+          if [ "$status" -ne 0 ]; then findings=$((findings + 1)); fi
+          if [ "$findings" -gt 0 ]; then
+            echo "$findings publication comparison(s) were rejected"
+            exit 1
+          fi
       - name: Run independent operator ceremony
         env:
           NOMAD_CEREMONY_EVIDENCE: runtime/evidence/operator-ceremony.json

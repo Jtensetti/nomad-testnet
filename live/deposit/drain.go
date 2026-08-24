@@ -12,6 +12,7 @@ package deposit
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/Jtensetti/nomad-constant-rate-fabric/fabric"
 	"github.com/Jtensetti/nomad-testnet/live/publish"
@@ -31,10 +32,21 @@ import (
 // AEAD seal over a full-size payload and touch no disk. What the tick does is
 // a function of the clock; what it carries is a function of the queue, and the
 // two are decoupled by construction rather than by care.
+// DefaultPollInterval is how often the filling goroutine looks for work.
+//
+// It polls at a fixed rate whether or not it finds any. Retrying immediately
+// after an empty queue and pausing after a full one would make the polling
+// rate a function of queue depth, which is private; polling at a constant rate
+// makes it a function of nothing. It also stops the goroutine spinning on an
+// empty queue, which it otherwise does at whatever rate the filesystem can
+// list a directory -- enough to starve the emission loop it exists to serve.
+const DefaultPollInterval = time.Millisecond
+
 type Drain struct {
 	session *uplink.Session
 	ready   chan publish.Fragment
 	stop    chan struct{}
+	poll    time.Duration
 	closed  sync.Once
 
 	// counters are for local assertions and tests. They must never reach
@@ -51,13 +63,24 @@ type Drain struct {
 // emits cover forever, which is the same externally observable behaviour as a
 // publisher whose queue happens to be empty.
 func NewDrain(session *uplink.Session, queue *publish.Queue) (*Drain, error) {
+	return NewDrainWithPoll(session, queue, DefaultPollInterval)
+}
+
+// NewDrainWithPoll is NewDrain with an explicit poll interval, for tests that
+// need the buffer filled faster than the default.
+func NewDrainWithPoll(session *uplink.Session, queue *publish.Queue,
+	poll time.Duration) (*Drain, error) {
 	if session == nil {
 		return nil, errors.New("uplink session is required")
+	}
+	if poll <= 0 {
+		return nil, errors.New("poll interval must be positive")
 	}
 	drain := &Drain{
 		session: session,
 		ready:   make(chan publish.Fragment, 1),
 		stop:    make(chan struct{}),
+		poll:    poll,
 	}
 	if queue != nil {
 		go drain.fill(queue)
@@ -69,22 +92,20 @@ func NewDrain(session *uplink.Session, queue *publish.Queue) (*Drain, error) {
 // the directory listing, the decrypt, the unlink, the sync -- is paid here,
 // off the emission path.
 func (drain *Drain) fill(queue *publish.Queue) {
+	ticker := time.NewTicker(drain.poll)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-drain.stop:
 			return
-		default:
+		case <-ticker.C:
 		}
 		fragment, err := queue.Next()
 		if err != nil {
 			// ErrNoWork is the ordinary case and not a condition to report:
 			// an idle publisher is indistinguishable from a busy one by
-			// design, so nothing here may log or count it differently.
-			select {
-			case <-drain.stop:
-				return
-			default:
-			}
+			// design, so nothing here may log or count it differently. The
+			// next attempt waits for the same tick either way.
 			continue
 		}
 		select {

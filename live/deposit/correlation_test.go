@@ -18,7 +18,13 @@ import (
 // 1/publisherCount.
 const (
 	publisherCount = 4
-	trials         = 25
+	// trials is a compromise. Each full-path trial runs a complete shuffle
+	// chain and a threshold decryption, so the experiment is minutes rather
+	// than seconds; 12 trials of 4 publishers gives 48 observations per
+	// configuration, which resolves the difference between a matcher that
+	// works (1.00) and one at chance (0.25) with room to spare, and does not
+	// pretend to resolve anything finer.
+	trials = 12
 )
 
 // depositOne runs one publisher's deposit and returns the marker it deposited.

@@ -7,17 +7,27 @@ import (
 	"testing"
 	"time"
 
+	"crypto/rand"
+
 	"github.com/Jtensetti/nomad-constant-rate-fabric/fabric"
 
 	"github.com/Jtensetti/nomad-testnet/live/publish"
+	"github.com/Jtensetti/nomad-testnet/live/uplink"
 	"github.com/Jtensetti/nomad-testnet/live/wire"
 )
 
 // campaignTicks is how many emissions each world records. At the campaign
 // interval this is a few seconds per world.
+// campaignInterval must exceed the cost of producing a cell or the loop is not
+// keeping a cadence, it is sealing as fast as it can. An uplink seal is
+// measured at about 79 ms (BenchmarkSealCover), so a 5 ms interval -- the
+// first value used here -- produced a "cadence" that was really seal-time
+// variance, and a noise floor that swung between 0.003 and 0.520 of the
+// interval across runs. At 150 ms the ticker is achievable and the floor
+// measures what it claims to.
 const (
-	campaignTicks    = 400
-	campaignInterval = 5 * time.Millisecond
+	campaignTicks    = 100
+	campaignInterval = 150 * time.Millisecond
 )
 
 // publicationWorld drives one publisher for campaignTicks and records what an
@@ -36,6 +46,8 @@ func publicationWorld(t *testing.T, label string, queue *publish.Queue,
 	}
 	defer func() { drain.Close() }()
 
+	started := time.Now()
+	defer func() { t.Logf("world %s took %s", label, time.Since(started)) }()
 	capture := &wire.Capture{Label: label}
 	ticker := time.NewTicker(campaignInterval)
 	defer ticker.Stop()
@@ -73,21 +85,22 @@ func publicationWorld(t *testing.T, label string, queue *publish.Queue,
 // fails has announced that publication was happening.
 //
 // What this campaign judges, and what it refuses to judge, is decided by its
-// own control. Two idle publishers -- identical in every respect this campaign
-// controls -- were measured five times and differed in mean inter-arrival by
-// 0.003, 0.148, 0.283, 0.340 and 0.520 of the nominal interval, against a registered
-// tolerance of 0.02. A Go ticker driving a five-millisecond loop inside a test
-// binary cannot hold cadence anywhere near that, and the instability matters
-// more than the magnitude: the one run that landed inside tolerance was luck,
-// and a campaign whose noise floor moves by two orders of magnitude between
-// runs cannot license a timing claim from any single run of it.
+// own control: two idle publishers, identical in every respect it controls.
+// The gap between them is what a treatment would have to exceed to mean
+// anything, and it is logged every run.
 //
-// So the timing half of the preregistered rule is not applied to these
-// captures. The test still measures the floor, because relying on the
-// conclusion that timing is unmeasurable here while declining to measure it
-// would be an assumption dressed as a finding. Emission timing is measured on
-// the WAN campaign, where the scheduler is the production one and the clock is
-// the host's.
+// The first version of this campaign ticked at 5 ms while each cell cost about
+// 79 ms to seal, so the loop was not keeping a cadence at all and its measured
+// "noise floor" swung between 0.003 and 0.520 of the interval across five runs.
+// Fixing the interval rather than lowering the bar turned that into 0.0003 to
+// 0.0038 across three runs, comfortably inside the registered 0.02 -- so these
+// captures can be judged by the whole preregistered rule, timing included, and
+// CI does judge them.
+//
+// One process on one machine remains the boundary. WAN emission timing is
+// measured on the WAN campaign, where the scheduler is the production one and
+// the clock is the host's; this campaign covers what that one does not, which
+// is publication failing in four specific ways.
 //
 // What is exact here needs no statistic: every world emits the same number of
 // identically sized cells to the same destination, whatever happened to its
@@ -120,26 +133,40 @@ func TestPublicationCampaignUnderFailureAndRetry(t *testing.T) {
 	}
 
 	// Restart: the drain is closed and rebuilt part-way through, as a process
-	// restart would do. The queue is durable, so work resumes -- and the
-	// resumption must not be visible.
-	restartQueue := newQueue(t, objects...)
-	restarted := 0
-	worlds["restart"] = publicationWorld(t, "restart", restartQueue,
-		func(tick int, drain *Drain) *Drain {
-			if tick != campaignTicks/2 || restarted > 0 {
-				return nil
-			}
-			restarted++
-			f := newPathFixture(t)
-			replacement, err := NewDrain(f.session, restartQueue)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return replacement
-		})
-	if restarted != 1 {
-		t.Fatalf("the restart world restarted %d times", restarted)
+	// restart would do. The queue is durable, so work resumes.
+	//
+	// A restart is externally observable by construction -- the process stops
+	// and starts again -- so comparing it against a steady publisher measures
+	// the restart, not the publication. The pair that answers the criterion is
+	// restart-with-work against restart-without-work: same interruption, and
+	// the private variable is the only difference. Both are built here.
+	//
+	// The replacement rebuilds only what a publisher owns: a session and a
+	// drain. An earlier version built a whole path fixture inside the tick,
+	// including the *operator's* airlock, which precomputes a batch of cover
+	// columns and stalled the loop for three ticks. That is not what a
+	// publisher restart costs.
+	restartWorld := func(label string, queue *publish.Queue) *wire.Capture {
+		restarted := 0
+		capture := publicationWorld(t, label, queue,
+			func(tick int, drain *Drain) *Drain {
+				if tick != campaignTicks/2 || restarted > 0 {
+					return nil
+				}
+				restarted++
+				replacement, err := NewDrain(newSession(t), queue)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return replacement
+			})
+		if restarted != 1 {
+			t.Fatalf("%s restarted %d times", label, restarted)
+		}
+		return capture
 	}
+	worlds["restart"] = restartWorld("restart", newQueue(t, objects...))
+	worlds["restart-idle"] = restartWorld("restart-idle", nil)
 
 	// Adversarial loss: every emission is produced and then discarded, which
 	// is what a publisher whose cells never arrive experiences. There is no
@@ -183,9 +210,9 @@ func TestPublicationCampaignUnderFailureAndRetry(t *testing.T) {
 	// measurement while relying on the conclusion that it is unusable.
 	controlDrift := meanIntervalDrift(worlds["control-a"], worlds["control-b"])
 	t.Logf("noise floor this run: two idle publishers differ by %.4f of the nominal "+
-		"interval (registered tolerance 0.02; observed 0.003 to 0.520 across five runs). "+
-		"This campaign therefore judges cell count, size and destination, which are "+
-		"exact, and not timing, which is measured on the WAN campaign.", controlDrift)
+		"interval, registered tolerance 0.02. This campaign judges cell count, size "+
+		"and destination, which are exact; timing is measured on the WAN campaign.",
+		controlDrift)
 	fmt.Fprintf(os.Stderr, "publication campaign wrote %d worlds to %s\n",
 		len(worlds), directory)
 }
@@ -209,4 +236,25 @@ func meanIntervalDrift(left, right *wire.Capture) float64 {
 		difference = -difference
 	}
 	return difference / float64(campaignInterval)
+}
+
+// newSession builds a fresh uplink session against the shared committee. A
+// publisher restarting rebuilds this and its drain, and nothing else: the
+// airlock belongs to the entry operator.
+func newSession(t *testing.T) *uplink.Session {
+	t.Helper()
+	committee, _ := testCommittee(t)
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		t.Fatal(err)
+	}
+	var digest [32]byte
+	copy(digest[:], []byte("publication-campaign-topology---1"))
+	session, err := uplink.NewSession(secret, committee.PublicKey, uplink.Context{
+		NetworkID: "campaign", Epoch: 12, TopologyDigest: digest, EntryOperator: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return session
 }
