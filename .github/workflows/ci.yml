@@ -28,8 +28,10 @@ jobs:
           network_deps="$(go list -deps \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-node \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-dkg \
+            github.com/Jtensetti/nomad-testnet/cmd/nomad-lifecycle \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-operator \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-partial-fetch \
+            github.com/Jtensetti/nomad-testnet/cmd/nomad-rotation-controller \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-topology \
             github.com/Jtensetti/nomad-testnet/live/node \
             github.com/Jtensetti/nomad-testnet/live/hop \
@@ -245,7 +247,7 @@ jobs:
           GOARCH: amd64
         run: |
           mkdir -p dist
-          for command in nomad-bootstrap nomad-dkg nomad-fixture-publisher nomad-node nomad-operator nomad-topology nomad-share nomad-partial-fetch nomad-materializer; do
+          for command in nomad-bootstrap nomad-dkg nomad-fixture-publisher nomad-lifecycle nomad-node nomad-operator nomad-rotation-controller nomad-topology nomad-share nomad-partial-fetch nomad-materializer; do
             go build -trimpath -ldflags='-s -w' -o "dist/$command" "./cmd/$command"
           done
           tar -C dist -czf nomad-live-linux-amd64.tgz .
