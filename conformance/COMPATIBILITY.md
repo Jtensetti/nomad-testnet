@@ -211,11 +211,45 @@ corpus alone would have revealed:
    label in a public repository and authenticates nothing outside this corpus
    — and it must never appear in a topology or an operator secret.
 
+### The signed topology, and what specifying it took
+
+`reference/nomadtopology.py` is the second format: the document that is the
+root of trust for everything else. Direction E of the cross-check verifies both
+corpus topologies, reproduces their digests byte for byte, refuses five
+structural mutations and requires four content changes to move the digest.
+
+Reproducing the digest is the check that carries. It is a SHA-256 over the
+canonical encoding, so matching it means having produced those bytes exactly.
+Two mutations of the Go encoder show that is not a formality: changing the
+digest domain is caught, and so is *sorting the members* — the shape a
+well-meaning "canonicalise this properly" change would take, which would
+silently stop every existing verifier from agreeing.
+
+Writing it needed the specification written first, because there was none.
+`docs/PROTOCOL.md` described the wire cell, the RLNC packet, the mix batch, the
+object manifest and the basin, and said nothing about the document they all
+depend on. And the encoding it signs is the output of Go's `encoding/json` on
+its own structs: member order from the struct declaration rather than sorted,
+`<`, `>` and `&` escaped in a way no JSON specification requires, and an absent
+array as `null`. That is written down now, and recorded as a defect that should
+not survive the freeze — a canonical encoding defined by one language's library
+defaults is not a specification, and the escaping is invisible until a
+`network_id` or an endpoint contains an ampersand.
+
+One further trap, because it is the first mistake available here: the file is
+pretty-printed and the signed encoding is not. A verifier must parse and
+re-encode; hashing the file as found verifies nothing.
+
+The signature check uses `cryptography` where it is importable rather than
+hand-rolling Ed25519 for a conformance tool. Where it is absent the
+canonical-encoding and digest checks still run, and those are the ones that
+test interoperability.
+
 ### What it does not establish
 
-The second implementation covers `hop-cell-v1`. The signed topology document,
-the object manifest and the uplink cell profile have vectors in this corpus
-but no second implementation, so interoperability for those is unevidenced.
+The second implementation covers `hop-cell-v1` and `topology-document-v3`. The
+object manifest and the uplink cell profile have vectors in this corpus but no
+second implementation, so interoperability for those is unevidenced.
 
 And both implementations were written by the same author. That tests whether
 the specification is sufficient to build from — it demonstrably was not, which
