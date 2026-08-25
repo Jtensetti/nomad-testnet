@@ -23,6 +23,7 @@ Usage:
 """
 
 import argparse
+import base64
 import hashlib
 import json
 import pathlib
@@ -30,6 +31,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+import nomadtopology  # noqa: E402
 import nomadwire  # noqa: E402
 
 
@@ -322,6 +324,102 @@ def direction_d(path: pathlib.Path) -> int:
     return len(cells)
 
 
+def direction_e(vectors: list[dict]) -> int:
+    """Verify the signed topology, which is the root of trust for everything.
+
+    The digest is the check that matters. It is a SHA-256 over the canonical
+    encoding, so reproducing it means having reproduced those bytes exactly --
+    Go's member order, Go's habit of escaping <, > and &, Go's null for an
+    absent array. A second implementation that got any of that wrong would
+    verify signatures it computed itself and disagree with everyone.
+    """
+    checked = 0
+    for vector in vectors:
+        if vector["message"] != "topology-document-v3":
+            continue
+        encoded = bytes.fromhex(vector["bytes_hex"])
+        authority = base64.b64decode(vector["fields"]["conformance_authority_key"])
+        document = nomadtopology.verify(encoded, authority)
+
+        computed = nomadtopology.topology_digest(document).hex()
+        if computed != vector["fields"]["topology_digest"]:
+            raise Failure(
+                f"{vector['name']}: this implementation computes topology digest "
+                f"{computed[:16]}, the corpus says "
+                f"{vector['fields']['topology_digest'][:16]} -- the canonical "
+                "encoding was not reproduced"
+            )
+        for name, actual, expected in (
+            ("network_id", document["network_id"], vector["fields"]["network_id"]),
+            ("epoch", str(document["epoch"]), vector["fields"]["epoch"]),
+            ("operators", str(len(document["operators"])), vector["fields"]["operators"]),
+            ("cell_size", str(document["traffic"]["cell_size"]), vector["fields"]["cell_size"]),
+        ):
+            if actual != expected:
+                raise Failure(f"{vector['name']}: decoded {name} {actual!r}, corpus says {expected!r}")
+
+        # Negative cases. A verifier that accepts everything also "agrees".
+        #
+        # They are built by re-serialising the parsed document rather than by
+        # editing its text: the file is pretty-printed and a string replace
+        # aimed at compact JSON silently matches nothing, which is how an
+        # earlier version of this reported that an unknown member was
+        # accepted when the mutation had never been applied.
+        outer = json.loads(encoded.decode())
+
+        # Structural mutations are refused by the parser, with or without an
+        # ed25519 library present.
+        refused = {
+            "an unknown document member":
+                json.dumps({**outer, "document": {**outer["document"], "surprise": 1}}),
+            "an unknown outer member": json.dumps({**outer, "surprise": 1}),
+            "an unrecognised version":
+                json.dumps({**outer,
+                            "document": {**outer["document"],
+                                         "version": "nomad-live-topology-v9"}}),
+            "trailing data": encoded.decode() + "{}",
+            "a duplicate member": encoded.decode().replace(
+                '"network_id"', '"network_id": "elsewhere",\n    "network_id"', 1),
+        }
+        for name, mutated in refused.items():
+            try:
+                nomadtopology.verify(mutated.encode(), authority)
+            except (nomadtopology.TopologyError, ValueError):
+                continue
+            raise Failure(f"{vector['name']}: accepted {name}")
+
+        # Tampering with a *value* is caught by the signature, which needs a
+        # library that may not be here. It is also caught by the digest, which
+        # needs only hashlib -- and the digest is the property that carries:
+        # the hop authentication tag binds it, so a document whose digest
+        # moved is one every authenticated cell in the epoch rejects.
+        for name, changed in {
+            "a changed epoch": {**document, "epoch": 9999},
+            "a changed network": {**document, "network_id": "elsewhere"},
+            "a changed cell interval": {
+                **document,
+                "traffic": {**document["traffic"], "cell_interval_ms": 999},
+            },
+            "a moved validity window": {**document, "not_after": "2099-01-01T00:00:00Z"},
+        }.items():
+            if nomadtopology.topology_digest(changed).hex() == computed:
+                raise Failure(
+                    f"{vector['name']}: {name} left the topology digest unchanged, so "
+                    "nothing binding that digest would notice"
+                )
+
+        # And the digest must move when the document does, or it is pinning
+        # nothing. Blanking one attestation is the subtlest such change.
+        tampered = json.loads(json.dumps(document))
+        tampered["operators"][0]["attestation"] = ""
+        if nomadtopology.topology_digest(tampered).hex() == computed:
+            raise Failure(f"{vector['name']}: the digest did not change when the document did")
+        checked += 1
+    if checked == 0:
+        raise Failure("the corpus contained no topology vectors; nothing was checked")
+    return checked
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("corpus")
@@ -337,6 +435,10 @@ def main() -> int:
         print(f"A: verified and reproduced {verified} authenticated cells from the corpus")
         refused = direction_c(vectors)
         print(f"C: refused {refused} mutations and cross-context replays")
+        topologies = direction_e(vectors)
+        signatures = "with signatures" if nomadtopology.SIGNATURES_CHECKABLE \
+            else "canonical encoding and digest only; no ed25519 library here"
+        print(f"E: verified {topologies} signed topologies ({signatures})")
         if arguments.emit:
             emitted = direction_b(vectors, pathlib.Path(arguments.emit))
             print(f"B: produced {emitted} cells for the first implementation at {arguments.emit}")

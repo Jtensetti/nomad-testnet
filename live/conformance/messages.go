@@ -291,6 +291,14 @@ func signedTopologies() ([]Vector, error) {
 		}
 		vectors = append(vectors, NewVector("topology-document-v3", shape.name, shape.description,
 			encoded, map[string]string{
+				// The pinned authority key. Trust never comes from the
+				// document -- a topology that names its own authority
+				// authenticates nothing -- so a verifier is given the key
+				// out of band, and a vector without it is a signature nobody
+				// can check. It is derived from a fixed label in a public
+				// repository and authenticates nothing outside this corpus.
+				"conformance_authority_key": base64.StdEncoding.EncodeToString(
+					DeterministicKey("topology-authority").Public().(ed25519.PublicKey)),
 				"network_id":       signed.Document.NetworkID,
 				"epoch":            strconv.FormatUint(signed.Document.Epoch, 10),
 				"operators":        strconv.Itoa(len(signed.Document.Operators)),

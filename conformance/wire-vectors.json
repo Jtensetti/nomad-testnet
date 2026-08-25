@@ -94,6 +94,7 @@
       "fields": {
         "cell_interval_ms": "50",
         "cell_size": "1200",
+        "conformance_authority_key": "h9wQtRcGP+XowWb2BYnPQo7RY7CJanbY/07SD772/uw=",
         "epoch": "7",
         "network_id": "nomad-conformance",
         "not_after": "2100-01-01T00:00:00Z",
@@ -113,6 +114,7 @@
       "fields": {
         "cell_interval_ms": "50",
         "cell_size": "1200",
+        "conformance_authority_key": "h9wQtRcGP+XowWb2BYnPQo7RY7CJanbY/07SD772/uw=",
         "epoch": "7",
         "network_id": "nomad-conformance",
         "not_after": "2100-01-01T00:00:00Z",
