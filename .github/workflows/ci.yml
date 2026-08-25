@@ -112,6 +112,15 @@ jobs:
           python3 scripts/validate-corpus-schema.py
       - name: Verify the published conformance corpus matches its encoders
         run: go run ./cmd/nomad-conformance -check conformance/wire-vectors.json
+      - name: Run the incident drill
+        run: |
+          # PROD-28 asks that incident response is exercised. The drill starts
+          # three real nodes on loopback and works the two scenarios in
+          # deploy/RECOVERY.md: a node that is present and not working, and a
+          # hop sequence file restored from backup. A runbook whose drill has
+          # not been run since the code moved is a document about an older
+          # system, so it runs here rather than on request.
+          ./scripts/incident-drill.sh
       - name: Interoperate with the second implementation
         run: |
           # PROD-03 asks that two implementations interoperate for the public

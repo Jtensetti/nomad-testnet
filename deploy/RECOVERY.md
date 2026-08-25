@@ -16,6 +16,23 @@ the instinct an operator brings from every other service.
 | Topology watermark | alongside `--state` | Loses rollback protection, nothing else. | **Unsafe.** Re-admits a removed operator or a rotated-away key. |
 | Operator secrets | `--secrets` | The operator cannot participate. | Safe if the topology has not rotated past them. |
 
+## A hung node does not resume, and that is correct
+
+If a node is stopped and later continued — SIGSTOP/SIGCONT, a paused VM, a
+host that froze — it does not carry on where it left off. While it was stopped
+it missed its lateness budget by however long that was, and a fixed-cadence
+sender that wakes up behind refuses to emit a catch-up burst. It exits.
+
+`scripts/incident-drill.sh` exercises exactly this and confirms both halves:
+the liveness gate detects the stopped node ("health file is 7.1s old: the node
+stopped reporting"), and on resume the process exits rather than catching up.
+
+**So recovery from a hang is a restart, not a resume.** Supervision has to
+restart the unit; continuing the process leaves you where you were a moment
+later. This is the privacy invariant costing you availability on purpose: a
+burst that made up for lost time would be a measurement of how long the host
+was frozen, emitted onto the wire.
+
 ## The one that will catch you: a restored hop sequence file
 
 The hop sequence is a per-sender counter that peers use to refuse replays. It
@@ -52,6 +69,19 @@ forward: you cannot know how far the peers have already seen.
 it only as part of a full epoch rotation. Losing the file outright is *safer*
 than restoring an old one, because a node starting from zero is refused
 immediately and consistently rather than intermittently.
+
+**Why this hides.** The reservation on disk only moves when the node opens it,
+so a backup and a restore either side of a single restart are the same bytes
+and the restore does nothing at all. The damage needs a backup that is old
+enough for the node to have restarted since — which is to say, every backup you
+would actually restore from. A test that skips that detail concludes the
+problem does not exist; `scripts/incident-drill.sh` made that mistake once
+before it was fixed to restart in between.
+
+The drill's measured result, with the shipped binaries on loopback:
+
+> operator-a: sent=99 send_dropped=0 — and it passes `--check-health`.
+> operator-b: replay_rejected 0 → 80.
 
 ## Restoring an old topology
 
@@ -92,3 +122,15 @@ back emitting normally.
 
 Step 6 is not a formality. It is the only check that distinguishes a recovered
 node from one that is emitting into a void.
+
+## Running the drill
+
+```
+scripts/incident-drill.sh
+```
+
+It builds the real binaries, bootstraps a three-operator network on loopback,
+and works both scenarios above with a pass or fail for each. No container
+runtime, so it runs anywhere the tests do. Run it after changing anything in
+the emission path, the health file, or this document — a runbook whose drill
+has not been run since the code moved is a document about an older system.

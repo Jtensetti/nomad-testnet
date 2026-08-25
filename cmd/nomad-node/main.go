@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,7 +25,14 @@ func main() {
 	// stacks: Go renders frame arguments as raw machine words and an init
 	// system retains whatever a crashing service wrote. Only GOTRACEBACK can
 	// turn that off, and only from outside, so the process checks and says so.
-	telemetry.WarnIfCrashDumpsEnabled(os.Stderr)
+	//
+	// Not for --check-health, which reads a status file, holds nothing, and
+	// exits. Warning there puts the line into every healthcheck's output on
+	// every interval, where it is noise that trains an operator to ignore the
+	// warning that matters. An incident drill found it doing exactly that.
+	if !isHealthCheck() {
+		telemetry.WarnIfCrashDumpsEnabled(os.Stderr)
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "nomad-node:", err)
 		os.Exit(1)
@@ -40,6 +48,20 @@ func main() {
 // Checking that the process is up, or that its health file exists, no longer
 // distinguishes a working node from one that has been silently dropping every
 // cell for an hour. This reads what the node actually did.
+// isHealthCheck reports whether this invocation is the liveness gate rather
+// than a node. It reads the raw arguments because flag parsing happens inside
+// run, after the warning would already have been printed.
+func isHealthCheck() bool {
+	for _, argument := range os.Args[1:] {
+		if argument == "--check-health" || argument == "-check-health" ||
+			strings.HasPrefix(argument, "--check-health=") ||
+			strings.HasPrefix(argument, "-check-health=") {
+			return true
+		}
+	}
+	return false
+}
+
 func checkNodeIsEmitting(path string, maxSilence time.Duration, now time.Time) error {
 	if maxSilence <= 0 {
 		return errors.New("--max-silence must be positive")
