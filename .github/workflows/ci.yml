@@ -49,6 +49,15 @@ jobs:
           # The publication API must have no network capability, transitively.
           # Publish is a purely local operation; the only way a fragment
           # leaves the queue is a pull by the constant-rate scheduler.
+          # nomad-publish is the one process that holds both halves: a queue of
+          # private publication work and a socket. That is not a violation --
+          # it is where the two must meet -- so it gets a rule of its own
+          # rather than an exemption. It must not reach reader selection.
+          publisher_deps="$(go list -deps github.com/Jtensetti/nomad-testnet/cmd/nomad-publish)"
+          if printf '%s\n' "$publisher_deps" | grep -Eq 'nomad-(semantic-basins|local-reconstruction|selection-firewall)|nomad-testnet/live/(fetchplan|partialfetch|materialize|node)'; then
+            echo "the publisher reaches reader selection, reconstruction or peer choice"
+            exit 1
+          fi
           publish_deps="$(go list -deps github.com/Jtensetti/nomad-testnet/live/publish)"
           if printf '%s\n' "$publish_deps" | grep -Eq '^(net|net/http|net/url|os/exec)$'; then
             echo "publication API reaches a socket or process-launch capability"
