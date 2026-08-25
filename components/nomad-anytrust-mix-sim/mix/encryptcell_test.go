@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"sync"
 	"testing"
 
 	"go.dedis.ch/kyber/v4"
@@ -426,5 +427,65 @@ func TestEncryptingToASmallOrderKeyIsRefused(t *testing.T) {
 	}
 	if _, err := EncryptCell(pub, cell); err != nil {
 		t.Fatalf("a genuine committee key was refused: %v", err)
+	}
+}
+
+// The rows of a cell are encrypted in parallel, so the ways that can go wrong
+// are the ways concurrency goes wrong: a shared random stream serialising or,
+// worse, repeating; rows landing in the wrong slots; a worker's error being
+// lost. The suite's own tests cover a single cell's shape. This covers many
+// cells sealed at once, which is what a publisher with a queue actually does.
+func TestConcurrentSealingProducesCorrectDistinctCells(t *testing.T) {
+	public, private, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const cells = 24
+	var plain [cells]PlainCell
+	for index := range plain {
+		copy(plain[index][:], []byte("publication fragment "+string(rune('a'+index%26))))
+		plain[index][PlainCellSize-1] = byte(index)
+	}
+
+	var group sync.WaitGroup
+	sealed := make([]WireCell, cells)
+	failures := make([]error, cells)
+	for index := 0; index < cells; index++ {
+		group.Add(1)
+		go func(index int) {
+			defer group.Done()
+			sealed[index], failures[index] = EncryptCell(public, plain[index])
+		}(index)
+	}
+	group.Wait()
+
+	seen := map[string]int{}
+	for index := range sealed {
+		if failures[index] != nil {
+			t.Fatalf("cell %d: %v", index, failures[index])
+		}
+		// Every cell distinct: two cells that came out identical would mean a
+		// shared stream repeating, which is the failure that matters most and
+		// the one a round-trip alone would not catch.
+		key := string(sealed[index][:cipherSize])
+		if previous, repeated := seen[key]; repeated {
+			t.Fatalf("cells %d and %d have identical ciphertext: the random stream "+
+				"repeated across workers", previous, index)
+		}
+		seen[key] = index
+
+		// And every cell decrypts to its own plaintext, which is what catches
+		// rows landing in the wrong slot.
+		batch, err := ParseWire([]WireCell{sealed[index], sealed[index]})
+		if err != nil {
+			t.Fatalf("cell %d does not parse: %v", index, err)
+		}
+		recovered, err := Decrypt(private, batch)
+		if err != nil {
+			t.Fatalf("cell %d does not decrypt: %v", index, err)
+		}
+		if recovered[0] != plain[index] {
+			t.Fatalf("cell %d decrypted to the wrong plaintext", index)
+		}
 	}
 }

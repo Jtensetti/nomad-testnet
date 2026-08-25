@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
+	"sync"
+	"sync/atomic"
 
 	"go.dedis.ch/kyber/v4"
 	"go.dedis.ch/kyber/v4/group/edwards25519"
@@ -401,12 +404,24 @@ func CommitteeMix(pub PublicKey, input *Batch, members int) (*Batch, []Round, er
 //
 // The uplink worked around it by encrypting a two-column batch and discarding
 // the second column. That is not merely inelegant: the cost of encryption is
-// linear in columns -- measured by BenchmarkEncryptCell against
-// BenchmarkEncryptTwoColumnBatchAndDiscardOne at 46 ms for one cell against
-// 103 ms for the two-column path -- so half of
-// every publisher's per-cell cost was work thrown away -- against a 50 ms
-// deployed cell interval it could not meet in the first place. See the seal
-// cost finding in nomad-protocol's evidence index.
+// linear in columns, so half of every publisher's per-cell cost was work
+// thrown away -- against a 50 ms deployed cell interval it could not meet in
+// the first place.
+//
+// Measured on a 2.1 GHz Xeon, and worth reading in order, because each number
+// is the reason for the next:
+//
+//	103 ms  two-column batch, one column discarded
+//	 36 ms  single-cell path, serial
+//	 12 ms  single-cell path, rows encrypted in parallel on four cores
+//
+// The remaining 12 ms is still not mostly ElGamal. Of the 36 ms serial cost,
+// about 30 ms is kyber's Point.Embed rejection loop and under 4 ms is the two
+// scalar multiplications per row that actually encrypt. Parallelism spreads
+// that loop across cores; it does not remove it, and on one core the cost is
+// unchanged. Removing it needs a prime-order group encoding, which is a wire
+// decision rather than an optimisation. See the seal cost finding in
+// nomad-protocol's evidence index.
 //
 // The result composes: ParseWire assembles individually encrypted cells into
 // the batch the committee shuffles and decrypts, which is already how the
@@ -432,24 +447,82 @@ func encryptCellWithPadding(pub PublicKey, cell PlainCell, padding io.Reader) (W
 	if err != nil {
 		return out, err
 	}
-	stream := s.RandomStream()
+	// The eighteen rows are independent -- each is its own ElGamal encryption
+	// with its own ephemeral -- so they are encrypted in parallel.
+	//
+	// This is worth doing because of where the cost actually is. Measured on
+	// a 2.1 GHz Xeon, one cell takes about 36 ms, and 30 ms of that is
+	// kyber's Point.Embed: to put 28 bytes in a point's y-coordinate it picks
+	// a random candidate and multiplies by the group order to test subgroup
+	// membership, retrying until one lands. A random candidate is on the
+	// curve about half the time and in the prime-order subgroup one time in
+	// eight, so it discards roughly sixteen full scalar multiplications per
+	// chunk. The ElGamal itself -- two scalar multiplications per row -- is
+	// under 4 ms of the total. See DEC-0xx in nomad-protocol for the encoding
+	// choice that would remove the rejection loop rather than spread it.
+	//
+	// Doing this on the publisher's own machine, ahead of time, is safe for
+	// the emission invariant: the uplink queue is pull-only and a scheduler
+	// on a public clock decides when anything leaves. How long sealing took
+	// never reaches the wire.
+	type rowOutput struct {
+		encoded [2][]byte
+		err     error
+	}
+	rows := make([]rowOutput, ChunkCount)
+	workers := runtime.GOMAXPROCS(0)
+	if workers > ChunkCount {
+		workers = ChunkCount
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	var next atomic.Int64
+	var group sync.WaitGroup
+	group.Add(workers)
+	for worker := 0; worker < workers; worker++ {
+		go func() {
+			defer group.Done()
+			// A suite and a random stream per worker: kyber's stream is not
+			// safe to share, and sharing one would serialise exactly the part
+			// this is parallelising.
+			local := newSuite()
+			stream := local.RandomStream()
+			for {
+				row := int(next.Add(1)) - 1
+				if row >= ChunkCount {
+					return
+				}
+				start := row * ChunkSize
+				message := local.Point().Embed(cell[start:start+ChunkSize], stream)
+				r := local.Scalar().Pick(stream)
+				// Same order as MarshalWire: x then y, per row.
+				for index, point := range []kyber.Point{
+					local.Point().Mul(r, nil),
+					local.Point().Add(message, local.Point().Mul(r, h)),
+				} {
+					encoded, err := point.MarshalBinary()
+					if err != nil {
+						rows[row].err = err
+						break
+					}
+					if len(encoded) != pointSize {
+						rows[row].err = errors.New("unexpected ciphertext point size")
+						break
+					}
+					rows[row].encoded[index] = encoded
+				}
+			}
+		}()
+	}
+	group.Wait()
+
 	offset := 0
-	for row := 0; row < ChunkCount; row++ {
-		start := row * ChunkSize
-		message := s.Point().Embed(cell[start:start+ChunkSize], stream)
-		r := s.Scalar().Pick(stream)
-		// Same order as MarshalWire: x then y, per row.
-		for _, point := range []kyber.Point{
-			s.Point().Mul(r, nil),
-			s.Point().Add(message, s.Point().Mul(r, h)),
-		} {
-			encoded, err := point.MarshalBinary()
-			if err != nil {
-				return WireCell{}, err
-			}
-			if len(encoded) != pointSize {
-				return WireCell{}, errors.New("unexpected ciphertext point size")
-			}
+	for row := range rows {
+		if rows[row].err != nil {
+			return WireCell{}, rows[row].err
+		}
+		for _, encoded := range rows[row].encoded {
 			offset += copy(out[offset:], encoded)
 		}
 	}
