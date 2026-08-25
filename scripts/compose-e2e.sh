@@ -149,9 +149,18 @@ if len({item["topology_digest"] for item in health}) != 1:
 for item in health:
     if item["sent"] < 20 or item["received"] < 20:
         raise SystemExit(f"insufficient live traffic in {item['operator_id']}")
-    for counter in ("wrong_size", "unknown_peer", "auth_rejected", "replay_rejected", "cache_rejected"):
+    # send_dropped and health_deferred must be zero on a healthy run. They
+    # exist so that a local failure costs one cell instead of the node, and a
+    # live run that trips them means the emission path is failing for a reason
+    # nothing here has explained.
+    for counter in ("wrong_size", "unknown_peer", "auth_rejected", "replay_rejected",
+                    "cache_rejected", "send_dropped", "health_deferred"):
         if item[counter] != 0:
             raise SystemExit(f"{item['operator_id']} reports {counter}={item[counter]}")
+    # The node stays up through a local emission failure now, so "the process
+    # is running" no longer means it emitted anything. Check what it did.
+    if not item.get("last_sent_at", "").startswith("2"):
+        raise SystemExit(f"{item['operator_id']} never recorded an emission")
 PY
 
 (cd "$verified_root" && sha256sum "$object_name") | tee "$evidence_root/object.sha256"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 )
 
@@ -59,12 +60,26 @@ type Sink interface {
 }
 
 type Scheduler struct {
-	cfg    Config
-	source Source
-	sink   Sink
+	cfg     Config
+	source  Source
+	sink    Sink
+	dropped atomic.Uint64
 }
 
 var ErrDeadlineMissed = errors.New("fixed-cadence deadline missed")
+
+// ErrCellDropped is how a Source or Sink says that this one cell could not be
+// produced or delivered for a local reason: a transient socket error, an
+// exhausted socket buffer, a full disk under a local state write. The
+// scheduler counts it and continues on the same absolute schedule. The cell is
+// lost -- never retried, never re-emitted later, never followed by a catch-up
+// -- because losing work is the only response to a local condition that does
+// not turn that condition into an externally observable event.
+//
+// Returning it is deliberate and narrow. Any other error still stops the
+// scheduler, so a real misconfiguration fails closed rather than running
+// forever emitting nothing. Callers that wrap it must use %w.
+var ErrCellDropped = errors.New("sink dropped one cell")
 
 func NewScheduler(cfg Config, source Source, sink Sink) (*Scheduler, error) {
 	if err := cfg.Validate(); err != nil {
@@ -119,7 +134,10 @@ func (s *Scheduler) run(ctx context.Context, count int) error {
 			return fmt.Errorf("%w by %s", ErrDeadlineMissed, late)
 		}
 		if err := s.EmitOne(ctx); err != nil {
-			return err
+			if !errors.Is(err, ErrCellDropped) {
+				return err
+			}
+			s.dropped.Add(1)
 		}
 		next = next.Add(interval)
 		if !time.Now().Before(next) {
@@ -127,6 +145,16 @@ func (s *Scheduler) run(ctx context.Context, count int) error {
 		}
 	}
 	return nil
+}
+
+// Dropped is the number of scheduled emissions lost to ErrCellDropped. It is
+// local diagnostic state -- it is published in the node health file so an
+// operator can see a failing link -- and it never feeds back into scheduling.
+func (s *Scheduler) Dropped() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.dropped.Load()
 }
 
 func waitUntil(ctx context.Context, deadline time.Time) error {

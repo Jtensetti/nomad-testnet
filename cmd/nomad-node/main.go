@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -30,6 +31,46 @@ func main() {
 	}
 }
 
+// checkNodeIsEmitting is the liveness gate for a supervisor.
+//
+// A node no longer stops when a local condition breaks its emission path: a
+// full disk or an exhausted socket buffer costs the cell it interrupted and
+// the schedule carries on. That is the right behaviour on the wire and it
+// removes the crudest alarm an operator had, which was the process exiting.
+// Checking that the process is up, or that its health file exists, no longer
+// distinguishes a working node from one that has been silently dropping every
+// cell for an hour. This reads what the node actually did.
+func checkNodeIsEmitting(path string, maxSilence time.Duration, now time.Time) error {
+	if maxSilence <= 0 {
+		return errors.New("--max-silence must be positive")
+	}
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read health file: %w", err)
+	}
+	var stats node.Stats
+	if err := json.Unmarshal(encoded, &stats); err != nil {
+		return fmt.Errorf("parse health file: %w", err)
+	}
+	if stats.UpdatedAt.IsZero() {
+		return errors.New("health file carries no update time")
+	}
+	if stale := now.Sub(stats.UpdatedAt); stale > maxSilence {
+		return fmt.Errorf("health file is %s old: the node stopped reporting", stale.Truncate(time.Millisecond))
+	}
+	if stats.LastSentAt.IsZero() {
+		return fmt.Errorf("the node has emitted nothing since it started, %s ago; "+
+			"%d emissions were dropped locally",
+			now.Sub(stats.StartedAt).Truncate(time.Millisecond), stats.SendDropped)
+	}
+	if silent := now.Sub(stats.LastSentAt); silent > maxSilence {
+		return fmt.Errorf("the node last emitted %s ago, beyond the %s limit; "+
+			"%d emissions have been dropped locally",
+			silent.Truncate(time.Millisecond), maxSilence, stats.SendDropped)
+	}
+	return nil
+}
+
 func run() error {
 	topologyPath := flag.String("topology", "", "signed public topology JSON")
 	authorityPath := flag.String("authority-key", "", "pinned topology authority public key")
@@ -41,7 +82,12 @@ func run() error {
 	seedPath := flag.String("seed", "", "optional public encrypted seed bundle")
 	cacheStreams := flag.Int("cache-streams", 64, "maximum immutable raw-cache streams")
 	cacheSweep := flag.Duration("cache-sweep", 30*time.Second, "public cache replication sweep")
+	checkHealth := flag.String("check-health", "", "read a health file and exit non-zero if the node is not emitting")
+	maxSilence := flag.Duration("max-silence", 30*time.Second, "how long a node may emit nothing before --check-health fails")
 	flag.Parse()
+	if *checkHealth != "" {
+		return checkNodeIsEmitting(*checkHealth, *maxSilence, time.Now().UTC())
+	}
 	for name, value := range map[string]string{
 		"--topology": *topologyPath, "--authority-key": *authorityPath, "--secrets": *secretsPath,
 		"--listen": *listen, "--cache": *cachePath, "--state": *statePath, "--health": *healthPath,

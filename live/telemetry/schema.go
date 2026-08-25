@@ -50,6 +50,13 @@ var allowed = []Field{
 	{"duplicate", "duplicate cells, an adversary-set quantity"},
 	{"queue_dropped", "relay queue overflow under public policy"},
 	{"cache_rejected", "cache admission refusals under public policy"},
+	{"send_dropped", "emissions lost to a local send failure; host state and an " +
+		"adversary's own pressure, never user activity, and the alarm that " +
+		"replaced the node stopping"},
+	{"health_deferred", "health-file writes that failed; local disk state only"},
+	{"last_sent_at", "when the last cell went out; an observer on the link reads " +
+		"this off the wire, and it is the liveness signal a node that no longer " +
+		"stops on a local failure has to publish instead"},
 }
 
 // forbidden names things that must never be emitted even though a developer

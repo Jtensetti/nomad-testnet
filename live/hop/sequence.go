@@ -125,3 +125,13 @@ func atomicStateWrite(path string, data []byte) error {
 	defer dir.Close()
 	return dir.Sync()
 }
+
+// ExhaustReservationForTest consumes the reserved range so that the next Next
+// must reserve again. It exists so a test can drive the disk-backed
+// reservation path without writing 2^20 cells, and it is a no-op on the
+// production path: nothing outside a test calls it.
+func (sequence *FileSequence) ExhaustReservationForTest() {
+	sequence.mu.Lock()
+	defer sequence.mu.Unlock()
+	sequence.next = sequence.reserved + 1
+}

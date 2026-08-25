@@ -178,7 +178,11 @@ services:
       - raw-a:/cache
       - state-a:/state
     healthcheck:
-      test: [CMD, test, -s, /state/health.json]
+      # Not "is the file there": a node no longer stops when a local condition
+      # breaks its emission path, so a process that is up and silently
+      # dropping every cell has to be caught by asking what it actually
+      # emitted. --max-silence is deployment policy, not protocol.
+      test: [CMD, nomad-node, --check-health=/state/health.json, --max-silence=5s]
       interval: 2s
       timeout: 1s
       retries: 20
@@ -205,7 +209,11 @@ services:
       - raw-b:/cache
       - state-b:/state
     healthcheck:
-      test: [CMD, test, -s, /state/health.json]
+      # Not "is the file there": a node no longer stops when a local condition
+      # breaks its emission path, so a process that is up and silently
+      # dropping every cell has to be caught by asking what it actually
+      # emitted. --max-silence is deployment policy, not protocol.
+      test: [CMD, nomad-node, --check-health=/state/health.json, --max-silence=5s]
       interval: 2s
       timeout: 1s
       retries: 20
@@ -232,7 +240,11 @@ services:
       - raw-c:/cache
       - state-c:/state
     healthcheck:
-      test: [CMD, test, -s, /state/health.json]
+      # Not "is the file there": a node no longer stops when a local condition
+      # breaks its emission path, so a process that is up and silently
+      # dropping every cell has to be caught by asking what it actually
+      # emitted. --max-silence is deployment policy, not protocol.
+      test: [CMD, nomad-node, --check-health=/state/health.json, --max-silence=5s]
       interval: 2s
       timeout: 1s
       retries: 20

@@ -49,12 +49,29 @@ type Stats struct {
 	Duplicate      uint64    `json:"duplicate"`
 	QueueDropped   uint64    `json:"queue_dropped"`
 	CacheRejected  uint64    `json:"cache_rejected"`
+	// SendDropped counts scheduled emissions lost to a local send failure.
+	// It is the alarm that replaces the node stopping: a link that is
+	// failing shows up here as a rising number while the cadence holds.
+	SendDropped uint64 `json:"send_dropped"`
+	// HealthDeferred counts health-file writes that failed. The file is
+	// local observability, so a failure to write it must not be able to
+	// stop the node that it exists to describe.
+	HealthDeferred uint64 `json:"health_deferred"`
+	// LastSentAt is when the most recent cell actually went out. It is the
+	// liveness signal that has to exist now that a node no longer stops on a
+	// local failure: a process that is up, on cadence, and emitting nothing
+	// is invisible to a healthcheck that only asks whether it is up. An
+	// observer on the wire reads this value directly off the link, so
+	// publishing it gives away nothing that is not already public.
+	LastSentAt time.Time `json:"last_sent_at"`
 }
 
 type counters struct {
 	sent, received, stored, relayed, coverSent           atomic.Uint64
 	wrongSize, unknownPeer, authRejected, replayRejected atomic.Uint64
 	duplicate, queueDropped, cacheRejected               atomic.Uint64
+	sendDropped, healthDeferred                          atomic.Uint64
+	lastSentUnixNano                                     atomic.Int64
 }
 
 type Node struct {
@@ -247,6 +264,8 @@ func (node *Node) Snapshot() Stats {
 		AuthRejected: node.stats.authRejected.Load(), ReplayRejected: node.stats.replayRejected.Load(),
 		Duplicate: node.stats.duplicate.Load(), QueueDropped: node.stats.queueDropped.Load(),
 		CacheRejected: node.stats.cacheRejected.Load(),
+		SendDropped:   node.stats.sendDropped.Load(), HealthDeferred: node.stats.healthDeferred.Load(),
+		LastSentAt: lastSent(node.stats),
 	}
 }
 
@@ -257,38 +276,81 @@ func (sink *authenticatedSink) Send(ctx context.Context, cell fabric.Cell) error
 	if err != nil {
 		return fmt.Errorf("scheduler source supplied an invalid cell: %w", err)
 	}
+	// The peer counter advances before anything can fail, so which peer a
+	// tick is addressed to stays a function of the tick index and the signed
+	// plan. Holding it back on a failure would make the destination sequence
+	// depend on local conditions, which is the shape of leak this whole path
+	// exists to avoid.
 	peer := sink.peers[sink.plan[sink.next%uint64(len(sink.plan))]]
 	sink.next++
 	sequence, err := sink.sequence.Next()
 	if err != nil {
-		return err
+		// Reserving a hop sequence range writes to disk, so this is the
+		// disk-full case reaching the emission path. Lose the cell.
+		return sink.classify("reserve hop sequence", err)
 	}
-	context := sink.context
-	context.Receiver = peer.operator.Index
-	if err := hop.Seal(&cell, metadata, sink.self.Index, sequence, peer.key, context); err != nil {
+	sealContext := sink.context
+	sealContext.Receiver = peer.operator.Index
+	if err := hop.Seal(&cell, metadata, sink.self.Index, sequence, peer.key, sealContext); err != nil {
 		return err
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := sink.conn.SetWriteDeadline(deadline); err != nil {
-			return err
+			return sink.classify("set write deadline", err)
 		}
 	} else if err := sink.conn.SetWriteDeadline(time.Time{}); err != nil {
-		return err
+		return sink.classify("set write deadline", err)
 	}
 	written, err := sink.conn.WriteToUDP(cell[:], peer.address)
 	if err != nil {
-		return err
+		return sink.classify("write cell", err)
 	}
 	if written != fabric.CellSize {
-		return fmt.Errorf("short UDP write: %d", written)
+		return sink.classify("short UDP write",
+			fmt.Errorf("wrote %d of %d bytes", written, fabric.CellSize))
 	}
 	sink.stats.sent.Add(1)
+	sink.stats.lastSentUnixNano.Store(time.Now().UTC().UnixNano())
 	if hop.IsWork(metadata) {
 		sink.stats.relayed.Add(1)
 	} else {
 		sink.stats.coverSent.Add(1)
 	}
 	return nil
+}
+
+// lastSent is the zero time until the node has emitted anything, so a
+// healthcheck can tell "has not started" from "has stopped".
+func lastSent(stats *counters) time.Time {
+	nanoseconds := stats.lastSentUnixNano.Load()
+	if nanoseconds == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, nanoseconds).UTC()
+}
+
+// sendFailureIsFatal decides whether one failed emission costs the schedule
+// rather than a cell. Only a closed socket does: that is this node shutting
+// down, and continuing to tick against a socket that is gone would leave it
+// holding cadence forever, emitting nothing and reporting nothing wrong.
+//
+// Everything else is the host, and the host is not allowed a say in when this
+// node emits. Exhausted socket buffers (ENOBUFS), a local rate limiter
+// (EPERM), a route that went away (ENETUNREACH), a full disk under the hop
+// sequence reservation: each costs the cell it interrupted and nothing else.
+func sendFailureIsFatal(cause error) bool {
+	return errors.Is(cause, net.ErrClosed)
+}
+
+// classify turns one failed emission into either a fatal error or a lost cell.
+// A lost cell is never deferred, queued or re-emitted: a cell held back for a
+// local reason and sent later is that local reason, on the wire.
+func (sink *authenticatedSink) classify(what string, cause error) error {
+	if sendFailureIsFatal(cause) {
+		return fmt.Errorf("%s: %w", what, cause)
+	}
+	sink.stats.sendDropped.Add(1)
+	return fmt.Errorf("%w: %s: %v", fabric.ErrCellDropped, what, cause)
 }
 
 func (node *Node) receive(ctx context.Context) error {
@@ -357,17 +419,13 @@ func (node *Node) maintain(ctx context.Context) error {
 	cacheTicker := time.NewTicker(node.config.CacheSweep)
 	defer healthTicker.Stop()
 	defer cacheTicker.Stop()
-	if err := node.writeHealth(); err != nil {
-		return err
-	}
+	node.publishHealth()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-healthTicker.C:
-			if err := node.writeHealth(); err != nil {
-				return err
-			}
+			node.publishHealth()
 		case <-cacheTicker.C:
 			if err := node.enqueueCached(); err != nil {
 				return err
@@ -423,6 +481,17 @@ func (node *Node) enqueueCached() error {
 		}
 	}
 	return nil
+}
+
+// publishHealth writes the health file and counts a failure instead of
+// returning it. The file is local observability; it is written on a full disk
+// exactly when an operator most needs the node to still be running, and
+// stopping the node because its status file could not be written would make a
+// local disk condition into a network-visible outage.
+func (node *Node) publishHealth() {
+	if err := node.writeHealth(); err != nil {
+		node.stats.healthDeferred.Add(1)
+	}
 }
 
 func (node *Node) writeHealth() error {
