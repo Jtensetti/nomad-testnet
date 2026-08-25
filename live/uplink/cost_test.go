@@ -35,9 +35,9 @@ func benchSession(tb testing.TB) *uplink.Session {
 // fragment, and it decides whether a publisher can hold the cadence the
 // topology sets.
 //
-// It was 87 ms when this benchmark was written, because seal built a
+// It was 86.8 ms when this benchmark was written, because seal built a
 // two-column mix batch and discarded one column to satisfy mix.Encrypt's
-// two-cell minimum. mix.EncryptCell removed that, halving it to about 43 ms.
+// two-cell minimum. mix.EncryptCell removed that, halving it to 42.4 ms.
 // Half of a number that was already too large is still too large, which is why
 // the test below still records a finding rather than a clean result.
 func BenchmarkSealCover(b *testing.B) {

@@ -71,6 +71,19 @@ func publicPoint(s *edwards25519.SuiteEd25519, key PublicKey) (kyber.Point, erro
 	if err := p.UnmarshalBinary(key[:]); err != nil {
 		return nil, fmt.Errorf("decode public key: %w", err)
 	}
+	// UnmarshalBinary checks that the point is on the curve, not that it is in
+	// the prime-order subgroup. Encrypting to the identity yields y = m + r*0 =
+	// m, which is the plaintext in cleartext on the wire, and a small-order key
+	// leaks it almost as completely.
+	//
+	// validateThresholdCommittee has rejected this since it was written, but
+	// Encrypt never called it, so a caller holding a bare PublicKey that never
+	// passed through committee validation -- which is exactly what
+	// uplink.Session holds -- had no protection. Checking here covers every
+	// encryption entry point at once rather than each remembering separately.
+	if err := rejectSmallOrder(s, p); err != nil {
+		return nil, fmt.Errorf("encryption public key: %w", err)
+	}
 	return p, nil
 }
 
@@ -388,7 +401,9 @@ func CommitteeMix(pub PublicKey, input *Batch, members int) (*Batch, []Round, er
 //
 // The uplink worked around it by encrypting a two-column batch and discarding
 // the second column. That is not merely inelegant: the cost of encryption is
-// linear in columns, measured at 86 ms for two and 160 ms for four, so half of
+// linear in columns -- measured by BenchmarkEncryptCell against
+// BenchmarkEncryptTwoColumnBatchAndDiscardOne at 46 ms for one cell against
+// 103 ms for the two-column path -- so half of
 // every publisher's per-cell cost was work thrown away -- against a 50 ms
 // deployed cell interval it could not meet in the first place. See the seal
 // cost finding in nomad-protocol's evidence index.

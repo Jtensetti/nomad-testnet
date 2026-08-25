@@ -129,8 +129,8 @@ func (session *Session) seal(sequence uint64, payload [PayloadSize]byte) (fabric
 	// shuffle of one element is the identity and a batch of one would mix
 	// nothing. But that minimum is a property of a mix input, not of a
 	// ciphertext, and paying it here meant half of every publisher's per-cell
-	// cost was work thrown away: 103 ms for the two-column path against 46 ms
-	// for one cell, measured. The cells are identical on the wire, and
+	// cost was work thrown away. Measured by BenchmarkSealCover on this host:
+	// 86.8 ms per seal before, 42.4 ms after. The cells are identical on the wire, and
 	// mix.ParseWire assembles individually encrypted cells into the batch the
 	// committee shuffles, which is already how the share service rebuilds one.
 	wire, err := mix.EncryptCell(session.committee, plain)

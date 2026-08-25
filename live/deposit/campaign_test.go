@@ -21,7 +21,8 @@ import (
 // interval this is a few seconds per world.
 // campaignInterval must exceed the cost of producing a cell or the loop is not
 // keeping a cadence, it is sealing as fast as it can. An uplink seal is
-// measured at about 79 ms (BenchmarkSealCover), so a 5 ms interval -- the
+// measured at 86.8 ms when this interval was chosen (BenchmarkSealCover, and
+// 42.4 ms since mix.EncryptCell), so a 5 ms interval -- the
 // first value used here -- produced a "cadence" that was really seal-time
 // variance, and a noise floor that swung between 0.003 and 0.520 of the
 // interval across runs. At 150 ms the ticker is achievable and the floor
@@ -114,7 +115,7 @@ func publicationWorld(t *testing.T, label string, queue *publish.Queue,
 // anything, and the run fails if that gap exceeds the registered tolerance.
 //
 // The first version of this campaign ticked at 5 ms while each cell cost about
-// 79 ms to seal, so the loop was not keeping a cadence at all and its measured
+// 86.8 ms to seal, so the loop was not keeping a cadence at all and its measured
 // "noise floor" swung between 0.003 and 0.520 of the interval across five runs.
 // Fixing the interval rather than lowering the bar turned that into 0.0003 to
 // 0.0038 across three runs, comfortably inside the registered 0.02 -- so these
