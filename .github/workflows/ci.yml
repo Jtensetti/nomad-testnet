@@ -103,6 +103,13 @@ jobs:
             echo "== $module =="
             (cd "$module" && go build ./... && go vet ./... && go test -race -count=1 ./...)
           done
+      - name: Validate the corpus against its published schema
+        run: |
+          # PROD-01 recorded that the corpus was a JSON file whose shape was
+          # enforced only by its own encoder, so a second implementation had
+          # nothing to validate against. The schema is now published and this
+          # keeps it from drifting away from the file it describes.
+          python3 scripts/validate-corpus-schema.py
       - name: Verify the published conformance corpus matches its encoders
         run: go run ./cmd/nomad-conformance -check conformance/wire-vectors.json
       - name: Verify the corpus is identical on a different word size
