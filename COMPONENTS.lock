@@ -1,7 +1,7 @@
 # Nomad integration snapshot lock v1
-github.com/Jtensetti/nomad-anytrust-mix-sim 6a1324e claude/nomad-production-ready-dxv4ql
-github.com/Jtensetti/nomad-constant-rate-fabric bee0cab claude/nomad-production-ready-dxv4ql
-github.com/Jtensetti/nomad-local-reconstruction 032f6f1ad3984e86d5812bd6ae07143d7a806a24 agent/nomad-v0.1
-github.com/Jtensetti/nomad-rlnc b395aa0b0dbd129a2820dbe02ee96d2a87f87273 agent/nomad-v0.1
-github.com/Jtensetti/nomad-selection-firewall 0bc4acd475f10bbfe0388629a3d00810a6579328 agent/nomad-v0.1
-github.com/Jtensetti/nomad-semantic-basins 644bff28a2075b66426f1cf4b5960ae18363ac60 agent/nomad-v0.1
+github.com/Jtensetti/nomad-anytrust-mix-sim 9391eab claude/nomad-production-ready-dxv4ql
+github.com/Jtensetti/nomad-constant-rate-fabric 8c79820 claude/nomad-production-ready-dxv4ql
+github.com/Jtensetti/nomad-local-reconstruction 3f87f8f claude/nomad-production-ready-dxv4ql
+github.com/Jtensetti/nomad-rlnc 8491ae3 claude/nomad-production-ready-dxv4ql
+github.com/Jtensetti/nomad-selection-firewall f45a5f9 claude/nomad-production-ready-dxv4ql
+github.com/Jtensetti/nomad-semantic-basins 29e2d97 claude/nomad-production-ready-dxv4ql

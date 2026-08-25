@@ -120,6 +120,21 @@ jobs:
             GOOS="${target%/*}" GOARCH="${target#*/}" go build ./... \
               || { echo "$target does not build"; exit 1; }
           done
+      - name: Scan dependencies for reachable vulnerabilities
+        run: |
+          # A vulnerability gate in one repository is a gate on one repository.
+          # This ran only in Nomad-browser, leaving the integration root -- the
+          # one that actually ships operator binaries -- unscanned. Each
+          # vendored component module is scanned too: they are separate modules
+          # behind replace directives, so a root scan never reaches them, which
+          # is the same gap that let an untested rlnc decoder ship.
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck="$(go env GOPATH)/bin/govulncheck"
+          "$govulncheck" ./...
+          for module in components/*/; do
+            echo "== $module =="
+            (cd "$module" && "$govulncheck" ./...)
+          done
       - name: Verify the traffic-analysis harness still detects differences
         run: python3 scripts/test-two-world-analysis.py
       - name: Verify the campaign verdict still separates noise from a finding
