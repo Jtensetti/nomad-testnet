@@ -95,7 +95,17 @@ write_files:
         curl -fsS --retry 3 -X PUT -T /opt/campaign.log '{log_put}'
         exit 1
       fi
-      echo "preflight ok: node alive after 8s"
+      # A live process is no longer evidence that the node emits. It does not
+      # stop when a local condition breaks its emission path, so a full disk
+      # or a firewall rule yields a full-length world with an empty capture
+      # and a process that passes every liveness check. Ask what it emitted.
+      if ! /opt/nomad-node --check-health=/opt/state/health.json --max-silence=10s; then
+        echo "PREFLIGHT FAILED: node is running but emitting nothing"
+        stop_node
+        curl -fsS --retry 3 -X PUT -T /opt/campaign.log '{log_put}'
+        exit 1
+      fi
+      echo "preflight ok: node alive and emitting after 8s"
       stop_node
       sleep 2
 
@@ -124,8 +134,13 @@ write_files:
         sleep {capture_seconds}
         # A node that died mid-world makes the capture meaningless rather than
         # merely short, so say so in the log next to the packet count.
-        kill -0 $NODE_PID 2>/dev/null && echo "world $world: node still alive at end" \\
-          || echo "world $world: WARNING node exited before the world ended"
+        if ! kill -0 $NODE_PID 2>/dev/null; then
+          echo "world $world: WARNING node exited before the world ended"
+        elif ! /opt/nomad-node --check-health=/opt/state/health.json --max-silence=10s; then
+          echo "world $world: WARNING node alive but emitted nothing; capture is not a measurement"
+        else
+          echo "world $world: node alive and emitting at end"
+        fi
         stop_node
         sleep 2
         kill -INT $tcpdump_pid 2>/dev/null; sleep 3; kill -9 $tcpdump_pid 2>/dev/null

@@ -170,4 +170,25 @@ docker compose -p "$project_name" -f "$compose_file" ps --format json |
     python3 -c 'import json,sys; print(json.dumps([json.loads(line) for line in sys.stdin if line.strip()], sort_keys=True))' \
     > "$evidence_root/processes.json"
 python3 -m json.tool "$evidence_root/processes.json" >/dev/null
+# The healthcheck's verdict is worth nothing if nothing reads it. A node no
+# longer stops when its emission path breaks, so "the container is running" is
+# not evidence that it emitted anything; the healthcheck asks what it emitted,
+# and this asserts the answer.
+python3 - "$evidence_root/processes.json" <<'PY'
+import json
+import pathlib
+import sys
+
+processes = json.loads(pathlib.Path(sys.argv[1]).read_text())
+operators = [p for p in processes if p.get("Service", "").startswith("operator-")]
+if len(operators) != 3:
+    raise SystemExit(f"expected three operator containers, found {len(operators)}")
+for process in operators:
+    health = process.get("Health", "")
+    if health != "healthy":
+        raise SystemExit(
+            f"{process['Service']} reports health {health!r}: the node is running but "
+            "its emission liveness check did not pass"
+        )
+PY
 echo "live multi-process fabric-to-cache e2e passed"

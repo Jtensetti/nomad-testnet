@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/Jtensetti/nomad-constant-rate-fabric/fabric"
@@ -97,16 +98,39 @@ type incomingPeer struct {
 	key      [32]byte
 }
 
+// sequenceSource is the sink's view of hop sequence allocation. It is an
+// interface so that a test can drive the failure paths without a hook in the
+// production type: an exported "for test" method on a production nonce
+// allocator is callable by any importer, and this one burned 2^20 durable
+// sequence numbers per call.
+type sequenceSource interface {
+	Next() (uint32, error)
+	Return(uint32)
+}
+
+// cellWriter is the socket, narrowed to what Send uses, for the same reason.
+// The errors that decide whether a node loses a cell or stops cannot be
+// produced on demand from a real socket -- ENOBUFS needs an exhausted host --
+// so a test that could not inject them would be testing the errors it can
+// reach rather than the ones that matter.
+type cellWriter interface {
+	SetWriteDeadline(time.Time) error
+	WriteToUDP([]byte, *net.UDPAddr) (int, error)
+}
+
 type authenticatedSink struct {
 	mu       sync.Mutex
-	conn     *net.UDPConn
+	conn     cellWriter
 	self     topology.Operator
 	peers    []outgoingPeer
 	plan     []uint16
 	next     uint64
-	sequence *hop.FileSequence
+	sequence sequenceSource
 	context  hop.Context
 	stats    *counters
+	// consecutive counts drops since the last cell that went out. A local
+	// condition that never clears is a misconfiguration, not weather.
+	consecutive int
 }
 
 type coverSource struct{}
@@ -285,30 +309,43 @@ func (sink *authenticatedSink) Send(ctx context.Context, cell fabric.Cell) error
 	sink.next++
 	sequence, err := sink.sequence.Next()
 	if err != nil {
-		// Reserving a hop sequence range writes to disk, so this is the
-		// disk-full case reaching the emission path. Lose the cell.
-		return sink.classify("reserve hop sequence", err)
+		// Only a failed reservation write is a local condition. Exhaustion
+		// and unreadable state mean authenticated sequence numbers can no
+		// longer be guaranteed unique, and both say so in their own message:
+		// rotate the topology epoch. Ticking past either would be a failed
+		// cryptographic precondition downgraded to a counter.
+		if !errors.Is(err, hop.ErrSequenceWriteFailed) {
+			return fmt.Errorf("hop sequence is unusable: %w", err)
+		}
+		return sink.drop("reserve hop sequence", err)
 	}
 	sealContext := sink.context
 	sealContext.Receiver = peer.operator.Index
 	if err := hop.Seal(&cell, metadata, sink.self.Index, sequence, peer.key, sealContext); err != nil {
 		return err
 	}
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := sink.conn.SetWriteDeadline(deadline); err != nil {
-			return sink.classify("set write deadline", err)
-		}
-	} else if err := sink.conn.SetWriteDeadline(time.Time{}); err != nil {
+	deadline := time.Time{}
+	if contextDeadline, ok := ctx.Deadline(); ok {
+		deadline = contextDeadline
+	}
+	if err := sink.conn.SetWriteDeadline(deadline); err != nil {
+		sink.sequence.Return(sequence)
 		return sink.classify("set write deadline", err)
 	}
 	written, err := sink.conn.WriteToUDP(cell[:], peer.address)
 	if err != nil {
+		// The cell did not reach the socket, so its sequence number was
+		// never observable. Give it back, or the gap it leaves in the
+		// cleartext hop header counts local failures for anyone watching.
+		sink.sequence.Return(sequence)
 		return sink.classify("write cell", err)
 	}
 	if written != fabric.CellSize {
+		// A short write did put bytes on the wire, so the number is spent.
 		return sink.classify("short UDP write",
 			fmt.Errorf("wrote %d of %d bytes", written, fabric.CellSize))
 	}
+	sink.consecutive = 0
 	sink.stats.sent.Add(1)
 	sink.stats.lastSentUnixNano.Store(time.Now().UTC().UnixNano())
 	if hop.IsWork(metadata) {
@@ -329,28 +366,78 @@ func lastSent(stats *counters) time.Time {
 	return time.Unix(0, nanoseconds).UTC()
 }
 
-// sendFailureIsFatal decides whether one failed emission costs the schedule
-// rather than a cell. Only a closed socket does: that is this node shutting
-// down, and continuing to tick against a socket that is gone would leave it
-// holding cadence forever, emitting nothing and reporting nothing wrong.
+// maximumConsecutiveDrops bounds how long a node may emit nothing before it
+// stops instead. It is deployment policy, not protocol: at the 50 ms cadence
+// the testnet uses it is about three minutes.
 //
-// Everything else is the host, and the host is not allowed a say in when this
-// node emits. Exhausted socket buffers (ENOBUFS), a local rate limiter
-// (EPERM), a route that went away (ENETUNREACH), a full disk under the hop
-// sequence reservation: each costs the cell it interrupted and nothing else.
-func sendFailureIsFatal(cause error) bool {
-	return errors.Is(cause, net.ErrClosed)
+// A threshold is needed because "transient" is a claim about a condition, not
+// a property of an error value. A disk that is full stays full. Continuing
+// forever would be the original bug wearing a counter: a node that is up, on
+// cadence, and has emitted nothing since it started.
+const maximumConsecutiveDrops = 4096
+
+// sendFailureIsTransient decides whether one failed emission costs a cell or
+// the schedule. It is an allowlist, and that polarity is the point.
+//
+// The first version of this function asked the opposite question -- is this
+// error fatal? -- and answered it with a denylist of one, net.ErrClosed.
+// Everything nobody had thought of became a lost cell, including a hop
+// sequence space that had run out. This repository already makes the argument
+// against that shape, in live/telemetry/schema.go: a denylist passes every
+// case nobody thought of, and those are exactly where the damage is.
+//
+// So an error costs a cell only if it names a condition that genuinely passes.
+// EPERM and EINVAL are deliberately absent: on Linux sendto returns EPERM for
+// a firewall verdict and EINVAL for a destination address the kernel will
+// never accept, and both mean a misconfiguration that a node must surface
+// rather than hide forever.
+func sendFailureIsTransient(cause error) bool {
+	if errors.Is(cause, os.ErrDeadlineExceeded) {
+		return true
+	}
+	for _, transient := range []syscall.Errno{
+		syscall.ENOBUFS,      // the host is out of socket buffers
+		syscall.ENOMEM,       // the host is out of memory for this write
+		syscall.EAGAIN,       // the socket would block; EWOULDBLOCK on Linux
+		syscall.EINTR,        // interrupted before anything was sent
+		syscall.ENETUNREACH,  // route withdrawn, typically a flap
+		syscall.EHOSTUNREACH, // peer unreachable, typically a flap
+		syscall.ENETDOWN,     // interface went down
+	} {
+		if errors.Is(cause, transient) {
+			return true
+		}
+	}
+	return errors.Is(cause, hop.ErrSequenceWriteFailed)
 }
 
 // classify turns one failed emission into either a fatal error or a lost cell.
 // A lost cell is never deferred, queued or re-emitted: a cell held back for a
 // local reason and sent later is that local reason, on the wire.
 func (sink *authenticatedSink) classify(what string, cause error) error {
-	if sendFailureIsFatal(cause) {
+	if !sendFailureIsTransient(cause) {
+		sink.consecutive = 0
 		return fmt.Errorf("%s: %w", what, cause)
 	}
+	sink.consecutive++
+	if sink.consecutive > maximumConsecutiveDrops {
+		return fmt.Errorf("%s: %d consecutive emissions lost, which is a local "+
+			"condition that is not clearing: %w", what, sink.consecutive, cause)
+	}
 	sink.stats.sendDropped.Add(1)
-	return fmt.Errorf("%w: %s: %v", fabric.ErrCellDropped, what, cause)
+	return fmt.Errorf("%w: %s: %w", fabric.ErrCellDropped, what, cause)
+}
+
+// drop is the same decision for a cause that is local by construction rather
+// than by classification.
+func (sink *authenticatedSink) drop(what string, cause error) error {
+	sink.consecutive++
+	if sink.consecutive > maximumConsecutiveDrops {
+		return fmt.Errorf("%s: %d consecutive emissions lost, which is a local "+
+			"condition that is not clearing: %w", what, sink.consecutive, cause)
+	}
+	sink.stats.sendDropped.Add(1)
+	return fmt.Errorf("%w: %s: %w", fabric.ErrCellDropped, what, cause)
 }
 
 func (node *Node) receive(ctx context.Context) error {

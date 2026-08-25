@@ -147,9 +147,14 @@ func (s *Scheduler) run(ctx context.Context, count int) error {
 	return nil
 }
 
-// Dropped is the number of scheduled emissions lost to ErrCellDropped. It is
-// local diagnostic state -- it is published in the node health file so an
-// operator can see a failing link -- and it never feeds back into scheduling.
+// Dropped is the number of scheduled emissions this scheduler lost to
+// ErrCellDropped. It is local diagnostic state for whoever owns the scheduler,
+// and it never feeds back into scheduling.
+//
+// It is not what an operator reads: a Sink that wants a drop count published
+// keeps its own, because the Sink knows which peer and which cause, and the
+// scheduler only knows that one emission did not happen. nomad-testnet's node
+// does exactly that and publishes send_dropped from the sink.
 func (s *Scheduler) Dropped() uint64 {
 	if s == nil {
 		return 0

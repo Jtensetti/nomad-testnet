@@ -160,3 +160,84 @@ func TestAnUnlistedVendoredFileIsRejected(t *testing.T) {
 		t.Fatalf("an unlisted file was not detected: %v", unpinned)
 	}
 }
+
+// COMPONENTS.lock says which upstream commit each vendored tree came from.
+// Nothing checked it, and it drifted: the lock pinned a fabric commit whose
+// scheduler had no ErrCellDropped while the vendored tree had one, so anyone
+// auditing which fabric this integration carries would have checked out the
+// wrong code and read the wrong behaviour. `sha256sum --check` cannot catch
+// that, because the lock is not a list of file digests.
+//
+// A commit ID cannot be verified from inside this repository without fetching
+// the upstream. What can be verified is that the lock was updated when the
+// vendored code was: each line carries the digest of that component's lines in
+// COMPONENTS.sha256, so moving a vendored file and leaving the lock alone
+// fails here rather than in an audit.
+func TestSnapshotLockTracksTheVendoredTrees(t *testing.T) {
+	pinned := readManifest(t)
+	byComponent := map[string][]string{}
+	for path, digest := range pinned {
+		parts := strings.Split(path, "/")
+		if len(parts) < 2 {
+			t.Fatalf("manifest entry %q is not under components/", path)
+		}
+		byComponent[parts[1]] = append(byComponent[parts[1]], digest+"  "+path)
+	}
+
+	locked := readLock(t)
+	if len(locked) != len(byComponent) {
+		t.Errorf("the lock names %d components and %d ship", len(locked), len(byComponent))
+	}
+	for component, lines := range byComponent {
+		module := "github.com/Jtensetti/" + component
+		entry, listed := locked[module]
+		if !listed {
+			t.Errorf("%s ships but COMPONENTS.lock does not name it", module)
+			continue
+		}
+		sort.Strings(lines)
+		sum := sha256.Sum256([]byte(strings.Join(lines, "\n") + "\n"))
+		if actual := hex.EncodeToString(sum[:]); actual != entry.tree {
+			t.Errorf("%s: the vendored tree hashes to %s but the lock records %s. The "+
+				"vendored code moved and the lock did not, so the commit it names is "+
+				"no longer the code that ships.", module, actual[:16], entry.tree[:16])
+		}
+	}
+	for module := range locked {
+		component := strings.TrimPrefix(module, "github.com/Jtensetti/")
+		if _, ships := byComponent[component]; !ships {
+			t.Errorf("COMPONENTS.lock names %s, which does not ship", module)
+		}
+	}
+}
+
+type lockEntry struct {
+	commit string
+	branch string
+	tree   string
+}
+
+func readLock(t *testing.T) map[string]lockEntry {
+	t.Helper()
+	encoded, err := os.ReadFile("../COMPONENTS.lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := map[string]lockEntry{}
+	for index, line := range strings.Split(string(encoded), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 4 {
+			t.Fatalf("COMPONENTS.lock line %d has %d fields, want module, commit, "+
+				"branch and tree digest: %q", index+1, len(fields), line)
+		}
+		if _, exists := entries[fields[0]]; exists {
+			t.Fatalf("COMPONENTS.lock names %s twice", fields[0])
+		}
+		entries[fields[0]] = lockEntry{commit: fields[1], branch: fields[2], tree: fields[3]}
+	}
+	return entries
+}

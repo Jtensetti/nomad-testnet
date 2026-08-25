@@ -1,7 +1,16 @@
-# Nomad integration snapshot lock v1
-github.com/Jtensetti/nomad-anytrust-mix-sim 60ccdb4 claude/nomad-production-ready-dxv4ql
-github.com/Jtensetti/nomad-constant-rate-fabric 8c79820 claude/nomad-production-ready-dxv4ql
-github.com/Jtensetti/nomad-local-reconstruction 3f87f8f claude/nomad-production-ready-dxv4ql
-github.com/Jtensetti/nomad-rlnc 8491ae3 claude/nomad-production-ready-dxv4ql
-github.com/Jtensetti/nomad-selection-firewall f45a5f9 claude/nomad-production-ready-dxv4ql
-github.com/Jtensetti/nomad-semantic-basins 29e2d97 claude/nomad-production-ready-dxv4ql
+# Nomad integration snapshot lock v2
+#
+# module  commit  branch  tree
+#
+# tree is the sha256 of this component's sorted lines in
+# COMPONENTS.sha256, so the lock cannot be left behind when the vendored
+# code moves. v1 recorded only the commit, nothing checked it, and it sat
+# pointing at a fabric with no ErrCellDropped while the vendored tree had
+# one: anyone auditing which fabric this integration carries would have
+# checked out the wrong code. supplychain/snapshot_test.go checks it now.
+github.com/Jtensetti/nomad-anytrust-mix-sim 60ccdb4 claude/nomad-production-ready-dxv4ql c95b9fbeaa59868eaa12f3fcfd8c9895fc758254a02c8408a306301c9f0e786e
+github.com/Jtensetti/nomad-constant-rate-fabric 5aab244 claude/nomad-production-ready-dxv4ql 0d2a38d76b4d4ed63bef77a15dc13894fa981af32bed1b6276593768e16d914f
+github.com/Jtensetti/nomad-local-reconstruction 3f87f8f claude/nomad-production-ready-dxv4ql 9ee1057224f0f5938b0990ba6b6adc9e49b64d90cb02d95d885ad0699a95e4f9
+github.com/Jtensetti/nomad-rlnc 8491ae3 claude/nomad-production-ready-dxv4ql f288ab87f4216e2ed4710a862efcdaf2bb4e848c10c86066efccafd83ac1a24c
+github.com/Jtensetti/nomad-selection-firewall f45a5f9 claude/nomad-production-ready-dxv4ql 042f7ebd075fa1f6684598af3e23e739898bfc750c697d7744489e1753fc6d35
+github.com/Jtensetti/nomad-semantic-basins fff9d68 claude/nomad-production-ready-dxv4ql 546b8e868bbac5cd615aa36daa8fbf4772e06e4678920bf8afb91f07b889fc33

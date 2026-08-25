@@ -151,6 +151,15 @@ retirement boundary. Send the statement; keep nothing else.
 A Nomad process is built to emit almost nothing. Enforcing that stops at the
 process boundary, so the last part is yours.
 
+**Supervise emission, not liveness.** A node does not stop when a local
+condition breaks its emission path: a full disk or an exhausted socket buffer
+costs the cell it interrupted and the schedule carries on, because a node that
+goes silent is the loudest event a passive observer can see. That means a
+running process is not evidence of a working node. Run
+`nomad-node --check-health=<health file> --max-silence=30s` on a timer and act
+on its exit status; see `MULTI_OPERATOR.md` for the unit. Alert on
+`send_dropped` in the health file, which is zero on a healthy node.
+
 **Set `GOTRACEBACK=none` for every Nomad service.** Without it a panic prints
 goroutine stacks whose frame arguments are raw machine words, which for a
 process holding your identity key or a threshold share can be key material,

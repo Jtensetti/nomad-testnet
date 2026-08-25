@@ -12,6 +12,22 @@ import (
 
 const sequenceReservation = uint32(1 << 20)
 
+// The three ways Next can fail are not the same kind of event, and a caller
+// that cannot tell them apart cannot respond correctly to any of them.
+//
+// ErrSequenceWriteFailed is a disk that would not take the reservation: a
+// local, transient condition. The other two are the nonce space itself being
+// unusable -- exhausted, or its durable state unreadable -- and both mean
+// authenticated sequence numbers can no longer be guaranteed unique. They
+// must fail closed. Their own message says to rotate the epoch, and a caller
+// that treats them as a lost cell would tick forever past the condition the
+// message describes.
+var (
+	ErrSequenceWriteFailed  = errors.New("hop sequence reservation could not be written")
+	ErrSequenceExhausted    = errors.New("hop sequence exhausted; rotate the topology epoch")
+	ErrSequenceStateInvalid = errors.New("hop sequence state is invalid")
+)
+
 // FileSequence reserves sequence ranges durably before use. A crash skips the
 // unused part of a range rather than reusing authenticated nonces. Deleting the
 // state requires rotating the topology epoch and pairwise keys.
@@ -55,13 +71,13 @@ func (sequence *FileSequence) reserve() error {
 		return err
 	}
 	if previous > ^uint32(0)-sequenceReservation {
-		return errors.New("hop sequence exhausted; rotate the topology epoch")
+		return ErrSequenceExhausted
 	}
 	reserved := previous + sequenceReservation
 	var encoded [4]byte
 	binary.BigEndian.PutUint32(encoded[:], reserved)
 	if err := atomicStateWrite(sequence.path, encoded[:]); err != nil {
-		return fmt.Errorf("reserve hop sequence range: %w", err)
+		return fmt.Errorf("%w: %v", ErrSequenceWriteFailed, err)
 	}
 	sequence.next = previous + 1
 	sequence.reserved = reserved
@@ -74,19 +90,19 @@ func readReservation(path string) (uint32, error) {
 		return 0, nil
 	}
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("%w: %v", ErrSequenceStateInvalid, err)
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("%w: %v", ErrSequenceStateInvalid, err)
 	}
 	if !info.Mode().IsRegular() || info.Size() != 4 {
-		return 0, errors.New("invalid hop sequence state")
+		return 0, ErrSequenceStateInvalid
 	}
 	var encoded [4]byte
 	if _, err := io.ReadFull(file, encoded[:]); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("%w: %v", ErrSequenceStateInvalid, err)
 	}
 	return binary.BigEndian.Uint32(encoded[:]), nil
 }
@@ -126,12 +142,23 @@ func atomicStateWrite(path string, data []byte) error {
 	return dir.Sync()
 }
 
-// ExhaustReservationForTest consumes the reserved range so that the next Next
-// must reserve again. It exists so a test can drive the disk-backed
-// reservation path without writing 2^20 cells, and it is a no-op on the
-// production path: nothing outside a test calls it.
-func (sequence *FileSequence) ExhaustReservationForTest() {
+// Return gives back a sequence number that was issued but never reached the
+// wire, so the next cell reuses it.
+//
+// This is safe precisely because the cell was not sent: uniqueness has to hold
+// across cells a peer can observe, and a cell that failed at the socket is not
+// one of those. It matters because the sequence is in the clear in every hop
+// header, so a number that is issued and discarded leaves a visible gap -- an
+// exact, per-cell count of local send failures, readable by the receiving peer
+// and by any observer of the link.
+//
+// It returns only the most recently issued value, and only if nothing has been
+// issued since. Anything else is a caller bug rather than a rollback, and is
+// ignored rather than corrupting the counter.
+func (sequence *FileSequence) Return(value uint32) {
 	sequence.mu.Lock()
 	defer sequence.mu.Unlock()
-	sequence.next = sequence.reserved + 1
+	if value != 0 && sequence.next == value+1 {
+		sequence.next = value
+	}
 }
