@@ -66,6 +66,16 @@ func (q *QueueSource) NextCell(context.Context) (Cell, error) {
 	return cell, nil
 }
 
+// Len is the number of cells waiting. It is local diagnostic state, used to
+// check that the bound is enforced rather than to make any scheduling
+// decision: nothing on the emission path may consult it, because a rate that
+// responds to queue depth is a rate that reports it.
+func (q *QueueSource) Len() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.cells)
+}
+
 // CoverSource turns an unavailable work source into a filler cell without
 // changing the scheduler. The fallback count is diagnostic state only.
 type CoverSource struct {
