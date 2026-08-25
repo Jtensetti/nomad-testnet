@@ -112,6 +112,19 @@ jobs:
           python3 scripts/validate-corpus-schema.py
       - name: Verify the published conformance corpus matches its encoders
         run: go run ./cmd/nomad-conformance -check conformance/wire-vectors.json
+      - name: Interoperate with the second implementation
+        run: |
+          # PROD-03 asks that two implementations interoperate for the public
+          # wire protocol without sharing protocol code.
+          # conformance/reference/nomadwire.py is the second one: another
+          # language, no shared build, no dependency past its standard
+          # library, written from nomad-protocol docs/PROTOCOL.md rather than
+          # from this repository's Go.
+          #
+          # Running it standalone here as well as from the Go test means the
+          # second implementation is exercised even if the Go side is skipped
+          # for want of a python3 on the runner.
+          python3 conformance/reference/crosscheck.py conformance/wire-vectors.json
       - name: Verify the corpus is identical on a different word size
         run: |
           # A golden vector that depends on the host's int width is not a

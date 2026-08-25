@@ -160,3 +160,66 @@ fixed cell size does not have.
 It records what the code accepts. It is not evidence that a second
 implementation reading these formats would interoperate: nothing outside this
 repository has parsed them. That is PROD-03's gate and EB-5's dependency.
+
+## The second implementation
+
+`reference/nomadwire.py` implements the `hop-cell-v1` wire format a second
+time: another language, no shared build, no dependency beyond the Python
+standard library, and written from `nomad-protocol/docs/PROTOCOL.md` rather
+than from this repository's Go. That restriction is what makes it worth
+having. An implementation that consults the first one tests nothing about
+whether the specification is sufficient to build from, which is the question
+PROD-03 asks.
+
+`reference/crosscheck.py` runs four directions, and
+`live/conformance/crossimpl_test.go` runs it:
+
+| | What it establishes |
+|---|---|
+| A | The second implementation verifies every authenticated vector in the committed corpus, and re-seals each one to the same bytes. Verifying alone would show only that it can be convinced. |
+| B | The second implementation produces cells the first has never seen; the Go test verifies them and recomputes their stream ID. |
+| C | Sixteen mutations and cross-context replays are refused. Two implementations that accept everything also "interoperate". |
+| D | The second implementation verifies cells the first sealed *at test time*, not months ago. |
+
+Direction D exists because of a gap the other three did not close. Mutating
+the header field offsets in the Go encoder was invisible to every test in the
+conformance package: direction A reads a committed snapshot, and direction B
+only exercises the Go *decoder*. Only a fresh seal, verified independently,
+catches an encoder that drifts after the corpus was written. All five
+divergence mutations tried — MAC domain, header layout, stream-ID domain,
+stream-ID preimage, and sealing without zeroing the tag region — are caught.
+
+### What writing it found
+
+Three defects in the specification and one in this corpus, none of which the
+corpus alone would have revealed:
+
+1. `docs/PROTOCOL.md` described bytes 1152..1200 as "random representation
+   padding, fresh filler, not application data". They are the hop header. An
+   implementation built from that text could not interoperate at all.
+2. It did not say the tag region is zeroed before the tag is computed. The
+   ambiguity is silent: both readings produce sixteen bytes and only one
+   matches.
+3. It did not say the stream-ID hash covers the batch size. A wrong stream ID
+   still carries a valid tag over itself, so this shows up only when two
+   implementations exchange work cells.
+4. This corpus published authenticated cells without the key or the context
+   the tag binds. A MAC vector without its key demonstrates that the encoder
+   is self-consistent and nothing more. The vectors now carry
+   `conformance_hop_key`, `topology_digest`, `network_id`, `epoch` and
+   `receiver`. That key exists to be published — it is derived from a fixed
+   label in a public repository and authenticates nothing outside this corpus
+   — and it must never appear in a topology or an operator secret.
+
+### What it does not establish
+
+The second implementation covers `hop-cell-v1`. The signed topology document,
+the object manifest and the uplink cell profile have vectors in this corpus
+but no second implementation, so interoperability for those is unevidenced.
+
+And both implementations were written by the same author. That tests whether
+the specification is sufficient to build from — it demonstrably was not, which
+is the point — but it does not test what two independent teams would: that
+the specification is read the same way by someone who did not write it. PROD-03
+stays PARTIAL for that reason.
+

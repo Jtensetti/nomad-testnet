@@ -65,6 +65,21 @@ func hopFrames() ([]Vector, error) {
 			"stream":     hex.EncodeToString(metadata.Stream[:]),
 			"header_at":  strconv.Itoa(hop.CiphertextSize),
 			"tag_at":     strconv.Itoa(hop.CiphertextSize + hop.HeaderSize - hop.TagSize),
+			// The tag is a MAC, so a vector without its key and its bound
+			// context is a string nobody can check. Publishing them is what
+			// makes these vectors usable by a second implementation at all;
+			// without them the corpus proves only that this encoder is
+			// self-consistent.
+			//
+			// This key exists to be published. It is derived from a fixed
+			// label in a public repository, so every reader can already
+			// compute it, and it authenticates nothing outside the corpus.
+			// It must never appear in a topology or an operator secret.
+			"conformance_hop_key": hex.EncodeToString(key[:]),
+			"topology_digest":     hex.EncodeToString(context.TopologyDigest[:]),
+			"network_id":          context.NetworkID,
+			"epoch":               strconv.FormatUint(context.Epoch, 10),
+			"receiver":            strconv.FormatUint(uint64(context.Receiver), 10),
 		}
 		return NewVector("hop-cell-v1", name, description, cell[:], fields), nil
 	}

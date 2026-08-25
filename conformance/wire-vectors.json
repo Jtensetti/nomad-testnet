@@ -10,13 +10,18 @@
       "sha256": "6774296bba4f6060b8f67c4bcbfd68a4248475643882882baf33ed1f0eafe5f0",
       "fields": {
         "batch_size": "0",
+        "conformance_hop_key": "2fcd26a7f5c555db94f8dd363ca8f611f0631550f907cf6364a63147547303e5",
+        "epoch": "7",
         "flags": "0",
         "header_at": "1152",
+        "network_id": "nomad-conformance",
         "ordinal": "0",
+        "receiver": "2",
         "sender": "1",
         "sequence": "43",
         "stream": "00000000000000000000000000000000",
-        "tag_at": "1184"
+        "tag_at": "1184",
+        "topology_digest": "8f52e6328524521796e24c1482ad8362921c474797b074a7affa26fa868d2160"
       }
     },
     {
@@ -28,13 +33,18 @@
       "sha256": "45096fdf0550f0d86b07acfa8957bd349983dda80c44b820befb7573207f85e5",
       "fields": {
         "batch_size": "8",
+        "conformance_hop_key": "2fcd26a7f5c555db94f8dd363ca8f611f0631550f907cf6364a63147547303e5",
+        "epoch": "7",
         "flags": "1",
         "header_at": "1152",
+        "network_id": "nomad-conformance",
         "ordinal": "3",
+        "receiver": "2",
         "sender": "1",
         "sequence": "42",
         "stream": "94f2f8f552d55621cdc0546b134e9dde",
-        "tag_at": "1184"
+        "tag_at": "1184",
+        "topology_digest": "8f52e6328524521796e24c1482ad8362921c474797b074a7affa26fa868d2160"
       }
     },
     {
@@ -46,13 +56,18 @@
       "sha256": "72cb0c6b76e40f6ab70ff801a011f40b6a55c83155d2a7d24e62a50674ce397d",
       "fields": {
         "batch_size": "256",
+        "conformance_hop_key": "2fcd26a7f5c555db94f8dd363ca8f611f0631550f907cf6364a63147547303e5",
+        "epoch": "7",
         "flags": "1",
         "header_at": "1152",
+        "network_id": "nomad-conformance",
         "ordinal": "255",
+        "receiver": "2",
         "sender": "1",
         "sequence": "4294967294",
         "stream": "94f2f8f552d55621cdc0546b134e9dde",
-        "tag_at": "1184"
+        "tag_at": "1184",
+        "topology_digest": "8f52e6328524521796e24c1482ad8362921c474797b074a7affa26fa868d2160"
       }
     },
     {
