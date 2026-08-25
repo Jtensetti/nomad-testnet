@@ -116,7 +116,13 @@ jobs:
           GOARCH=386 go test -count=1 ./live/conformance/ ./live/topology/ ./live/batch/
       - name: Verify the supported platforms still build
         run: |
-          for target in linux/amd64 linux/386 linux/arm64 linux/arm darwin/amd64 darwin/arm64; do
+          # windows/amd64 was absent and did not build: live/epoch's chain lock
+          # used unix.Flock unconditionally. The criterion says cross-platform,
+          # so the gap was recorded as a blocker rather than left to be found.
+          # It is now a LockFileEx implementation behind a build tag, and the
+          # target is in the matrix so it cannot regress silently.
+          for target in linux/amd64 linux/386 linux/arm64 linux/arm \
+                        darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             GOOS="${target%/*}" GOARCH="${target#*/}" go build ./... \
               || { echo "$target does not build"; exit 1; }
           done
