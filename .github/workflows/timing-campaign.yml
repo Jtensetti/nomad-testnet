@@ -23,6 +23,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Not cancelled, queued. These are wall-clock measurements whose control
+  # spread is a property of the host, so two overlapping runs contaminate each
+  # other -- and cancelling would let a manual dispatch destroy the day's only
+  # scheduled data point.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   campaign:
     runs-on: ubuntu-latest
