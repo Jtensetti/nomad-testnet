@@ -18,6 +18,12 @@ Direction C, which matters as much: negative cases. Two implementations that
 both accept everything also "interoperate". Each mutation below must be
 refused, and refused for the stated reason.
 
+Direction E covers the signed topology, F the object manifest, and G the
+publisher uplink frame and its derivations. Between them every message the
+corpus publishes now has a consumer that is not the encoder that produced it,
+which is what PROD-19 asks for and what a corpus checked only by its own
+encoder cannot give.
+
 Usage:
     crosscheck.py <corpus.json> [--emit <path for direction B>]
 """
@@ -31,7 +37,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+import nomadobject  # noqa: E402
 import nomadtopology  # noqa: E402
+import nomaduplink  # noqa: E402
 import nomadwire  # noqa: E402
 
 
@@ -429,6 +437,247 @@ def direction_e(vectors: list[dict]) -> int:
     return checked
 
 
+def direction_f(vectors: list[dict]) -> int:
+    """The object manifest: the last check before bytes become an object.
+
+    Verifying is not enough on its own -- an implementation that verifies but
+    cannot reproduce the signing messages has only shown it can be convinced.
+    So both signing messages are rebuilt from the parsed fields and the
+    manifest is re-encoded to its 228 bytes.
+    """
+    checked = 0
+    for vector in vectors:
+        if vector["message"] != "object-manifest-v1":
+            continue
+        wire = bytes.fromhex(vector["bytes_hex"])
+        if len(wire) != vector["length"]:
+            raise Failure(f"{vector['name']}: length field disagrees with the bytes")
+        if hashlib.sha256(wire).hexdigest() != vector["sha256"]:
+            raise Failure(f"{vector['name']}: sha256 field disagrees with the bytes")
+
+        manifest = nomadobject.verify(wire)
+        fields = vector["fields"]
+        if manifest.length != int(fields["object_length"]):
+            raise Failure(
+                f"{vector['name']}: decoded length {manifest.length}, corpus says "
+                f"{fields['object_length']}"
+            )
+        if manifest.basin != int(fields["basin"]):
+            raise Failure(
+                f"{vector['name']}: decoded basin {manifest.basin}, corpus says "
+                f"{fields['basin']}"
+            )
+        if int(fields["manifest_size"]) != nomadobject.MANIFEST_SIZE:
+            raise Failure(f"{vector['name']}: manifest size disagrees")
+        if base64.b64encode(manifest.public_key).decode() != fields["publisher_key"]:
+            raise Failure(f"{vector['name']}: publisher key disagrees")
+
+        if nomadobject.encode(manifest) != wire:
+            raise Failure(f"{vector['name']}: re-encoding does not reproduce the bytes")
+
+        # The signing messages are the interoperability surface: a manifest
+        # whose message is assembled differently verifies against itself and
+        # against nothing else.
+        object_message = nomadobject.object_signing_message(manifest.root)
+        if not object_message.startswith(nomadobject.OBJECT_DOMAIN):
+            raise Failure(f"{vector['name']}: object signing message lost its domain")
+        manifest_message = nomadobject.manifest_signing_message(manifest)
+        expected_length = (
+            len(nomadobject.MANIFEST_DOMAIN) + 8 + 8 + 16 + 32 + 32 + 64
+        )
+        if len(manifest_message) != expected_length:
+            raise Failure(
+                f"{vector['name']}: manifest signing message is "
+                f"{len(manifest_message)} bytes, expected {expected_length}"
+            )
+        checked += 1
+
+    if checked == 0:
+        raise Failure("the corpus contained no object-manifest-v1 vectors")
+
+    # Negative cases, on the same reasoning as direction C.
+    subject = next(v for v in vectors if v["message"] == "object-manifest-v1")
+    wire = bytes.fromhex(subject["bytes_hex"])
+
+    def flipped(offset: int, value: bytes) -> bytes:
+        mutated = bytearray(wire)
+        mutated[offset:offset + len(value)] = value
+        return bytes(mutated)
+
+    # Two groups, because they are refused by different things. The first is
+    # refused by the layout and the explicit checks, whatever the environment.
+    # The second is refused only by a signature, so it is skipped -- and
+    # reported as skipped -- where no Ed25519 library is importable. A
+    # conformance tool that counted those as passes would be reporting on the
+    # environment rather than on the protocol.
+    structural = [
+        ("a corrupted magic", lambda: flipped(0, b"XXXX")),
+        ("a downgraded version", lambda: flipped(3, bytes([0]))),
+        ("a truncated manifest", lambda: wire[:-1]),
+        ("an over-long manifest", lambda: wire + b"\x00"),
+        ("a zero object length", lambda: flipped(4, bytes(8))),
+        ("an all-zero publisher key", lambda: flipped(68, bytes(32))),
+        ("an all-zero content root", lambda: flipped(36, bytes(32))),
+    ]
+    signature_only = [
+        ("a flipped root byte", lambda: flipped(36, bytes([wire[36] ^ 0x01]))),
+        ("a flipped object signature byte", lambda: flipped(100, bytes([wire[100] ^ 0x01]))),
+        ("a flipped manifest signature byte", lambda: flipped(164, bytes([wire[164] ^ 0x01]))),
+        ("a swapped publisher key", lambda: flipped(68, bytes([wire[68] ^ 0x01]) + wire[69:100])),
+    ]
+    refused = 0
+    for name, build in structural:
+        try:
+            nomadobject.verify(build())
+        except nomadobject.ManifestError:
+            refused += 1
+            continue
+        except Exception as error:  # noqa: BLE001
+            raise Failure(f"{name} raised {error!r} rather than being refused") from error
+        raise Failure(f"the second implementation accepted {name}")
+
+    if nomadobject.SIGNATURES_CHECKABLE:
+        for name, build in signature_only:
+            try:
+                nomadobject.verify(build())
+            except nomadobject.ManifestError:
+                refused += 1
+                continue
+            except Exception as error:  # noqa: BLE001
+                raise Failure(f"{name} raised {error!r} rather than being refused") from error
+            raise Failure(f"the second implementation accepted {name}")
+
+    # The content check, which the corpus cannot carry because the object is
+    # 4096 bytes of test data rather than a published vector: a manifest must
+    # refuse content that does not hash to its signed root.
+    manifest = nomadobject.parse(wire)
+    try:
+        nomadobject.verify(wire, content=b"x" * manifest.length)
+    except nomadobject.ManifestError:
+        refused += 1
+    else:
+        raise Failure("content that does not hash to the signed root was accepted")
+
+    return checked * 100 + refused
+
+
+def direction_g(vectors: list[dict]) -> int:
+    """The publisher uplink: the frame and the two derivations that feed it.
+
+    AES-GCM is not reimplemented here -- the Python standard library has no
+    AES, and hand-rolling one for a conformance tool would be a worse example
+    than saying so. What is reproduced is where implementations actually
+    diverge: the HKDF info string and the nonce. An AEAD either matches or
+    fails loudly; a derivation assembled differently produces a well-formed
+    cell that the other side refuses with no clue why.
+    """
+    checked = 0
+    for vector in vectors:
+        if vector["message"] != "uplink-cell-frame-v1":
+            continue
+        fields = vector["fields"]
+        nomaduplink.check_frame_layout(
+            cell_size=int(fields["cell_size"]),
+            sequence_size=int(fields["sequence_size"]),
+            inner_size=int(fields["inner_size"]),
+            tag_size=int(fields["tag_size"]),
+            padding_size=int(fields["padding_size"]),
+        )
+
+        prefix = bytes.fromhex(vector["bytes_hex"])
+        if len(prefix) != nomaduplink.SEQUENCE_SIZE:
+            raise Failure(f"{vector['name']}: the sequence prefix is not 8 bytes")
+        if int.from_bytes(prefix, "big") != int(fields["sequence"]):
+            raise Failure(f"{vector['name']}: the prefix does not encode the stated sequence")
+
+        derived = nomaduplink.session_key(
+            shared_secret=bytes.fromhex(fields["conformance_shared_secret"]),
+            network_id=fields["network_id"],
+            epoch=int(fields["epoch"]),
+            entry_operator=int(fields["entry_operator"]),
+            topology_digest=bytes.fromhex(fields["topology_digest"]),
+        )
+        if derived.hex() != fields["session_key"]:
+            raise Failure(
+                f"{vector['name']}: derived session key {derived.hex()}, the first "
+                f"implementation derived {fields['session_key']}"
+            )
+        derived_nonce = nomaduplink.nonce(derived, int(fields["sequence"]))
+        if derived_nonce.hex() != fields["nonce"]:
+            raise Failure(
+                f"{vector['name']}: derived nonce {derived_nonce.hex()}, the first "
+                f"implementation derived {fields['nonce']}"
+            )
+        checked += 1
+
+    if checked == 0:
+        raise Failure("the corpus contained no uplink-cell-frame-v1 vectors")
+
+    # Negative cases. Each binding in the derivation is a distinct
+    # cross-context replay if it is not really bound.
+    subject = next(v for v in vectors if v["message"] == "uplink-cell-frame-v1")
+    fields = subject["fields"]
+    base = dict(
+        shared_secret=bytes.fromhex(fields["conformance_shared_secret"]),
+        network_id=fields["network_id"],
+        epoch=int(fields["epoch"]),
+        entry_operator=int(fields["entry_operator"]),
+        topology_digest=bytes.fromhex(fields["topology_digest"]),
+    )
+    expected = fields["session_key"]
+    separated = 0
+    for name, change in (
+        ("another network", {"network_id": "other-network"}),
+        ("another epoch", {"epoch": base["epoch"] + 1}),
+        ("another entry operator", {"entry_operator": base["entry_operator"] + 1}),
+        ("another topology", {"topology_digest": bytes(31) + b"\x01"}),
+        ("another secret", {"shared_secret": bytes(32)[:-1] + b"\x01"}),
+    ):
+        altered = dict(base)
+        altered.update(change)
+        if nomaduplink.session_key(**altered).hex() == expected:
+            raise Failure(f"the session key is not bound to the context: {name} derived the same key")
+        separated += 1
+
+    for name, arguments in (
+        ("an empty secret", dict(base, shared_secret=b"")),
+        ("an empty network", dict(base, network_id="")),
+        ("a zero epoch", dict(base, epoch=0)),
+        ("a zero topology digest", dict(base, topology_digest=bytes(32))),
+        ("a short topology digest", dict(base, topology_digest=bytes(31))),
+    ):
+        try:
+            nomaduplink.session_key(**arguments)
+        except nomaduplink.UplinkError:
+            separated += 1
+            continue
+        raise Failure(f"the second implementation derived a key from {name}")
+
+    key = bytes.fromhex(expected)
+    if nomaduplink.nonce(key, 1) == nomaduplink.nonce(key, 2):
+        raise Failure("the nonce does not depend on the sequence")
+    try:
+        nomaduplink.nonce(key, 0)
+    except nomaduplink.UplinkError:
+        separated += 1
+    else:
+        raise Failure("a zero sequence was given a nonce")
+
+    for name, cell in (
+        ("a short cell", bytes(nomaduplink.CELL_SIZE - 1)),
+        ("a long cell", bytes(nomaduplink.CELL_SIZE + 1)),
+        ("a zero sequence", bytes(nomaduplink.CELL_SIZE)),
+    ):
+        try:
+            nomaduplink.parse_frame(cell)
+        except nomaduplink.UplinkError:
+            separated += 1
+            continue
+        raise Failure(f"the second implementation accepted {name}")
+
+    return checked * 100 + separated
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("corpus")
@@ -448,6 +697,14 @@ def main() -> int:
         signatures = "with signatures" if nomadtopology.SIGNATURES_CHECKABLE \
             else "canonical encoding and digest only; no ed25519 library here"
         print(f"E: verified {topologies} signed topologies ({signatures})")
+        manifests = direction_f(vectors)
+        manifest_signatures = "with signatures" if nomadobject.SIGNATURES_CHECKABLE \
+            else "layout and signing messages only; no ed25519 library here"
+        print(f"F: verified {manifests // 100} object manifest(s) and refused "
+              f"{manifests % 100} malformed ones ({manifest_signatures})")
+        uplinks = direction_g(vectors)
+        print(f"G: reproduced {uplinks // 100} uplink frame derivation(s) and refused "
+              f"{uplinks % 100} unbound or malformed ones")
         if arguments.emit:
             emitted = direction_b(vectors, pathlib.Path(arguments.emit))
             print(f"B: produced {emitted} cells for the first implementation at {arguments.emit}")
@@ -457,7 +714,8 @@ def main() -> int:
     except Failure as failure:
         print(f"CROSS-IMPLEMENTATION FAILURE: {failure}", file=sys.stderr)
         return 1
-    except nomadwire.WireError as error:
+    except (nomadwire.WireError, nomadobject.ManifestError,
+            nomaduplink.UplinkError, nomadtopology.TopologyError) as error:
         print(f"CROSS-IMPLEMENTATION FAILURE: {error}", file=sys.stderr)
         return 1
     return 0

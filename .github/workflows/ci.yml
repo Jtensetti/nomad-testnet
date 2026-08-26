@@ -140,10 +140,13 @@ jobs:
         run: |
           # PROD-03 asks that two implementations interoperate for the public
           # wire protocol without sharing protocol code.
-          # conformance/reference/nomadwire.py is the second one: another
-          # language, no shared build, no dependency past its standard
-          # library, written from nomad-protocol docs/PROTOCOL.md rather than
-          # from this repository's Go.
+          # conformance/reference/ holds the second one: another language, no
+          # shared build, no dependency past its standard library, written
+          # from nomad-protocol docs/PROTOCOL.md rather than from this
+          # repository's Go. nomadwire.py covers the hop cell, nomadtopology.py
+          # the signed topology, nomadobject.py the object manifest and
+          # nomaduplink.py the publisher uplink frame and its derivations --
+          # every message type the corpus publishes.
           #
           # Running it standalone here as well as from the Go test means the
           # second implementation is exercised even if the Go side is skipped

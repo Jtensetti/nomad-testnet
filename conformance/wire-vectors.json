@@ -134,10 +134,19 @@
       "fields": {
         "cell_size": "1200",
         "ciphertext_is_fixed": "false",
+        "conformance_shared_secret": "85a98c073d5cdf9378deb6252582d3e465c76f9684ba7bfe3caa79b82d4f77d5",
+        "entry_operator": "1",
+        "epoch": "7",
         "inner_size": "1152",
+        "network_id": "nomad-conformance",
+        "nonce": "9843e608805f930f29eec541",
         "note": "the sealed body is randomised; only the frame is pinned",
+        "padding_size": "24",
         "sequence": "9",
-        "sequence_size": "8"
+        "sequence_size": "8",
+        "session_key": "14241c0add5e748b97c2611e9dd2ab0caf040bed89353e843f7bf4d5f57b8151",
+        "tag_size": "16",
+        "topology_digest": "8f52e6328524521796e24c1482ad8362921c474797b074a7affa26fa868d2160"
       }
     }
   ],

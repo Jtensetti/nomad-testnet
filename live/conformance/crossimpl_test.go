@@ -1,6 +1,7 @@
 package conformance_test
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -87,6 +88,15 @@ func TestCellsFromTheSecondImplementationVerifyHere(t *testing.T) {
 		t.Fatalf("the second implementation failed against the published corpus:\n%s", output)
 	}
 	t.Logf("second implementation, against the corpus this one published:\n%s", output)
+
+	// Every direction must actually have run. Without this the test passes
+	// when a direction is silently skipped -- which is how a second
+	// implementation stops covering a message type without anyone noticing.
+	for _, direction := range []string{"A:", "C:", "E:", "F:", "G:"} {
+		if !bytes.Contains(output, []byte(direction)) {
+			t.Errorf("direction %s did not run:\n%s", direction, output)
+		}
+	}
 
 	encoded, err := os.ReadFile(emitted)
 	if err != nil {
@@ -387,4 +397,45 @@ func decodeCell(t *testing.T, name, encoded string) fabric.Cell {
 	var cell fabric.Cell
 	copy(cell[:], decoded)
 	return cell
+}
+
+// PROD-19 asks for interoperability evidence, and a corpus checked only by the
+// encoder that produced it is not that. This is the structural half: every
+// message type the corpus publishes must be named in the second
+// implementation's driver, so adding a vector type without a consumer fails
+// here rather than quietly widening the corpus without widening the evidence.
+func TestEveryCorpusMessageHasASecondImplementation(t *testing.T) {
+	root := filepath.Join("..", "..")
+	corpus, err := os.ReadFile(filepath.Join(root, "conformance", "wire-vectors.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published struct {
+		Vectors []struct {
+			Message string `json:"message"`
+		} `json:"vectors"`
+	}
+	if err := json.Unmarshal(corpus, &published); err != nil {
+		t.Fatal(err)
+	}
+	driver, err := os.ReadFile(filepath.Join(root, "conformance", "reference", "crosscheck.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seen := map[string]struct{}{}
+	for _, vector := range published.Vectors {
+		seen[vector.Message] = struct{}{}
+	}
+	if len(seen) < 4 {
+		t.Fatalf("the corpus publishes only %d message types; the check is too weak to "+
+			"mean anything", len(seen))
+	}
+	for message := range seen {
+		if !bytes.Contains(driver, []byte(`"`+message+`"`)) {
+			t.Errorf("the corpus publishes %s and the second implementation never names "+
+				"it, so those vectors are checked only by the encoder that wrote them",
+				message)
+		}
+	}
 }

@@ -147,13 +147,34 @@ func uplinkCells() ([]Vector, error) {
 		return nil, err
 	}
 	prefix := append([]byte(nil), cell[:uplink.SequenceSize]...)
+
+	// The AEAD ciphertext cannot be pinned, but the two derivations that
+	// decide it can, and they are where two implementations actually
+	// disagree: an HKDF info string assembled differently, or a nonce over
+	// the wrong fields, produces cells that are refused with no clue why.
+	// The shared secret is a fixed public test value derived from a label in
+	// a public repository and authenticates nothing outside this corpus.
+	sharedSecret := DeterministicBytes("uplink-shared-secret", 32)
+	sessionKey, err := uplink.SessionKey(sharedSecret, context)
+	if err != nil {
+		return nil, err
+	}
 	fields := map[string]string{
-		"sequence":            "9",
-		"sequence_size":       strconv.Itoa(uplink.SequenceSize),
-		"inner_size":          strconv.Itoa(uplink.InnerSize),
-		"cell_size":           strconv.Itoa(fabric.CellSize),
-		"ciphertext_is_fixed": "false",
-		"note":                "the sealed body is randomised; only the frame is pinned",
+		"sequence":                  "9",
+		"sequence_size":             strconv.Itoa(uplink.SequenceSize),
+		"inner_size":                strconv.Itoa(uplink.InnerSize),
+		"cell_size":                 strconv.Itoa(fabric.CellSize),
+		"padding_size":              strconv.Itoa(fabric.CellSize - uplink.SequenceSize - uplink.InnerSize - 16),
+		"tag_size":                  "16",
+		"conformance_shared_secret": hex.EncodeToString(sharedSecret),
+		"network_id":                context.NetworkID,
+		"epoch":                     strconv.FormatUint(context.Epoch, 10),
+		"entry_operator":            strconv.Itoa(int(context.EntryOperator)),
+		"topology_digest":           hex.EncodeToString(context.TopologyDigest[:]),
+		"session_key":               hex.EncodeToString(sessionKey[:]),
+		"nonce":                     hex.EncodeToString(uplink.Nonce(sessionKey, 9)),
+		"ciphertext_is_fixed":       "false",
+		"note":                      "the sealed body is randomised; only the frame is pinned",
 	}
 	return []Vector{
 		NewVector("uplink-cell-frame-v1", "sequence-prefix",

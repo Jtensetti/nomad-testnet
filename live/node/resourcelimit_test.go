@@ -643,13 +643,24 @@ func TestTheLivenessTimestampFollowsWhatActuallyWentOut(t *testing.T) {
 	go func() { defer group.Done(); _ = broke.Run(ctx) }()
 	time.Sleep(300 * time.Millisecond)
 	brokeWriter.fail(&net.OpError{Op: "write", Net: "udp", Err: syscall.ENOBUFS})
+	// A write can already be in flight when the failure is installed, and it
+	// records its timestamp when it returns. Reading the baseline immediately
+	// races that write and fails about one run in twenty, reporting a
+	// production defect that is not there. One full cadence interval after
+	// the injection, every write that started before it has finished.
+	time.Sleep(4 * campaignIntervalMillis * time.Millisecond)
 	frozen := broke.Snapshot().LastSentAt
+	dropsBefore := broke.Snapshot().SendDropped
 	time.Sleep(400 * time.Millisecond)
 	after := broke.Snapshot()
 	cancel()
 	group.Wait()
 	if frozen.IsZero() {
 		t.Fatal("the node never emitted before it was broken")
+	}
+	if after.SendDropped <= dropsBefore {
+		t.Fatalf("no cell was dropped after the baseline was taken (%d then %d), so a "+
+			"frozen timestamp says nothing", dropsBefore, after.SendDropped)
 	}
 	if after.LastSentAt.After(frozen) {
 		t.Errorf("last_sent_at advanced from %s to %s while every write was failing",

@@ -63,11 +63,27 @@ type Session struct {
 // secret comes from the client's key agreement with the entry operator; the
 // derivation binds network, epoch, topology digest and operator slot.
 func NewSession(sharedSecret []byte, committee mix.PublicKey, context Context) (*Session, error) {
+	key, err := SessionKey(sharedSecret, context)
+	if err != nil {
+		return nil, err
+	}
+	return &Session{key: key, committee: committee, context: context}, nil
+}
+
+// SessionKey derives the outer session key from the shared secret.
+//
+// It is exported because it is public protocol rather than an implementation
+// detail: a second implementation has to reproduce it exactly or every cell it
+// seals is refused, and a conformance vector can pin it from a fixed test
+// secret. What is not exported is any way to read the key out of a live
+// Session -- the derivation is public, the material is the caller's.
+func SessionKey(sharedSecret []byte, context Context) ([32]byte, error) {
+	var key [32]byte
 	if len(sharedSecret) == 0 {
-		return nil, errors.New("uplink shared secret is required")
+		return key, errors.New("uplink shared secret is required")
 	}
 	if context.NetworkID == "" || context.Epoch == 0 || context.TopologyDigest == ([32]byte{}) {
-		return nil, errors.New("uplink context is incomplete")
+		return key, errors.New("uplink context is incomplete")
 	}
 	info := make([]byte, 0, 64+len(context.NetworkID))
 	info = append(info, []byte("nomad-uplink-session-v1")...)
@@ -80,11 +96,22 @@ func NewSession(sharedSecret []byte, committee mix.PublicKey, context Context) (
 	binary.BigEndian.PutUint16(integer[:2], context.EntryOperator)
 	info = append(info, integer[:2]...)
 	reader := hkdf.New(sha256.New, sharedSecret, context.TopologyDigest[:], info)
-	session := &Session{committee: committee, context: context}
-	if _, err := io.ReadFull(reader, session.key[:]); err != nil {
-		return nil, err
+	if _, err := io.ReadFull(reader, key[:]); err != nil {
+		return [32]byte{}, err
 	}
-	return session, nil
+	return key, nil
+}
+
+// Nonce derives the AEAD nonce for one sequence under one session key. It is
+// exported for the same reason SessionKey is.
+func Nonce(key [32]byte, sequence uint64) []byte {
+	h := sha256.New()
+	_, _ = h.Write([]byte("nomad-uplink-nonce-v1"))
+	_, _ = h.Write(key[:])
+	var integer [8]byte
+	binary.BigEndian.PutUint64(integer[:], sequence)
+	_, _ = h.Write(integer[:])
+	return h.Sum(nil)[:12]
 }
 
 // SealWork produces the cell for one publication fragment.
@@ -201,11 +228,5 @@ func (session *Session) aead() (cipher.AEAD, error) {
 // nonce never repeats under one session key without a sequence repeat, and
 // no random nonce needs to be transmitted.
 func (session *Session) nonce(sequence uint64) []byte {
-	h := sha256.New()
-	_, _ = h.Write([]byte("nomad-uplink-nonce-v1"))
-	_, _ = h.Write(session.key[:])
-	var integer [8]byte
-	binary.BigEndian.PutUint64(integer[:], sequence)
-	_, _ = h.Write(integer[:])
-	return h.Sum(nil)[:12]
+	return Nonce(session.key, sequence)
 }
