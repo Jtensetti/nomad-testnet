@@ -81,7 +81,7 @@ func hopFrames() ([]Vector, error) {
 			"epoch":               strconv.FormatUint(context.Epoch, 10),
 			"receiver":            strconv.FormatUint(uint64(context.Receiver), 10),
 		}
-		return NewVector("hop-cell-v1", name, description, cell[:], fields), nil
+		return NewVector("hop-cell-v2", name, description, cell[:], fields), nil
 	}
 
 	work, err := hop.WorkMetadata(stream, 3, 8)

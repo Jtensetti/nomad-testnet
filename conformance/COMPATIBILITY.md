@@ -59,7 +59,8 @@ accepts.
 | `nomad-dkg-result-attestation-v1` | an operator's attestation of a DKG result |
 | `nomad-batch-descriptor-authority-v1` | the authority signature over a batch descriptor |
 | `nomad-partial-fetch-plan-authority-v1` | the authority signature over a fetch plan |
-| `nomad-hop-cell-v1` | the hop cell header authentication |
+| `nomad-hop-cell-v2` | the sealed hop cell authentication |
+| `nomad-hop-link-stream-v2` | derivation of the per-cell link keystream |
 | `nomad-hop-mac-kdf-v2` | derivation of the per-hop MAC key |
 | `nomad-live-stream-v1` | the stream identifier over an ordered cell set |
 | `nomad-uplink-session-v1` | an uplink session identifier |
@@ -163,7 +164,7 @@ repository has parsed them. That is PROD-03's gate and EB-5's dependency.
 
 ## The second implementation
 
-`reference/nomadwire.py` implements the `hop-cell-v1` wire format a second
+`reference/nomadwire.py` implements the `hop-cell-v2` wire format a second
 time: another language, no shared build, no dependency beyond the Python
 standard library, and written from `nomad-protocol/docs/PROTOCOL.md` rather
 than from this repository's Go. That restriction is what makes it worth
@@ -247,7 +248,7 @@ test interoperability.
 
 ### What it does not establish
 
-The second implementation covers `hop-cell-v1` and `topology-document-v3`. The
+The second implementation covers `hop-cell-v2` and `topology-document-v3`. The
 object manifest and the uplink cell profile have vectors in this corpus but no
 second implementation, so interoperability for those is unevidenced.
 

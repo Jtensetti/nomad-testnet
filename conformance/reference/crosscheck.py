@@ -52,7 +52,7 @@ def direction_a(vectors: list[dict]) -> int:
     """Verify what the first implementation published."""
     checked = 0
     for vector in vectors:
-        if vector["message"] != "hop-cell-v1":
+        if vector["message"] != "hop-cell-v2":
             continue
         fields = vector["fields"]
         cell = bytes.fromhex(vector["bytes_hex"])
@@ -66,7 +66,7 @@ def direction_a(vectors: list[dict]) -> int:
         context = context_of(fields)
         sender = int(fields["sender"])
 
-        metadata = nomadwire.verify(cell, sender, key, context)
+        metadata, payload = nomadwire.open_cell(cell, sender, key, context)
 
         for name, actual, expected in (
             ("sequence", metadata.sequence, int(fields["sequence"])),
@@ -84,11 +84,14 @@ def direction_a(vectors: list[dict]) -> int:
         if int(fields["tag_at"]) != nomadwire.CELL_SIZE - nomadwire.TAG_SIZE:
             raise Failure(f"{vector['name']}: tag offset disagrees")
 
-        # Reproduce the tag rather than only accepting it: an implementation
-        # that verifies but cannot produce has not shown it agrees on the MAC
-        # construction, only that it can be convinced.
+        # Reproduce the cell rather than only accepting it: an implementation
+        # that verifies but cannot produce has not shown it agrees on the
+        # construction, only that it can be convinced. Under version 2 this is
+        # a stronger statement than it was, because reproducing the bytes now
+        # requires agreeing on the keystream as well as the tag -- and the
+        # payload fed back in is the decrypted one, not what is on the wire.
         reproduced = nomadwire.seal(
-            cell[: nomadwire.CIPHERTEXT_SIZE],
+            payload,
             metadata,
             sender,
             metadata.sequence,
@@ -101,13 +104,13 @@ def direction_a(vectors: list[dict]) -> int:
             )
         checked += 1
     if checked == 0:
-        raise Failure("the corpus contained no hop-cell-v1 vectors; nothing was checked")
+        raise Failure("the corpus contained no hop-cell-v2 vectors; nothing was checked")
     return checked
 
 
 def direction_b(vectors: list[dict], out: pathlib.Path) -> int:
     """Produce cells the first implementation has never seen."""
-    template = next(v for v in vectors if v["message"] == "hop-cell-v1")
+    template = next(v for v in vectors if v["message"] == "hop-cell-v2")
     fields = template["fields"]
     key = bytes.fromhex(fields["conformance_hop_key"])
     context = context_of(fields)
@@ -178,7 +181,7 @@ def direction_b(vectors: list[dict], out: pathlib.Path) -> int:
 
 def direction_c(vectors: list[dict]) -> int:
     """Every one of these must be refused. Two permissive implementations agree."""
-    template = next(v for v in vectors if v["message"] == "hop-cell-v1")
+    template = next(v for v in vectors if v["message"] == "hop-cell-v2")
     fields = template["fields"]
     key = bytes.fromhex(fields["conformance_hop_key"])
     context = context_of(fields)
@@ -194,11 +197,16 @@ def direction_c(vectors: list[dict]) -> int:
     cases = [
         ("a flipped ciphertext byte", lambda: flipped(0, bytes([cell[0] ^ 0x01]))),
         ("a flipped tag byte", lambda: flipped(1184, bytes([cell[1184] ^ 0x01]))),
-        ("a changed sequence", lambda: flipped(header + 28, (99).to_bytes(4, "big"))),
-        ("a zero sequence", lambda: flipped(header + 28, bytes(4))),
-        ("a changed sender slot", lambda: flipped(header + 4, (9).to_bytes(2, "big"))),
+        ("a changed sequence", lambda: flipped(header + 4, (99).to_bytes(4, "big"))),
+        ("a zero sequence", lambda: flipped(header + 4, bytes(4))),
         ("a corrupted magic", lambda: flipped(0 + header, b"XXXX")),
-        ("an unknown flag bit", lambda: flipped(header + 10, (2).to_bytes(2, "big"))),
+        ("a downgraded version", lambda: flipped(header + 3, bytes([1]))),
+        # Version 2 encrypts the routing metadata, so there is no sender slot
+        # or flag field to change: those mutations become flips in the sealed
+        # region, which the tag catches before anything is decrypted.
+        ("a flipped metadata byte", lambda: flipped(header + 8, bytes([cell[header + 8] ^ 0x01]))),
+        ("a flipped metadata byte at the end",
+         lambda: flipped(header + 31, bytes([cell[header + 31] ^ 0x01]))),
         ("a truncated cell", lambda: cell[:-1]),
         ("an over-long cell", lambda: cell + b"\x00"),
     ]
@@ -293,7 +301,7 @@ def direction_d(path: pathlib.Path) -> int:
     work: dict[str, list[bytes]] = {}
     for entry in cells:
         cell = bytes.fromhex(entry["bytes_hex"])
-        metadata = nomadwire.verify(cell, int(entry["sender"]), key, context)
+        metadata, payload = nomadwire.open_cell(cell, int(entry["sender"]), key, context)
         for name, actual, expected in (
             ("sequence", metadata.sequence, int(entry["sequence"])),
             ("flags", metadata.flags, int(entry["flags"])),
@@ -307,9 +315,10 @@ def direction_d(path: pathlib.Path) -> int:
                     f"implementation declared {expected!r}"
                 )
         if metadata.is_work:
-            work.setdefault(metadata.stream.hex(), []).append(
-                cell[: nomadwire.CIPHERTEXT_SIZE]
-            )
+            # The stream ID is a hash of the plaintext payloads. Under version
+            # 2 that is not what is on the wire, so the decrypted payload is
+            # what goes into the recomputation.
+            work.setdefault(metadata.stream.hex(), []).append(payload)
     # The stream ID is a hash both sides must derive identically, and a wrong
     # one still carries a valid tag over itself. Recompute it here.
     for declared, payloads in work.items():

@@ -32,6 +32,19 @@ FINDINGS while writing this:
    that differ from the Go implementation's for the same batch, which shows up
    only when the two exchange work cells rather than in a corpus check. Fixed
    in the specification.
+
+4. Version 2 encrypts the cell, and the specification had to say the order the
+   keystream is applied in. The two encrypted regions are not contiguous -- the
+   version and the sequence sit between them in the clear -- so "encrypt the
+   payload and the routing metadata" has two readings that produce different
+   bytes, and only one interoperates. The payload comes first and the routing
+   metadata continues the same keystream. Fixed in the specification.
+
+5. The keystream needs no block cipher. This file is written against the Python
+   standard library, which has HMAC and SHA-256 and no AES, and it implements
+   the whole wire format without importing anything. That is worth stating as a
+   property of the format rather than an accident: a second implementer needs
+   one primitive.
 """
 
 from __future__ import annotations
@@ -47,18 +60,25 @@ TAG_SIZE = 16
 MAXIMUM_BATCH = 256
 FLAG_WORK = 1
 
-MAGIC = bytes([0x4E, 0x48, 0x43, 0x01])
-CELL_DOMAIN = b"nomad-hop-cell-v1"
+MAGIC = bytes([0x4E, 0x48, 0x43, 0x02])
+LOCAL_MAGIC = bytes([0x4E, 0x48, 0x4C, 0x02])
+CELL_DOMAIN = b"nomad-hop-cell-v2"
+LINK_STREAM_DOMAIN = b"nomad-hop-link-stream-v2"
 STREAM_DOMAIN = b"nomad-live-stream-v1"
 
-# Offsets within the header, which starts at CIPHERTEXT_SIZE.
-_SENDER = 4
-_ORDINAL = 6
-_BATCH = 8
-_FLAGS = 10
-_STREAM = 12
-_SEQUENCE = 28
+# Offsets within the header, which starts at CIPHERTEXT_SIZE. Only the magic
+# and the sequence are in the clear; the routing metadata is encrypted.
+_SEQUENCE = 4
+_SEALED = 8
 _TAG = 32
+SEALED_SIZE = 24
+
+# Offsets within the decrypted routing metadata.
+_M_SENDER = 0
+_M_ORDINAL = 2
+_M_BATCH = 4
+_M_FLAGS = 6
+_M_STREAM = 8
 
 
 class WireError(Exception):
@@ -143,37 +163,74 @@ def stream_for(payloads: list[bytes]) -> bytes:
     return digest.digest()[:16]
 
 
-def encode_header(metadata: Metadata) -> bytes:
-    """Render a header with the tag region zeroed, which is what the tag covers."""
-    header = bytearray(HEADER_SIZE)
-    header[0:4] = MAGIC
-    header[_SENDER:_SENDER + 2] = metadata.sender.to_bytes(2, "big")
-    header[_ORDINAL:_ORDINAL + 2] = metadata.ordinal.to_bytes(2, "big")
-    header[_BATCH:_BATCH + 2] = metadata.batch_size.to_bytes(2, "big")
-    header[_FLAGS:_FLAGS + 2] = metadata.flags.to_bytes(2, "big")
-    header[_STREAM:_STREAM + 16] = metadata.stream
-    header[_SEQUENCE:_SEQUENCE + 4] = metadata.sequence.to_bytes(4, "big")
-    return bytes(header)
+def encode_sealed(metadata: Metadata) -> bytes:
+    """Render the 24 routing bytes that get encrypted."""
+    sealed = bytearray(SEALED_SIZE)
+    sealed[_M_SENDER:_M_SENDER + 2] = metadata.sender.to_bytes(2, "big")
+    sealed[_M_ORDINAL:_M_ORDINAL + 2] = metadata.ordinal.to_bytes(2, "big")
+    sealed[_M_BATCH:_M_BATCH + 2] = metadata.batch_size.to_bytes(2, "big")
+    sealed[_M_FLAGS:_M_FLAGS + 2] = metadata.flags.to_bytes(2, "big")
+    sealed[_M_STREAM:_M_STREAM + 16] = metadata.stream
+    return bytes(sealed)
 
 
-def decode_header(header: bytes) -> tuple[Metadata, bytes]:
-    """Split a header into its routing fields and its tag. Authenticates nothing."""
-    if len(header) != HEADER_SIZE:
-        raise WireError("hop header is not 48 bytes")
-    if header[0:4] != MAGIC:
-        raise WireError("unsupported hop header")
-    metadata = Metadata(
-        sender=int.from_bytes(header[_SENDER:_SENDER + 2], "big"),
-        ordinal=int.from_bytes(header[_ORDINAL:_ORDINAL + 2], "big"),
-        batch_size=int.from_bytes(header[_BATCH:_BATCH + 2], "big"),
-        flags=int.from_bytes(header[_FLAGS:_FLAGS + 2], "big"),
-        stream=bytes(header[_STREAM:_STREAM + 16]),
-        sequence=int.from_bytes(header[_SEQUENCE:_SEQUENCE + 4], "big"),
+def decode_sealed(sealed: bytes, sequence: int) -> Metadata:
+    """Read routing fields out of the decrypted 24 bytes."""
+    if len(sealed) != SEALED_SIZE:
+        raise WireError("sealed routing metadata is not 24 bytes")
+    return Metadata(
+        sender=int.from_bytes(sealed[_M_SENDER:_M_SENDER + 2], "big"),
+        ordinal=int.from_bytes(sealed[_M_ORDINAL:_M_ORDINAL + 2], "big"),
+        batch_size=int.from_bytes(sealed[_M_BATCH:_M_BATCH + 2], "big"),
+        flags=int.from_bytes(sealed[_M_FLAGS:_M_FLAGS + 2], "big"),
+        stream=bytes(sealed[_M_STREAM:_M_STREAM + 16]),
+        sequence=sequence,
     )
-    return metadata, bytes(header[_TAG:_TAG + TAG_SIZE])
+
+
+def _bind_context(mac, context: Context) -> None:
+    network = context.network_id.encode()
+    mac.update(context.topology_digest)
+    mac.update(context.epoch.to_bytes(8, "big"))
+    mac.update(context.receiver.to_bytes(2, "big"))
+    mac.update(len(network).to_bytes(2, "big"))
+    mac.update(network)
+
+
+def link_keystream(key: bytes, context: Context, sequence: int, length: int) -> bytes:
+    """Expand the link key into this cell's keystream.
+
+    HMAC-SHA-256 in counter mode: block i is HMAC(cell key, i). No block
+    cipher is involved anywhere in this format, which is why this file needs
+    nothing outside the standard library.
+    """
+    if len(key) != 32:
+        raise WireError("hop key must be 32 bytes")
+    if key == bytes(32):
+        raise WireError("all-zero hop key is forbidden")
+    context.validate()
+    mac = hmac.new(key, digestmod=hashlib.sha256)
+    mac.update(LINK_STREAM_DOMAIN)
+    _bind_context(mac, context)
+    mac.update(sequence.to_bytes(4, "big"))
+    cell_key = mac.digest()
+
+    out = bytearray()
+    counter = 0
+    while len(out) < length:
+        block = hmac.new(cell_key, counter.to_bytes(4, "big"), hashlib.sha256)
+        out += block.digest()
+        counter += 1
+    return bytes(out[:length])
 
 
 def authentication_tag(cell: bytes, key: bytes, context: Context) -> bytes:
+    """The tag covers everything before it: payload, magic, sequence, metadata.
+
+    Encrypt-then-MAC. A verifier recomputes this over the cell as it arrived
+    and decrypts nothing until it matches, so a modified cell never reaches the
+    keystream.
+    """
     if len(key) != 32:
         raise WireError("hop key must be 32 bytes")
     if key == bytes(32):
@@ -181,14 +238,9 @@ def authentication_tag(cell: bytes, key: bytes, context: Context) -> bytes:
     context.validate()
     if len(cell) != CELL_SIZE:
         raise WireError("cell is not 1200 bytes")
-    network = context.network_id.encode()
     mac = hmac.new(key, digestmod=hashlib.sha256)
     mac.update(CELL_DOMAIN)
-    mac.update(context.topology_digest)
-    mac.update(context.epoch.to_bytes(8, "big"))
-    mac.update(context.receiver.to_bytes(2, "big"))
-    mac.update(len(network).to_bytes(2, "big"))
-    mac.update(network)
+    _bind_context(mac, context)
     mac.update(cell[: CELL_SIZE - TAG_SIZE])
     return mac.digest()[:TAG_SIZE]
 
@@ -206,7 +258,7 @@ def seal(
         raise WireError("ciphertext is not 1152 bytes")
     if sequence == 0:
         raise WireError("hop sequence must be non-zero")
-    sealed = Metadata(
+    sealed_metadata = Metadata(
         sender=sender,
         ordinal=metadata.ordinal,
         batch_size=metadata.batch_size,
@@ -214,28 +266,65 @@ def seal(
         stream=metadata.stream,
         sequence=sequence,
     )
-    sealed.validate()
-    cell = bytearray(ciphertext + encode_header(sealed))
+    sealed_metadata.validate()
+
+    keystream = link_keystream(key, context, sequence, CIPHERTEXT_SIZE + SEALED_SIZE)
+    cell = bytearray(CELL_SIZE)
+    # The payload takes the first part of the keystream and the routing
+    # metadata continues it. They are not contiguous in the cell, so the order
+    # is the part both implementations have to agree on.
+    for index in range(CIPHERTEXT_SIZE):
+        cell[index] = ciphertext[index] ^ keystream[index]
+    cell[CIPHERTEXT_SIZE : CIPHERTEXT_SIZE + 4] = MAGIC
+    cell[CIPHERTEXT_SIZE + _SEQUENCE : CIPHERTEXT_SIZE + _SEQUENCE + 4] = sequence.to_bytes(4, "big")
+    plain_metadata = encode_sealed(sealed_metadata)
+    for index in range(SEALED_SIZE):
+        cell[CIPHERTEXT_SIZE + _SEALED + index] = (
+            plain_metadata[index] ^ keystream[CIPHERTEXT_SIZE + index]
+        )
+
     tag = authentication_tag(bytes(cell), key, context)
     cell[CIPHERTEXT_SIZE + _TAG : CIPHERTEXT_SIZE + _TAG + TAG_SIZE] = tag
     return bytes(cell)
 
 
-def verify(cell: bytes, expected_sender: int, key: bytes, context: Context) -> Metadata:
-    """Authenticate a cell and return its routing fields. Raises on any failure."""
+def open_cell(cell: bytes, expected_sender: int, key: bytes, context: Context) -> tuple[Metadata, bytes]:
+    """Authenticate a cell, then decrypt it. Raises on any failure.
+
+    Returns the routing metadata and the plaintext payload. Nothing is
+    decrypted before the tag matches.
+    """
     if len(cell) != CELL_SIZE:
         raise WireError("cell is not 1200 bytes")
-    metadata, observed = decode_header(cell[CIPHERTEXT_SIZE:])
-    if metadata.sender != expected_sender:
-        raise WireError("authenticated sender slot mismatch")
-    if metadata.sequence == 0:
-        raise WireError("hop sequence must be non-zero")
-    metadata.validate()
-    cleared = bytearray(cell)
-    cleared[CIPHERTEXT_SIZE + _TAG : CIPHERTEXT_SIZE + _TAG + TAG_SIZE] = bytes(TAG_SIZE)
-    expected = authentication_tag(bytes(cleared), key, context)
+    header = cell[CIPHERTEXT_SIZE:]
+    if header[0:4] != MAGIC:
+        raise WireError("unsupported hop header")
+    observed = bytes(header[_TAG:_TAG + TAG_SIZE])
+    expected = authentication_tag(cell, key, context)
     if not hmac.compare_digest(observed, expected):
         raise WireError("hop authentication failed")
+
+    sequence = int.from_bytes(header[_SEQUENCE:_SEQUENCE + 4], "big")
+    if sequence == 0:
+        raise WireError("hop sequence must be non-zero")
+    keystream = link_keystream(key, context, sequence, CIPHERTEXT_SIZE + SEALED_SIZE)
+    payload = bytes(
+        cell[index] ^ keystream[index] for index in range(CIPHERTEXT_SIZE)
+    )
+    plain_metadata = bytes(
+        header[_SEALED + index] ^ keystream[CIPHERTEXT_SIZE + index]
+        for index in range(SEALED_SIZE)
+    )
+    metadata = decode_sealed(plain_metadata, sequence)
+    if metadata.sender != expected_sender:
+        raise WireError("authenticated sender slot mismatch")
+    metadata.validate()
+    return metadata, payload
+
+
+def verify(cell: bytes, expected_sender: int, key: bytes, context: Context) -> Metadata:
+    """Authenticate a cell and return its routing fields."""
+    metadata, _ = open_cell(cell, expected_sender, key, context)
     return metadata
 
 

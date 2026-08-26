@@ -1,7 +1,9 @@
 package node
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"net"
 	"sync"
@@ -42,26 +44,24 @@ func observeCells(t *testing.T, observer *net.UDPConn, ctx context.Context) []fa
 	}
 }
 
-// The operator-to-operator hop header is authenticated but not encrypted: the
-// 48 bytes after the mix ciphertext go on the wire in the clear. The work flag
-// being visible there is known and documented (docs/PUBLICATION_INGRESS.md is
-// the response, and live/uplink/distinguisher_test.go measures the separation
-// as perfect). The stream ID in the same header has been carried as a noted
-// risk since the uplink profile was built, without ever being measured.
+// The operator-to-operator hop header used to go on the wire in the clear. The
+// stream ID in it is a hash of the batch payloads, so it was the same value at
+// every hop a batch took, and Send re-sealed a relayed cell with a new sender
+// and sequence while leaving the rest of the header as it arrived. A passive
+// observer did not need a correlation attack to follow a batch across the
+// relay fabric: the identifier was written on it. That was measured here, and
+// the measurement is what motivated hop header version 2.
 //
-// It is measured here. The stream ID is a hash of the batch payloads, so it is
-// the same value at every hop a batch takes, and Send re-seals a relayed cell
-// with a new sender and sequence while leaving the rest of the header as it
-// arrived. A passive observer therefore does not need a correlation attack to
-// follow a batch across the relay fabric: the identifier is written on it.
+// Version 2 encrypts the whole cell under the pairwise link key. This test now
+// runs the same experiment against the same node and requires the opposite
+// result: the marked stream must not be findable in anything the node emits.
 //
-// This does not contradict a claim the project makes -- the threat model
-// commits to size, destination and count for a global passive observer, and
-// relay work is driven by public replication policy rather than by any
-// reader's activity. It is recorded as a measured property rather than left as
-// a note, because "we think this is fine" and "we measured what it is" are
-// different statements, and only one of them belongs in a threat model.
-func TestARelayedCellCarriesItsStreamIDOnwardInTheClear(t *testing.T) {
+// The experiment is only worth anything if it would still find the identifier
+// when it is there. TestTheMarkedStreamIsFoundWhenItIsPresent below seals the
+// same stream under version 1's cleartext layout and requires the search to
+// find it, so a search that finds nothing cannot be a search that looks
+// nowhere.
+func TestARelayedCellDoesNotCarryItsStreamIDOnward(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs a node against a cadence")
 	}
@@ -83,8 +83,8 @@ func TestARelayedCellCarriesItsStreamIDOnwardInTheClear(t *testing.T) {
 		},
 	}
 
-	// A stream nothing else could produce, so finding it on the far side is
-	// not a coincidence.
+	// A stream nothing else could produce, so finding it on the far side
+	// would not be a coincidence.
 	source.stream = hop.StreamID{
 		0xA5, 0x17, 0x9C, 0x42, 0xD0, 0x6B, 0x33, 0xEE,
 		0x81, 0x2F, 0x74, 0xBB, 0x08, 0x59, 0xC6, 0x1D,
@@ -130,32 +130,59 @@ func TestARelayedCellCarriesItsStreamIDOnwardInTheClear(t *testing.T) {
 	if len(seen) == 0 {
 		t.Fatal("the node emitted nothing; the measurement is vacuous")
 	}
-	carried := 0
-	for _, cell := range seen {
-		metadata, err := hop.MetadataFromCell(cell)
-		if err != nil {
-			continue
-		}
-		if metadata.Stream == marked {
-			carried++
-			if metadata.Sender == source.sender {
-				t.Errorf("the relayed cell kept the original sender slot %d; only the "+
-					"stream ID was expected to survive the hop", metadata.Sender)
-			}
-		}
-	}
-
 	stats := worker.Snapshot()
 	if stats.Relayed == 0 {
 		t.Skipf("the node relayed nothing in this window (%+v); the measurement needs "+
 			"a relayed cell to inspect", stats)
 	}
-	if carried == 0 {
-		t.Fatalf("no emitted cell carried the marked stream ID although %d were relayed: "+
-			"either the header changed or the batch did not go out", stats.Relayed)
+
+	// Search the whole cell, not the header offsets version 1 used. If the
+	// identifier survived anywhere -- moved, re-encoded, or copied into the
+	// payload -- this finds it.
+	carried := 0
+	for _, cell := range seen {
+		if bytes.Contains(cell[:], marked[:]) {
+			carried++
+		}
+		if _, err := hop.LocalMetadata(cell); err == nil {
+			t.Error("an emitted cell carries an unsealed header, so its routing " +
+				"metadata is readable off the wire")
+		}
 	}
-	t.Logf("MEASURED: %d of %d emitted cells carry the ingress stream ID %x unchanged in "+
-		"the cleartext hop header. A passive observer links this batch's ingress hop to "+
-		"its egress hop by reading bytes 1164..1180, with no correlation attack.",
-		carried, len(seen), marked[:8])
+	if carried != 0 {
+		t.Fatalf("%d of %d emitted cells still carry the ingress stream ID %x, so a "+
+			"passive observer links this batch's ingress hop to its egress hop with no "+
+			"correlation attack", carried, len(seen), marked[:8])
+	}
+	t.Logf("MEASURED: 0 of %d emitted cells carry the ingress stream ID %x, across %d "+
+		"relayed cells.", len(seen), marked[:8], stats.Relayed)
+}
+
+// The positive control for the search above. It rebuilds version 1's cleartext
+// header layout by hand -- magic, sender, ordinal, batch size, flags, then the
+// stream ID at byte 12 -- and requires bytes.Contains to find the identifier.
+//
+// Without this, "no emitted cell carries the stream ID" would be satisfied by
+// a search that cannot find a stream ID at all.
+func TestTheMarkedStreamIsFoundWhenItIsPresent(t *testing.T) {
+	marked := hop.StreamID{
+		0xA5, 0x17, 0x9C, 0x42, 0xD0, 0x6B, 0x33, 0xEE,
+		0x81, 0x2F, 0x74, 0xBB, 0x08, 0x59, 0xC6, 0x1D,
+	}
+	var cell fabric.Cell
+	for index := range cell[:hop.CiphertextSize] {
+		cell[index] = byte(index)
+	}
+	header := cell[hop.CiphertextSize:]
+	copy(header[0:4], []byte{'N', 'H', 'C', 1})
+	binary.BigEndian.PutUint16(header[4:6], 2)
+	binary.BigEndian.PutUint16(header[6:8], 0)
+	binary.BigEndian.PutUint16(header[8:10], 2)
+	binary.BigEndian.PutUint16(header[10:12], hop.FlagWork)
+	copy(header[12:28], marked[:])
+
+	if !bytes.Contains(cell[:], marked[:]) {
+		t.Fatal("the search cannot find a stream ID that is present, so finding none " +
+			"in the test above would mean nothing")
+	}
 }

@@ -296,7 +296,7 @@ func (node *Node) Snapshot() Stats {
 func (sink *authenticatedSink) Send(ctx context.Context, cell fabric.Cell) error {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	metadata, err := hop.MetadataFromCell(cell)
+	metadata, err := hop.LocalMetadata(cell)
 	if err != nil {
 		return fmt.Errorf("scheduler source supplied an invalid cell: %w", err)
 	}
@@ -470,7 +470,9 @@ func (node *Node) receive(ctx context.Context) error {
 		}
 		var cell fabric.Cell
 		copy(cell[:], buffer[:count])
-		metadata, err := hop.Verify(cell, peer.operator.Index, peer.key, hop.Context{
+		// Open decrypts in place: below this line the cell holds the mix
+		// ciphertext the sender put there, not what crossed the wire.
+		metadata, err := hop.Open(&cell, peer.operator.Index, peer.key, hop.Context{
 			TopologyDigest: node.config.Topology.Digest, NetworkID: node.config.Topology.Document.NetworkID,
 			Epoch: node.config.Topology.Document.Epoch, Receiver: node.config.Secrets.Operator.Index,
 		})

@@ -113,7 +113,7 @@ func TestCellsFromTheSecondImplementationVerifyHere(t *testing.T) {
 	work := map[string][][hop.CiphertextSize]byte{}
 	for _, produced := range produced.Cells {
 		cell := decodeCell(t, produced.Name, produced.BytesHex)
-		metadata, err := hop.Verify(cell, produced.Sender, key, context)
+		metadata, err := hop.Open(&cell, produced.Sender, key, context)
 		if err != nil {
 			t.Errorf("%s, produced by the second implementation, was refused here: %v",
 				produced.Name, err)
@@ -183,14 +183,14 @@ func TestBothImplementationsRefuseTheSameCells(t *testing.T) {
 		fields map[string]string
 	}
 	for _, vector := range published.Vectors {
-		if vector.Message == "hop-cell-v1" {
+		if vector.Message == "hop-cell-v2" {
 			subject.bytes = decodeHex(t, vector.BytesHex)
 			subject.fields = vector.Fields
 			break
 		}
 	}
 	if subject.bytes == nil {
-		t.Fatal("the corpus carries no hop-cell-v1 vector")
+		t.Fatal("the corpus carries no hop-cell-v2 vector")
 	}
 
 	var key [32]byte
@@ -212,11 +212,18 @@ func TestBothImplementationsRefuseTheSameCells(t *testing.T) {
 	}{
 		{"a flipped ciphertext byte", 0, []byte{subject.bytes[0] ^ 0x01}},
 		{"a flipped tag byte", 1184, []byte{subject.bytes[1184] ^ 0x01}},
-		{"a changed sequence", hop.CiphertextSize + 28, []byte{0, 0, 0, 99}},
-		{"a zero sequence", hop.CiphertextSize + 28, []byte{0, 0, 0, 0}},
-		{"a changed sender slot", hop.CiphertextSize + 4, []byte{0, 9}},
+		{"a changed sequence", hop.CiphertextSize + 4, []byte{0, 0, 0, 99}},
+		{"a zero sequence", hop.CiphertextSize + 4, []byte{0, 0, 0, 0}},
 		{"a corrupted magic", hop.CiphertextSize, []byte("XXXX")},
-		{"an unknown flag bit", hop.CiphertextSize + 10, []byte{0, 2}},
+		{"a downgraded version", hop.CiphertextSize + 3, []byte{1}},
+		// Version 2 encrypts the routing metadata, so there is no sender
+		// slot or flag field to change: what used to be those mutations is
+		// now a flip somewhere in the sealed region, which the tag catches
+		// before anything is decrypted.
+		{"a flipped metadata byte", hop.CiphertextSize + 8,
+			[]byte{subject.bytes[hop.CiphertextSize+8] ^ 0x01}},
+		{"a flipped metadata byte at the end", hop.CiphertextSize + 31,
+			[]byte{subject.bytes[hop.CiphertextSize+31] ^ 0x01}},
 	}
 	sender := uint16(1)
 	for _, mutation := range mutations {
@@ -224,7 +231,7 @@ func TestBothImplementationsRefuseTheSameCells(t *testing.T) {
 		copy(mutated[mutation.offset:], mutation.value)
 		var cell fabric.Cell
 		copy(cell[:], mutated)
-		if _, err := hop.Verify(cell, sender, key, context); err == nil {
+		if _, err := hop.Open(&cell, sender, key, context); err == nil {
 			t.Errorf("this implementation accepted %s", mutation.name)
 		}
 	}
@@ -267,14 +274,16 @@ func TestBothImplementationsRefuseTheSameCells(t *testing.T) {
 		}{change.name, key, change.apply(context)})
 	}
 	for _, attempt := range other {
-		if _, err := hop.Verify(cell, sender, attempt.key, attempt.context); err == nil {
+		candidate := cell
+		if _, err := hop.Open(&candidate, sender, attempt.key, attempt.context); err == nil {
 			t.Errorf("this implementation accepted the cell under %s", attempt.name)
 		}
 	}
 
-	// The positive control: without it, a Verify that refused everything
+	// The positive control: without it, an Open that refused everything
 	// would pass every assertion above.
-	if _, err := hop.Verify(cell, sender, key, context); err != nil {
+	candidate := cell
+	if _, err := hop.Open(&candidate, sender, key, context); err != nil {
 		t.Fatalf("the unmutated corpus cell was refused: %v", err)
 	}
 }

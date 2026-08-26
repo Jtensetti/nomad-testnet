@@ -71,9 +71,12 @@ func (writer *scriptedWriter) WriteToUDP(payload []byte, address *net.UDPAddr) (
 	}
 	var cell fabric.Cell
 	copy(cell[:], payload)
-	if metadata, err := hop.MetadataFromCell(cell); err == nil {
+	// The sequence is the one field a sealed cell leaves readable, which is
+	// exactly what a passive observer of this link would have, so the trace
+	// is built from the same thing an observer sees.
+	if sequence, err := hop.WireSequence(cell); err == nil {
 		writer.mu.Lock()
-		writer.onWire = append(writer.onWire, metadata.Sequence)
+		writer.onWire = append(writer.onWire, sequence)
 		writer.destinies = append(writer.destinies, address.String())
 		writer.mu.Unlock()
 	}
