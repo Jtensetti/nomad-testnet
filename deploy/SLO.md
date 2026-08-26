@@ -48,6 +48,91 @@ will succeed.
 | Availability under sustained loss | **not claimed** | no | see ADMISSION_AND_RATE_CONTROL.md; a sufficiently resourced flood can push a small node past its lateness budget |
 | Regional failure | **not measured** | no | needs multi-region infrastructure (EB-3) |
 
+## Capacity
+
+PROD-28 asked for cells per second per operator, objects per epoch and
+concurrent publishers. Two of those three are not measurements.
+
+A fixed-cadence fabric has no throughput in the usual sense. An operator emits
+exactly one cell per interval per link whether it has work or not, so **cells
+per second per operator is a fact about the signed topology**, not about the
+hardware. What the hardware decides is whether the node finishes the per-cell
+work inside the interval, and by what margin. That margin is the number worth
+having, because when it reaches one the node starts missing its cadence, and a
+node whose emissions drift with load is a node whose timing carries load rather
+than schedule.
+
+### The envelope, from the deployed configuration
+
+At `deploy/compose.yaml`'s 50 ms cadence with three operators, each having two
+links, and `cmd/nomad-node`'s default of 64 raw-cache streams. `live/capacity`
+holds the derivation and `TestTheReportedDeploymentIsTheDeployedOne` fails if
+these stop matching what is deployed.
+
+| Figure | Value | Kind |
+|---|---|---|
+| Cells per second per link | 20 | configuration |
+| Cells per second per operator, one direction | 40 | configuration |
+| Cells per epoch per operator, quoting a 24-hour epoch | 3,456,000 | configuration |
+| Publication payload per cell | 504 bytes of a 1200-byte cell | protocol |
+| Payload ceiling per epoch per operator | 1.74 GB | arithmetic |
+| Objects per epoch at 1 MiB | 1,660 | arithmetic |
+
+The last two are ceilings and no deployment reaches them. They assume every
+cell carries work, and cover traffic is the mechanism rather than waste, so the
+work fraction is a privacy parameter a deployment chooses; the coding rate is
+not applied either, and RLNC emits more coded fragments than an object has
+source fragments. Divide by both.
+
+### The measured margins
+
+Measured by `TestCapacityReport`; the full artifact including the environment
+is `deploy/capacity-report.json`.
+
+| Operation | Cost | Per second | Headroom vs the 50 ms interval |
+|---|---|---|---|
+| hop seal (operator, per emitted cell) | 26.6 us | 37,602 | 1,880x |
+| hop open (operator, per received cell) | 26.9 us | 37,114 | 1,856x |
+| hop relay (open then seal) | 52.2 us | 19,150 | 958x |
+| raw cache put (operator, per received cell) | 459.8 us | 2,175 | 109x |
+| uplink seal (publisher, per emitted cell) | 9.47 ms | 106 | 5x |
+| uplink handshake (publisher side) **(not on any deployed path)** | 95.8 us | 10,444 | 522x |
+
+Three things in that table are worth saying out loud.
+
+**The raw-cache write is the operator's expensive step**, several times the
+whole cryptographic relay path. It is still 109x inside
+the interval, so it is not a problem; it is the number to watch, because it is
+the one that touches a disk and therefore the one that behaves differently on
+an operator's hardware than in a container.
+
+**The publisher's seal is the tight one.** At 9.5 ms it fits a 50 ms
+cadence 5.3x over, which is real headroom, but the topology permits
+intervals as short as 5 ms and at that cadence a publisher cannot keep up at
+all. This is not a new finding -- it is PROD-18's open blocker -- and this
+measurement is the current number for it.
+
+**Concurrent publishers has no deployed value**, because no deployed command
+constructs an uplink responder: `live/deposit` accepts an already-established
+session, and the session limit is a parameter of `uplink.NewResponder` that
+nothing in `cmd/` sets. The handshake cost is reported above so the figure is
+available when the entry-operator role is wired up, and it is marked as off the
+path because a cost measured for something nothing runs is a fact about the
+code rather than about a deployment.
+
+### What these numbers are not
+
+- Not a soak. Nothing here runs longer than a few seconds, so none of it speaks
+  to drift, leaks or degradation over weeks.
+- Not deployment hardware. Every figure comes from a shared container doing
+  other work concurrently. As upper bounds on a quiet machine they are useful;
+  as predictions for a small operator's box they are not.
+- Not a composed system. Each cost is measured in isolation, not with the
+  scheduler, the socket and the cache contending for the same core.
+- Not a capacity *target*. These are what the implementation costs today. An
+  operator-facing target needs the soak and the hardware, both of which are
+  EB-3 and time.
+
 ## Detection
 
 The objective that matters most operationally, because the change that keeps a

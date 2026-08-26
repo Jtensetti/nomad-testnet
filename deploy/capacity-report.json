@@ -1,0 +1,74 @@
+{
+  "environment": "linux/amd64, 4 logical CPUs, shared development container running other work concurrently; Go go1.25.0",
+  "envelope": {
+    "CellIntervalMillis": 50,
+    "Links": 2,
+    "EpochSeconds": 86400,
+    "CacheStreams": 64
+  },
+  "costs": [
+    {
+      "name": "hop seal (operator, per emitted cell)",
+      "each_ns": 26594,
+      "samples": 9403,
+      "on_the_production_path": true
+    },
+    {
+      "name": "hop open (operator, per received cell)",
+      "each_ns": 26944,
+      "samples": 9280,
+      "on_the_production_path": true
+    },
+    {
+      "name": "hop relay (open then seal)",
+      "each_ns": 52218,
+      "samples": 4788,
+      "on_the_production_path": true
+    },
+    {
+      "name": "raw cache put (operator, per received cell)",
+      "each_ns": 459762,
+      "samples": 544,
+      "on_the_production_path": true
+    },
+    {
+      "name": "uplink seal (publisher, per emitted cell)",
+      "each_ns": 9470641,
+      "samples": 212,
+      "on_the_production_path": true
+    },
+    {
+      "name": "uplink handshake (publisher side)",
+      "each_ns": 95753,
+      "samples": 2611,
+      "on_the_production_path": false
+    }
+  ],
+  "derived": {
+    "cells_per_epoch_per_operator": 3456000,
+    "cells_per_second_per_link": 20,
+    "cells_per_second_per_operator": 40,
+    "hop open (operator, per received cell) /s": 37114.014251781475,
+    "hop open (operator, per received cell) headroom vs interval": 1855.7007125890736,
+    "hop relay (open then seal) /s": 19150.484507258032,
+    "hop relay (open then seal) headroom vs interval": 957.5242253629017,
+    "hop seal (operator, per emitted cell) /s": 37602.46672181695,
+    "hop seal (operator, per emitted cell) headroom vs interval": 1880.1233360908475,
+    "objects_per_epoch_at_1MiB": 1660,
+    "payload_bytes_per_epoch": 1741824000,
+    "raw cache put (operator, per received cell) /s": 2175.0383894275733,
+    "raw cache put (operator, per received cell) headroom vs interval": 108.75191947137867,
+    "uplink handshake (publisher side) /s": 10443.537017116958,
+    "uplink handshake (publisher side) headroom vs interval": 522.1768508558479,
+    "uplink seal (publisher, per emitted cell) /s": 105.58947382758991,
+    "uplink seal (publisher, per emitted cell) headroom vs interval": 5.279473691379496
+  },
+  "not_established": [
+    "nothing here runs for longer than a few seconds, so none of it speaks to drift, leaks or degradation over a soak",
+    "every figure comes from a shared container doing other work, so the costs are upper bounds on a quiet machine and say nothing about a small operator's hardware",
+    "the per-cell costs are measured in isolation, not with the scheduler, the socket and the cache contending for the same core",
+    "objects per epoch is a ceiling that assumes every cell carries work; cover traffic is the mechanism rather than waste, so no deployment reaches it",
+    "the coding rate is not applied: RLNC emits more coded fragments than an object has source fragments, so the real object figure is lower",
+    "concurrent publishers is a configuration bound, not a measured one: no deployed command constructs an uplink responder, so there is no deployed limit to measure"
+  ]
+}

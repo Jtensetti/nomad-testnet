@@ -301,7 +301,10 @@ func TestAFloodFromOnePeerDoesNotStarveAnother(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stop := time.AfterFunc(1200*time.Millisecond, cancel)
+	// A ceiling, not a schedule. The run stops as soon as the quiet peer's
+	// batch is admitted, so a healthy machine finishes in about a second and
+	// only a starved one uses the rest.
+	stop := time.AfterFunc(8*time.Second, cancel)
 	defer stop.Stop()
 
 	var group sync.WaitGroup
@@ -376,12 +379,28 @@ func TestAFloodFromOnePeerDoesNotStarveAnother(t *testing.T) {
 			_, _ = quietSession.conn.WriteToUDP(cell[:], quietSession.target)
 		}
 	}
-	deadline := time.Now().Add(500 * time.Millisecond)
+	// Resend until the batch is admitted or the window closes. The property is
+	// that a flooded node eventually admits the quiet peer's work, not that it
+	// does so within some fixed number of tries -- and a fixed count silently
+	// turns a delivery shortfall into a fairness verdict. On a machine whose
+	// receive loop is starved of CPU, most of these datagrams never reach the
+	// node at all, and how many tries that takes is a fact about the machine.
+	//
+	// Polling one named stream rather than listing them all: Complete takes the
+	// store's lock and reads two cells, which is cheap enough to do while the
+	// node is running without becoming part of the load being measured.
+	deadline := time.Now().Add(6 * time.Second)
 	attempts := 0
-	for time.Now().Before(deadline) && ctx.Err() == nil {
+	found := false
+	for time.Now().Before(deadline) && ctx.Err() == nil && !found {
 		send()
 		attempts++
 		time.Sleep(20 * time.Millisecond)
+		complete, err := worker.config.Cache.Complete(marked)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found = complete
 	}
 	cancel()
 	group.Wait()
@@ -392,22 +411,39 @@ func TestAFloodFromOnePeerDoesNotStarveAnother(t *testing.T) {
 			"the comparison is vacuous", stats)
 	}
 
-	streams, err := worker.config.Cache.CompleteStreams()
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, stream := range streams {
-		if stream == marked {
-			found = true
-			break
+	if !found {
+		// One last look: the node has stopped, so a write in flight at cancel
+		// has landed by now.
+		complete, err := worker.config.Cache.Complete(marked)
+		if err != nil {
+			t.Fatal(err)
 		}
+		found = complete
 	}
 	if !found {
-		t.Fatalf("the quiet peer's batch was not admitted while another peer flooded: "+
-			"%d complete streams cached, %+v", len(streams), stats)
+		streams, err := worker.config.Cache.CompleteStreams()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Two very different situations reach this line, and the delivery count
+		// separates them. A functioning run receives well over a thousand
+		// datagrams in this window; if the node saw a small fraction of that,
+		// the quiet peer's cells were lost in the kernel before the node could
+		// refuse them, and this says nothing about fairness. It is still a
+		// failure rather than a skip: a machine that can never deliver enough
+		// traffic is a machine where this property is untested, and that should
+		// be visible rather than green.
+		t.Fatalf("the quiet peer's batch was not admitted while another peer flooded, "+
+			"after %d sends over %s: %d complete streams cached, %+v\n"+
+			"delivery was %d datagrams; a functioning run of this test sees over a "+
+			"thousand. Far below that means the receive loop was starved of CPU and "+
+			"the datagrams never arrived, which is the harness rather than the node.",
+			attempts, time.Since(deadline.Add(-6*time.Second)).Round(time.Millisecond),
+			len(streams), stats, stats.Received)
 	}
 	t.Logf("MEASURED: under a continuous flood from operator %d that drove %d rejections, "+
-		"operator %d's two-cell batch was admitted and completed after %d sends",
-		flooder.Index, stats.CacheRejected, quiet.Index, attempts)
+		"operator %d's two-cell batch was admitted and completed after %d sends "+
+		"(%d datagrams received, %d stored, %d queue-dropped)",
+		flooder.Index, stats.CacheRejected, quiet.Index, attempts,
+		stats.Received, stats.Stored, stats.QueueDropped)
 }
