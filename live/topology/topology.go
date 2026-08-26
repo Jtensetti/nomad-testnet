@@ -497,7 +497,11 @@ func validateStrongConnectivity(document Document) error {
 }
 
 func canonicalDocument(document Document) ([]byte, error) {
-	return json.Marshal(cloneDocument(document))
+	encoded, err := json.Marshal(cloneDocument(document))
+	if err != nil {
+		return nil, err
+	}
+	return canonicalJSON(encoded)
 }
 
 func operatorSigningMessage(document Document, operatorID string) ([]byte, error) {
@@ -513,7 +517,11 @@ func operatorSigningMessage(document Document, operatorID string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	return signingMessage("nomad-operator-attestation-v3", encoded), nil
+	canonical, err := canonicalJSON(encoded)
+	if err != nil {
+		return nil, err
+	}
+	return signingMessage("nomad-operator-attestation-v3", canonical), nil
 }
 
 func verifyAttestations(document Document) error {

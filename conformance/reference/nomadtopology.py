@@ -13,19 +13,21 @@ FINDING, and it is the reason this file exists:
     topology. There was no encoding to implement, no signing domain to use and
     no verification order to follow.
 
-    Worse than absent: the encoding the reference implementation signs is the
-    output of Go's encoding/json on its own structs. Reproducing it requires
-    Go's member order rather than sorted keys, Go's habit of escaping <, > and
-    & as \\u003c, \\u003e and \\u0026 -- which no JSON specification requires --
-    and Go's rendering of an absent array as null. A second implementation
-    that emits the obvious bytes produces a different message and every
-    signature over it fails.
+    Worse than absent, at first: the encoding the reference implementation
+    signed was the output of Go's encoding/json on its own structs. Reproducing
+    it required Go's member order rather than sorted keys, Go's habit of
+    escaping <, > and & as \\u003c, \\u003e and \\u0026 -- which no JSON
+    specification requires -- and Go's rendering of an absent array as null. A
+    second implementation that emitted the obvious bytes produced a different
+    message and every signature over it failed, and none of it was visible
+    until a network_id or an endpoint contained an ampersand.
 
-    That is now written down so this file could be built, and recorded as a
-    defect that should not survive the protocol freeze. A canonical encoding
-    defined by one language's default library behaviour is not a
-    specification. It is invisible until a network_id or an endpoint contains
-    an ampersand.
+    That was recorded as a defect that should not survive the freeze, and it
+    did not. The canonical encoding is now specified: members sorted by their
+    UTF-16 code units, no whitespace, minimal string escaping, integers only,
+    and an absent array as []. This file implements the specification rather
+    than one language's defaults, which is the difference between a second
+    implementation and a reimplementation.
 
 The signature check uses `cryptography` when it is importable. That is a
 dependency this file's sibling nomadwire.py does not have, and the reason is
@@ -90,24 +92,41 @@ class TopologyError(Exception):
 
 
 def _escape(text: str) -> str:
-    """Render a JSON string the way Go's encoder does.
+    """Render a JSON string with the minimal escaping the encoding specifies.
 
-    The three HTML characters are the whole difficulty. Go escapes them by
-    default; json.dumps does not, and no specification asks anyone to.
+    Only the quote, the backslash and the control characters are escaped, with
+    the short forms where they exist and lowercase \\u00xx otherwise. Nothing
+    else -- and in particular not <, > or &, which Go escapes by default and
+    no specification asks anyone to.
     """
-    encoded = json.dumps(text, ensure_ascii=False)
-    return (
-        encoded.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
-    )
+    out = ['"']
+    short = {0x08: "\\b", 0x0C: "\\f", 0x0A: "\\n", 0x0D: "\\r", 0x09: "\\t"}
+    for character in text:
+        code = ord(character)
+        if character == '"':
+            out.append('\\"')
+        elif character == "\\":
+            out.append("\\\\")
+        elif code in short:
+            out.append(short[code])
+        elif code < 0x20:
+            out.append(f"\\u{code:04x}")
+        else:
+            out.append(character)
+    out.append('"')
+    return "".join(out)
 
 
-def _member(name: str, value: Any) -> str:
-    return f'"{name}":{_encode(value)}'
+def _sort_key(name: str) -> tuple:
+    """Order member names by their UTF-16 code units, as the encoding says."""
+    return tuple(name.encode("utf-16-be")[i] << 8 | name.encode("utf-16-be")[i + 1]
+                 for i in range(0, len(name.encode("utf-16-be")), 2))
 
 
 def _encode(value: Any) -> str:
     if value is None:
-        return "null"
+        # A document has no nullable members, so this is an absent array.
+        return "[]"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
@@ -116,6 +135,8 @@ def _encode(value: Any) -> str:
         return _escape(value)
     if isinstance(value, list):
         return "[" + ",".join(_encode(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return _object(value, tuple(value))
     raise TopologyError(f"cannot canonically encode {type(value).__name__}")
 
 
@@ -126,32 +147,35 @@ def _object(source: dict, members: tuple[str, ...]) -> str:
     extra = [name for name in source if name not in members]
     if extra:
         raise TopologyError(f"unknown member(s): {', '.join(sorted(extra))}")
-    return "{" + ",".join(_member(name, source[name]) for name in members) + "}"
+    ordered = sorted(source, key=_sort_key)
+    return "{" + ",".join(f'{_escape(name)}:{_encode(source[name])}' for name in ordered) + "}"
 
 
 def canonical(document: dict) -> bytes:
     """The exact bytes the three signed messages are computed over."""
-    parts = []
-    for name in DOCUMENT_MEMBERS:
-        if name not in document:
-            raise TopologyError(f"document has no {name}")
-        value = document[name]
-        if name == "traffic":
-            parts.append(f'"{name}":{_object(value, TRAFFIC_MEMBERS)}')
-        elif name == "dkg":
-            parts.append(f'"{name}":{_object(value, DKG_MEMBERS)}')
-        elif name == "operators":
-            if value is None:
-                parts.append(f'"{name}":null')
-            else:
-                rendered = ",".join(_object(item, OPERATOR_MEMBERS) for item in value)
-                parts.append(f'"{name}":[{rendered}]')
-        else:
-            parts.append(_member(name, value))
+    missing = [name for name in DOCUMENT_MEMBERS if name not in document]
+    if missing:
+        raise TopologyError(f"document has no {', '.join(missing)}")
     extra = [name for name in document if name not in DOCUMENT_MEMBERS]
     if extra:
         raise TopologyError(f"unknown document member(s): {', '.join(sorted(extra))}")
-    return ("{" + ",".join(parts) + "}").encode()
+
+    rendered: dict[str, str] = {}
+    for name, value in document.items():
+        if name == "traffic":
+            rendered[name] = _object(value, TRAFFIC_MEMBERS)
+        elif name == "dkg":
+            rendered[name] = _object(value, DKG_MEMBERS)
+        elif name == "operators":
+            if value is None:
+                rendered[name] = "[]"
+            else:
+                rendered[name] = "[" + ",".join(
+                    _object(item, OPERATOR_MEMBERS) for item in value) + "]"
+        else:
+            rendered[name] = _encode(value)
+    ordered = sorted(rendered, key=_sort_key)
+    return ("{" + ",".join(f'{_escape(name)}:{rendered[name]}' for name in ordered) + "}").encode()
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict:
