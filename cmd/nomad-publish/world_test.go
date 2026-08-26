@@ -23,12 +23,12 @@ type publisherWorld struct {
 	queue         string
 	topologyPath  string
 	authorityPath string
-	secretPath    string
 	committeePath string
 	publisherPath string
 	entryID       string
 	entryAddress  *net.UDPAddr
-	session       *uplink.Session
+	entryKEX      *ecdh.PrivateKey
+	responder     *uplink.Responder
 }
 
 func newPublisherWorld(t *testing.T) *publisherWorld {
@@ -51,6 +51,7 @@ func newPublisherWorld(t *testing.T) *publisherWorld {
 		t.Fatal(err)
 	}
 	identities := map[string]ed25519.PrivateKey{}
+	var entryKEX *ecdh.PrivateKey
 	dkgSession := [32]byte{7}
 	now := time.Now().UTC().Truncate(time.Second)
 	document := topology.Document{
@@ -76,6 +77,11 @@ func newPublisherWorld(t *testing.T) *publisherWorld {
 		kexKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if index == 0 {
+			// The entry operator's static key. The publisher agrees with it
+			// from the signed topology; nothing is shared out of band.
+			entryKEX = kexKey
 		}
 		dkgPublic, _, err := mix.GenerateDKGIdentity()
 		if err != nil {
@@ -114,7 +120,6 @@ func newPublisherWorld(t *testing.T) *publisherWorld {
 		queue:         filepath.Join(directory, "queue"),
 		topologyPath:  filepath.Join(directory, "topology.json"),
 		authorityPath: filepath.Join(directory, "authority.pub"),
-		secretPath:    filepath.Join(directory, "session.secret"),
 		committeePath: filepath.Join(directory, "committee.key"),
 		publisherPath: filepath.Join(directory, "publisher.pub"),
 		entryID:       names[0],
@@ -136,21 +141,17 @@ func newPublisherWorld(t *testing.T) *publisherWorld {
 	writeFile(t, world.publisherPath,
 		[]byte(base64.StdEncoding.EncodeToString(sitePublic)), 0o600)
 
-	secret := make([]byte, 32)
-	if _, err := rand.Read(secret); err != nil {
-		t.Fatal(err)
-	}
-	writeHex(t, world.secretPath, secret)
-
-	// The entry operator derives the same session from the same secret and
-	// the same public context. If the publisher's context differed in any
-	// field, Open would fail and the test would say so.
-	world.session, err = uplink.NewSession(secret, committee, uplink.Context{
+	// The entry operator holds only its own static key and the public
+	// context. It has never seen a per-publisher secret, and there is no
+	// file for one: the session comes from the handshake the publisher sends
+	// as its first cell.
+	world.entryKEX = entryKEX
+	world.responder, err = uplink.NewResponder(entryKEX, committee, uplink.Context{
 		NetworkID:      verified.Document.NetworkID,
 		Epoch:          verified.Document.Epoch,
 		TopologyDigest: verified.Digest,
 		EntryOperator:  0,
-	})
+	}, 64)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -63,7 +63,6 @@ func TestThePublisherEmitsCellsAnEntryOperatorCanOpen(t *testing.T) {
 		"--authority-key="+world.authorityPath,
 		"--queue="+world.queue,
 		"--state="+filepath.Join(world.directory, "uplink-sequence"),
-		"--session-secret="+world.secretPath,
 		"--committee-key="+world.committeePath,
 		"--entry="+world.entryID)
 	publisher.Stderr = os.Stderr
@@ -77,6 +76,8 @@ func TestThePublisherEmitsCellsAnEntryOperatorCanOpen(t *testing.T) {
 
 	var opened, work, cover int
 	sequences := map[uint64]bool{}
+	var session *uplink.Session
+	var sessionID [32]byte
 	deadline := time.Now().Add(4 * time.Second)
 	buffer := make([]byte, fabric.CellSize+64)
 	for time.Now().Before(deadline) && opened < 12 {
@@ -93,10 +94,26 @@ func TestThePublisherEmitsCellsAnEntryOperatorCanOpen(t *testing.T) {
 		}
 		var cell fabric.Cell
 		copy(cell[:], buffer[:count])
-		sequence, inner, err := world.session.Open(cell)
+
+		// The first cell is the handshake. The entry operator has no
+		// per-publisher secret and no way to open anything until it has
+		// accepted one, which is the whole point: nothing was arranged
+		// between these two processes beforehand.
+		if session == nil {
+			established, id, err := world.responder.Accept(cell)
+			if err != nil {
+				t.Fatalf("the first cell did not open as a handshake, so the entry "+
+					"operator has no session and never will: %v", err)
+			}
+			session = established
+			sessionID = id
+			opened++
+			continue
+		}
+		sequence, inner, err := session.Open(cell)
 		if err != nil {
-			t.Fatalf("a cell the publisher emitted did not open under the entry "+
-				"operator's session key: %v", err)
+			t.Fatalf("a cell the publisher emitted did not open under the session "+
+				"the handshake established: %v", err)
 		}
 		if sequences[sequence] {
 			t.Fatalf("sequence %d arrived twice: the publisher reused an AEAD nonce",
@@ -112,6 +129,10 @@ func TestThePublisherEmitsCellsAnEntryOperatorCanOpen(t *testing.T) {
 	if opened < 6 {
 		t.Fatalf("the entry operator opened %d cells in four seconds; the publisher is "+
 			"not emitting at its cadence", opened)
+	}
+	if sessionID == ([32]byte{}) {
+		t.Fatal("the handshake produced an all-zero session identifier, which the " +
+			"airlock would derive every deposit slot from")
 	}
 	t.Logf("the entry operator opened %d cells, sequences %d..%d, none repeated",
 		opened, minimumOf(sequences), maximumOf(sequences))
@@ -139,13 +160,16 @@ func TestARestartedPublisherDoesNotReuseANonce(t *testing.T) {
 	defer func() { _ = entry.Close() }()
 
 	seen := map[uint64]bool{}
+	// One session across both lifetimes: a restart resumes the same durable
+	// sequence, and the second lifetime opens with its own handshake.
+	var session *uplink.Session
 	for lifetime := 0; lifetime < 2; lifetime++ {
+		session = nil
 		publisher := exec.Command(binary,
 			"--topology="+world.topologyPath,
 			"--authority-key="+world.authorityPath,
 			"--queue="+world.queue,
 			"--state="+filepath.Join(world.directory, "uplink-sequence"),
-			"--session-secret="+world.secretPath,
 			"--committee-key="+world.committeePath,
 			"--entry="+world.entryID)
 		if err := publisher.Start(); err != nil {
@@ -164,7 +188,16 @@ func TestARestartedPublisherDoesNotReuseANonce(t *testing.T) {
 			}
 			var cell fabric.Cell
 			copy(cell[:], buffer[:count])
-			sequence, _, err := world.session.Open(cell)
+			if session == nil {
+				established, _, err := world.responder.Accept(cell)
+				if err != nil {
+					t.Fatalf("lifetime %d: the first cell did not open as a "+
+						"handshake: %v", lifetime, err)
+				}
+				session = established
+				continue
+			}
+			sequence, _, err := session.Open(cell)
 			if err != nil {
 				t.Fatalf("cell did not open: %v", err)
 			}

@@ -14,13 +14,14 @@
 // re-sealed fragments under nonces it had already used on every restart. See
 // live/uplink/sequence.go.
 //
-// What this command does NOT do, stated here because a reader will look for
-// it: it does not establish the uplink session in band. The shared secret is
-// read from a file both parties already have. Nothing in the cell format
-// carries a publisher's ephemeral key -- the 1200 bytes are spent on the
-// sequence, the committee ciphertext and the tag, leaving 24 bytes of padding
-// -- so an in-band handshake is a wire-format change and not something to
-// invent quietly. See nomad-protocol production/DECISIONS.md DEC-015.
+// The session is established in band. Earlier versions read a shared secret
+// from a file both parties already had, which needed a channel to distribute a
+// per-publisher secret to a specific operator before anything could be
+// published -- a channel that knows who publishes what. The publisher now
+// agrees with the entry operator's static key from the signed topology,
+// carrying its own ephemeral key in the first cell. It authenticates the
+// operator and proves nothing about itself, which is the direction this system
+// needs. See live/uplink/handshake.go and DEC-018.
 package main
 
 import (
@@ -33,7 +34,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -60,7 +60,6 @@ func run() error {
 	authorityPath := flag.String("authority-key", "", "pinned topology authority public key")
 	queuePath := flag.String("queue", "", "local publication queue directory")
 	statePath := flag.String("state", "", "durable uplink sequence state file")
-	secretPath := flag.String("session-secret", "", "file holding the pre-shared uplink secret")
 	committeePath := flag.String("committee-key", "", "file holding the epoch committee public key")
 	entry := flag.String("entry", "", "entry operator ID from the signed topology")
 	submit := flag.String("submit", "", "submit this file to the local queue and exit")
@@ -90,7 +89,7 @@ func run() error {
 
 	for name, value := range map[string]string{
 		"--topology": *topologyPath, "--authority-key": *authorityPath,
-		"--state": *statePath, "--session-secret": *secretPath,
+		"--state":         *statePath,
 		"--committee-key": *committeePath, "--entry": *entry,
 	} {
 		if value == "" {
@@ -114,24 +113,33 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	secret, err := loadSessionSecret(*secretPath)
-	if err != nil {
-		return err
-	}
-
-	session, err := uplink.NewSession(secret, committee, uplink.Context{
+	uplinkContext := uplink.Context{
 		NetworkID:      network.Document.NetworkID,
 		Epoch:          network.Document.Epoch,
 		TopologyDigest: network.Digest,
 		EntryOperator:  operator.Index,
-	})
-	if err != nil {
-		return err
 	}
 	sequence, err := uplink.OpenFileSequence(*statePath)
 	if err != nil {
 		return err
 	}
+	// The handshake consumes a sequence number like any other cell, drawn
+	// from the same durable reservation, because on the wire it is any other
+	// cell.
+	handshakeSequence, err := sequence.Next()
+	if err != nil {
+		return err
+	}
+	operatorKEX, err := base64.StdEncoding.DecodeString(operator.KEXKey)
+	if err != nil {
+		return fmt.Errorf("entry operator key-agreement key: %w", err)
+	}
+	initiator, err := uplink.Establish(operatorKEX, committee, uplinkContext, handshakeSequence)
+	if err != nil {
+		return err
+	}
+	session := initiator.Session()
+	handshakeCell := initiator.Cell()
 	drain, err := deposit.NewDrain(session, queue)
 	if err != nil {
 		return err
@@ -152,7 +160,8 @@ func run() error {
 	scheduler, err := fabric.NewScheduler(fabric.Config{
 		Epoch: interval, CellsPerEpoch: 1,
 		MaxLateness: time.Duration(network.Document.Traffic.MaxLatenessMillis) * time.Millisecond,
-	}, &drainSource{drain: drain, sequence: sequence}, &uplinkSink{conn: conn, target: target})
+	}, &drainSource{drain: drain, sequence: sequence, handshake: &handshakeCell},
+		&uplinkSink{conn: conn, target: target})
 	if err != nil {
 		return err
 	}
@@ -203,9 +212,18 @@ func submitObject(queue *publish.Queue, path, publisherPath string) error {
 type drainSource struct {
 	drain    *deposit.Drain
 	sequence *uplink.FileSequence
+	// handshake is the introduction, emitted as the first cell and then
+	// cleared. It occupies an ordinary tick: the cadence does not pause for
+	// it, and an observer sees a session start as one more cell.
+	handshake *fabric.Cell
 }
 
 func (source *drainSource) NextCell(context.Context) (fabric.Cell, error) {
+	if source.handshake != nil {
+		cell := *source.handshake
+		source.handshake = nil
+		return cell, nil
+	}
 	number, err := source.sequence.Next()
 	if err != nil {
 		// An exhausted or unreadable nonce space is not a lost cell. Sealing
@@ -308,31 +326,4 @@ func loadCommitteeKey(path string) (mix.PublicKey, error) {
 	}
 	copy(key[:], decoded)
 	return key, nil
-}
-
-// loadSessionSecret refuses a secret any other account can read, for the same
-// reason an operator secret is refused: a shared uplink key that leaks lets a
-// third party seal cells that the entry operator will accept as this
-// publisher's.
-func loadSessionSecret(path string) ([]byte, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("uplink session secret must be a regular file")
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("uplink session secret %s is readable by group or other; "+
-			"its permissions must be 0600 or stricter", filepath.Base(path))
-	}
-	encoded, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	secret, err := decodeFixed(encoded, 32)
-	if err != nil {
-		return nil, fmt.Errorf("session secret: %w", err)
-	}
-	return secret, nil
 }

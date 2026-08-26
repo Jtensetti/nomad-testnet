@@ -64,6 +64,9 @@ accepts.
 | `nomad-hop-mac-kdf-v2` | derivation of the per-hop MAC key |
 | `nomad-live-stream-v1` | the stream identifier over an ordered cell set |
 | `nomad-uplink-session-v1` | an uplink session identifier |
+| `nomad-uplink-handshake-v1` | the key sealing an in-band session handshake |
+| `nomad-uplink-handshake-secret-v1` | the session secret a handshake produces |
+| `nomad-uplink-handshake-id-v1` | the public session identifier a handshake produces |
 | `nomad-uplink-nonce-v1` | uplink nonce derivation |
 | `nomad-airlock-deposit-id-v1` | a deposit identifier derived from session and sequence |
 
