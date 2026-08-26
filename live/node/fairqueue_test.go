@@ -312,9 +312,20 @@ func TestAFloodFromOnePeerDoesNotStarveAnother(t *testing.T) {
 	group.Add(1)
 	go func() {
 		defer group.Done()
-		for ctx.Err() == nil {
+		// Paced, not throttled to politeness. An unpaced flood saturates the
+		// kernel's receive buffer -- under -race the node drains it an order
+		// of magnitude slower -- and then *every* peer's datagrams are lost
+		// before the node sees them, the quiet one included. That is the
+		// harness losing packets, not the node refusing them, and it would
+		// report a fairness defect that is not there. The flood still fills
+		// its whole share within the first few milliseconds; the rest is
+		// sustained pressure, which is what the test is about.
+		for sent := 0; ctx.Err() == nil; sent++ {
 			cell := floodSession.workCell(t, true)
 			_, _ = floodSession.conn.WriteToUDP(cell[:], floodSession.target)
+			if sent%16 == 15 {
+				time.Sleep(time.Millisecond)
+			}
 		}
 	}()
 

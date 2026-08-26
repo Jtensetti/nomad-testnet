@@ -63,6 +63,7 @@ accepts.
 | `nomad-hop-link-stream-v2` | derivation of the per-cell link keystream |
 | `nomad-hop-mac-kdf-v2` | derivation of the per-hop MAC key |
 | `nomad-live-stream-v1` | the stream identifier over an ordered cell set |
+| `nomad-mix-transcript-v1` | a published committee transcript a third party verifies |
 | `nomad-uplink-session-v1` | an uplink session identifier |
 | `nomad-uplink-handshake-v1` | the key sealing an in-band session handshake |
 | `nomad-uplink-handshake-secret-v1` | the session secret a handshake produces |
