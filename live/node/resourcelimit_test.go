@@ -133,7 +133,13 @@ func buildLimitedNode(t *testing.T, network topology.Verified,
 	scratch string, cacheStreams int) *Node {
 	t.Helper()
 	self := network.Document.Operators[0]
-	cache, err := rawcache.Open(filepath.Join(scratch, "raw"), cacheStreams)
+	// The same shared cache the node command opens, so a test measures the
+	// production admission rule rather than a more permissive one.
+	senders := []uint16{self.Index}
+	for _, peer := range network.IncomingPeers(self.Index) {
+		senders = append(senders, peer.Index)
+	}
+	cache, err := rawcache.OpenShared(filepath.Join(scratch, "raw"), cacheStreams, senders)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -740,7 +746,12 @@ func TestAReceiveSideLimitChangesNothingStructuralAboutWhatIsEmitted(t *testing.
 	network, identities, endpoints := nodeTestTopologyWithCadence(
 		t, campaignIntervalMillis, campaignLateness, rotatingPeerPlan)
 
-	saturated := runLimitRound(t, network, identities, endpoints, 1, "saturated")
+	// The tightest cache the shared model allows: one stream per sender.
+	// A total of 1 would leave some sender with no share at all, which the
+	// cache refuses to construct rather than round away, so the saturated
+	// world is built at the smallest limit that is still fair.
+	senders := 1 + len(network.IncomingPeers(network.Document.Operators[0].Index))
+	saturated := runLimitRound(t, network, identities, endpoints, senders, "saturated")
 	spacious := runLimitRound(t, network, identities, endpoints, 4096, "spacious")
 
 	if saturated.stats.CacheRejected == 0 {

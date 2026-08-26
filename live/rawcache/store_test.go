@@ -104,3 +104,166 @@ func TestLoadRejectsCacheContentThatIsNotTheCommittedStream(t *testing.T) {
 		t.Fatalf("tampered cache accepted: complete=%v err=%v", complete, err)
 	}
 }
+
+// A cache that refuses every new stream once it is full is bounded and unfair:
+// the operator that fills it stops every other operator's work from being
+// admitted at all. That is the state PROD-20 names, one layer above the relay
+// queue, and it is the more binding of the two -- work refused here never
+// reaches the queue to be scheduled fairly.
+func TestAFloodingSenderCannotTakeAnotherSendersStreamShare(t *testing.T) {
+	const maxStreams = 16
+	store, err := OpenShared(t.TempDir(), maxStreams, []uint16{1, 2, 3, 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := store.PerSource()
+	if share != maxStreams/4 {
+		t.Fatalf("share is %d, expected %d", share, maxStreams/4)
+	}
+
+	put := func(sender uint16, seed byte) error {
+		var stream hop.StreamID
+		stream[0], stream[1] = byte(sender), seed
+		metadata, err := hop.WorkMetadata(stream, 0, 2)
+		if err != nil {
+			return err
+		}
+		metadata.Sender = sender
+		var payload [hop.CiphertextSize]byte
+		payload[0] = seed
+		_, err = store.Put(metadata, payload)
+		return err
+	}
+
+	// The flood arrives first and asks for four times the whole cache.
+	floodAccepted := 0
+	for seed := 0; seed < maxStreams*4; seed++ {
+		if err := put(2, byte(seed)); err == nil {
+			floodAccepted++
+		} else if !errors.Is(err, ErrSourceShareFull) {
+			t.Fatalf("flood stream %d: %v", seed, err)
+		}
+	}
+	if floodAccepted != share {
+		t.Fatalf("the flooding sender introduced %d streams, its share is %d",
+			floodAccepted, share)
+	}
+
+	// Every other sender still has all of its own room.
+	for _, quiet := range []uint16{1, 3, 4} {
+		for seed := 0; seed < share; seed++ {
+			if err := put(quiet, byte(seed)); err != nil {
+				t.Errorf("sender %d was refused its own stream %d after a flood: %v",
+					quiet, seed, err)
+			}
+		}
+	}
+	t.Logf("MEASURED: a sender asking for %d streams got %d, its exact share; the other "+
+		"three senders each kept all %d of theirs", maxStreams*4, floodAccepted, share)
+}
+
+// The share must survive a restart, or a flood starts again from zero every
+// time the node is restarted -- and a node under attack restarts often.
+func TestTheSenderShareSurvivesReopening(t *testing.T) {
+	root := t.TempDir()
+	const maxStreams = 8
+	// Distinct stream IDs on every call, so a second run asks for genuinely
+	// new streams rather than re-offering ones the cache already holds.
+	fill := func(store *Store, sender uint16, offset, seeds int) int {
+		accepted := 0
+		for seed := 0; seed < seeds; seed++ {
+			var stream hop.StreamID
+			stream[0], stream[1], stream[2] = byte(sender), byte(offset), byte(seed+1)
+			metadata, err := hop.WorkMetadata(stream, 0, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			metadata.Sender = sender
+			var payload [hop.CiphertextSize]byte
+			payload[0], payload[1] = byte(offset), byte(seed)
+			if _, err := store.Put(metadata, payload); err == nil {
+				accepted++
+			}
+		}
+		return accepted
+	}
+
+	first, err := OpenShared(root, maxStreams, []uint16{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := first.PerSource()
+	if got := fill(first, 2, 0, share*4); got != share {
+		t.Fatalf("first run accepted %d of a share of %d", got, share)
+	}
+
+	second, err := OpenShared(root, maxStreams, []uint16{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fill(second, 2, 1, share*4); got != 0 {
+		t.Fatalf("a restart gave the same sender %d more streams", got)
+	}
+	if got := fill(second, 1, 1, share); got != share {
+		t.Errorf("the other sender kept only %d of its %d streams across a restart",
+			got, share)
+	}
+}
+
+// A sender outside the signed set has no share and cannot make one.
+func TestAnUnknownSenderGetsNoStreamShare(t *testing.T) {
+	store, err := OpenShared(t.TempDir(), 8, []uint16{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stream hop.StreamID
+	stream[0] = 9
+	metadata, err := hop.WorkMetadata(stream, 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Sender = 9
+	var payload [hop.CiphertextSize]byte
+	if _, err := store.Put(metadata, payload); !errors.Is(err, ErrSourceShareFull) {
+		t.Fatalf("a sender outside the signed set was given cache space: %v", err)
+	}
+}
+
+func TestASenderShareSmallerThanOneStreamIsRefused(t *testing.T) {
+	if _, err := OpenShared(t.TempDir(), 3, []uint16{1, 2, 3, 4}); err == nil {
+		t.Fatal("a stream limit smaller than the sender set was accepted")
+	}
+	if _, err := OpenShared(t.TempDir(), 8, nil); err == nil {
+		t.Fatal("a shared cache with no senders was accepted")
+	}
+}
+
+// A store opened without a sender set keeps the behaviour the read-side users
+// rely on, and a test says so rather than leaving it to be discovered.
+func TestAnUnsharedCacheKeepsOnlyTheTotalBound(t *testing.T) {
+	store, err := Open(t.TempDir(), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.PerSource() != 0 {
+		t.Fatalf("an unshared cache reports a per-sender share of %d", store.PerSource())
+	}
+	accepted := 0
+	for seed := 0; seed < 16; seed++ {
+		var stream hop.StreamID
+		stream[0] = byte(seed + 1)
+		metadata, err := hop.WorkMetadata(stream, 0, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		metadata.Sender = 7
+		var payload [hop.CiphertextSize]byte
+		payload[0] = byte(seed)
+		if _, err := store.Put(metadata, payload); err == nil {
+			accepted++
+		}
+	}
+	if accepted != 4 {
+		t.Fatalf("an unshared cache admitted %d streams against a limit of 4", accepted)
+	}
+}

@@ -139,7 +139,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	cache, err := rawcache.Open(*cachePath, *cacheStreams)
+	// The cache is shared between every operator that may send to this node
+	// and this node itself, so it is opened with a per-sender share. Without
+	// one, the first operator to fill it stops every other operator's work
+	// from being admitted at all -- bounded memory, unbounded unfairness.
+	self := verifiedTopology.Document.Operators[secrets.Operator.Index]
+	senders := []uint16{self.Index}
+	for _, peer := range verifiedTopology.IncomingPeers(self.Index) {
+		senders = append(senders, peer.Index)
+	}
+	cache, err := rawcache.OpenShared(*cachePath, *cacheStreams, senders)
 	if err != nil {
 		return err
 	}

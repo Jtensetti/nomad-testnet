@@ -463,7 +463,7 @@ func fillWorkQueue(t *testing.T, worker *Node, count int) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		worker.queue.Enqueue(cell)
+		worker.queue.Enqueue(worker.config.Secrets.Operator.Index, cell)
 	}
 }
 
@@ -632,7 +632,7 @@ func drivePrivateActivity(ctx context.Context, node *Node, scratch string) {
 		// Enqueueing work is the private-dependent input to the emission
 		// path. It turns the next cell from cover into work; it must not
 		// turn it into a differently timed or differently sized cell.
-		node.queue.Enqueue(cell)
+		node.queue.Enqueue(node.config.Secrets.Operator.Index, cell)
 
 		digest := sha256.Sum256(payload[:])
 		for round := 0; round < 64; round++ {

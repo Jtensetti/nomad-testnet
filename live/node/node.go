@@ -78,7 +78,7 @@ type counters struct {
 type Node struct {
 	config    Config
 	conn      *net.UDPConn
-	queue     *fabric.QueueSource
+	queue     *FairQueue
 	cover     *fabric.CoverSource
 	sink      *authenticatedSink
 	incoming  map[string]incomingPeer
@@ -173,10 +173,6 @@ func New(config Config) (*Node, error) {
 		_ = conn.Close()
 		return nil, err
 	}
-	queue, err := fabric.NewQueueSource(int(config.Topology.Document.Traffic.QueueCapacity))
-	if err != nil {
-		return fail(err)
-	}
 	sequence, err := hop.OpenFileSequence(config.SequencePath)
 	if err != nil {
 		return fail(err)
@@ -230,6 +226,20 @@ func New(config Config) (*Node, error) {
 	if len(config.Secrets.InboundKeys) != len(incomingPeers) {
 		return fail(errors.New("inbound key set differs from signed peer plan"))
 	}
+	// The relay queue's sources are the signed operator slots that may put
+	// work into it: every peer whose signed plan names this node, plus this
+	// node itself for the work it originates. Nothing at runtime adds one, so
+	// a share cannot be bought by sending.
+	sources := make([]uint16, 0, len(incomingPeers)+1)
+	sources = append(sources, self.Index)
+	for _, peer := range incomingPeers {
+		sources = append(sources, peer.Index)
+	}
+	queue, err := NewFairQueue(int(config.Topology.Document.Traffic.QueueCapacity), sources)
+	if err != nil {
+		return fail(err)
+	}
+
 	stats := &counters{}
 	sink := &authenticatedSink{
 		conn: conn, self: self, peers: outgoing, plan: plan, sequence: sequence, stats: stats,
@@ -497,7 +507,7 @@ func (node *Node) receive(ctx context.Context) error {
 			continue
 		}
 		node.stats.stored.Add(1)
-		if !node.queue.Enqueue(cell) {
+		if !node.queue.Enqueue(peer.operator.Index, cell) {
 			node.stats.queueDropped.Add(1)
 		}
 	}
@@ -537,8 +547,8 @@ func (node *Node) seed(seed bundle.Verified) error {
 		if err != nil {
 			return err
 		}
-		if !node.queue.Enqueue(cell) {
-			return errors.New("public seed batch exceeds relay queue")
+		if !node.queue.Enqueue(node.config.Secrets.Operator.Index, cell) {
+			return errors.New("public seed batch exceeds this node's own relay share")
 		}
 	}
 	return nil
@@ -563,7 +573,7 @@ func (node *Node) enqueueCached() error {
 			if err != nil {
 				return err
 			}
-			if !node.queue.Enqueue(cell) {
+			if !node.queue.Enqueue(node.config.Secrets.Operator.Index, cell) {
 				node.stats.queueDropped.Add(1)
 				return nil
 			}

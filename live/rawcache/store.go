@@ -21,12 +21,28 @@ import (
 var (
 	ErrEquivocation = errors.New("conflicting ciphertext for stream coordinate")
 	ErrCacheFull    = errors.New("raw cache stream limit reached")
+	// ErrSourceShareFull reports that one sender has introduced as many
+	// streams as its share allows. It is distinct from ErrCacheFull on
+	// purpose: one says the node is full, the other says a particular peer is
+	// using all of its own room, and an operator reading a log needs to tell
+	// those apart.
+	ErrSourceShareFull = errors.New("raw cache share for this sender is full")
 )
+
+// sourceFile records which sender introduced a stream, so the share survives a
+// restart. Without it a node could be emptied of its attribution by being
+// restarted, and a flood could start again from zero.
+const sourceFile = "source"
 
 type Store struct {
 	mu         sync.Mutex
 	root       string
 	maxStreams int
+	// perSource caps how many streams any one sender may introduce. Zero
+	// means no per-sender cap, which is correct only for a store that never
+	// accepts peer traffic -- see OpenShared.
+	perSource int
+	sources   map[uint16]struct{}
 }
 
 func Open(root string, maxStreams int) (*Store, error) {
@@ -46,6 +62,47 @@ func Open(root string, maxStreams int) (*Store, error) {
 	return &Store{root: root, maxStreams: maxStreams}, nil
 }
 
+// OpenShared opens a cache that several senders write to, giving each an equal
+// share of the stream budget.
+//
+// The plain Open is for a store nothing untrusted writes to -- the materializer
+// and the share service read what the node already accepted. A node does accept
+// peer traffic, and there the total bound alone is not enough: the cache
+// refuses a new stream once it is full, with no eviction, so one operator
+// filling it stops every other operator's work from being admitted at all.
+// That is bounded memory and unbounded unfairness, which is the state PROD-20
+// names.
+//
+// The sender set comes from the signed topology and nothing at runtime adds to
+// it, so a share cannot be acquired by sending.
+func OpenShared(root string, maxStreams int, sources []uint16) (*Store, error) {
+	store, err := Open(root, maxStreams)
+	if err != nil {
+		return nil, err
+	}
+	if len(sources) == 0 {
+		return nil, errors.New("a shared raw cache needs at least one sender")
+	}
+	store.sources = make(map[uint16]struct{}, len(sources))
+	for _, source := range sources {
+		store.sources[source] = struct{}{}
+	}
+	store.perSource = maxStreams / len(store.sources)
+	if store.perSource < 1 {
+		return nil, errors.New("raw cache stream limit is smaller than the sender set, " +
+			"so no per-sender share exists that respects it")
+	}
+	return store, nil
+}
+
+// PerSource is the stream share each sender may introduce, or zero for a store
+// opened without a sender set.
+func (store *Store) PerSource() int {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.perSource
+}
+
 // Put writes an immutable work cell. It returns true only for a new cache
 // coordinate; callers use that signal to avoid replay-driven relay work.
 func (store *Store) Put(metadata hop.Metadata, payload [hop.CiphertextSize]byte) (bool, error) {
@@ -59,12 +116,22 @@ func (store *Store) Put(metadata hop.Metadata, payload [hop.CiphertextSize]byte)
 	defer store.mu.Unlock()
 	streamPath := filepath.Join(store.root, hex.EncodeToString(metadata.Stream[:]))
 	if _, err := os.Lstat(streamPath); errors.Is(err, os.ErrNotExist) {
-		count, err := store.streamCount()
+		total, perSource, err := store.streamCounts()
 		if err != nil {
 			return false, err
 		}
-		if count >= store.maxStreams {
+		if total >= store.maxStreams {
 			return false, ErrCacheFull
+		}
+		if store.perSource > 0 {
+			if _, known := store.sources[metadata.Sender]; !known {
+				// A sender outside the signed set has no share and cannot
+				// make one, which is the same rule the peer set follows.
+				return false, ErrSourceShareFull
+			}
+			if perSource[metadata.Sender] >= store.perSource {
+				return false, ErrSourceShareFull
+			}
 		}
 		if err := os.Mkdir(streamPath, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 			return false, err
@@ -73,6 +140,13 @@ func (store *Store) Put(metadata hop.Metadata, payload [hop.CiphertextSize]byte)
 		binary.BigEndian.PutUint16(batchSize[:], metadata.BatchSize)
 		if err := writeImmutable(filepath.Join(streamPath, "batch-size"), batchSize[:]); err != nil {
 			return false, err
+		}
+		if store.perSource > 0 {
+			var sender [2]byte
+			binary.BigEndian.PutUint16(sender[:], metadata.Sender)
+			if err := writeImmutable(filepath.Join(streamPath, sourceFile), sender[:]); err != nil {
+				return false, err
+			}
 		}
 	} else if err != nil {
 		return false, err
@@ -177,18 +251,39 @@ func (store *Store) CompleteStreams() ([]hop.StreamID, error) {
 	return out, nil
 }
 
-func (store *Store) streamCount() (int, error) {
+// streamCounts reports the total number of streams and how many each sender
+// introduced. A stream with no recorded sender -- one written before this
+// store had a sender set -- counts toward the total and toward nobody's share,
+// which is the only reading that neither invents an attribution nor lets an
+// unattributed stream escape the bound.
+func (store *Store) streamCounts() (int, map[uint16]int, error) {
 	entries, err := os.ReadDir(store.root)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	count := 0
+	total := 0
+	perSource := make(map[uint16]int)
 	for _, entry := range entries {
-		if entry.IsDir() && len(entry.Name()) == 32 {
-			count++
+		if !entry.IsDir() || len(entry.Name()) != 32 {
+			continue
 		}
+		total++
+		if store.perSource == 0 {
+			continue
+		}
+		recorded, err := os.ReadFile(filepath.Join(store.root, entry.Name(), sourceFile))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return 0, nil, err
+		}
+		if len(recorded) != 2 {
+			return 0, nil, errors.New("cached stream has a malformed sender record")
+		}
+		perSource[binary.BigEndian.Uint16(recorded)]++
 	}
-	return count, nil
+	return total, perSource, nil
 }
 
 func verifyBatchSize(streamPath string, expected uint16) error {

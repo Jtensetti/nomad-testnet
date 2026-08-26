@@ -103,7 +103,7 @@ func TestTheNodeWritesNoSecretAnywhereUnderItsStateDirectory(t *testing.T) {
 			if err != nil {
 				return
 			}
-			worker.queue.Enqueue(cell)
+			worker.queue.Enqueue(worker.config.Secrets.Operator.Index, cell)
 			time.Sleep(5 * time.Millisecond)
 		}
 	}()
