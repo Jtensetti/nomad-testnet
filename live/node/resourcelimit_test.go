@@ -45,6 +45,8 @@ type scriptedWriter struct {
 	inner     cellWriter
 	failWith  error
 	deadline  error
+	alternate bool
+	writes    int
 	onWire    []uint32
 	destinies []string
 }
@@ -65,6 +67,12 @@ func (writer *scriptedWriter) SetWriteDeadline(at time.Time) error {
 func (writer *scriptedWriter) WriteToUDP(payload []byte, address *net.UDPAddr) (int, error) {
 	writer.mu.Lock()
 	failure := writer.failWith
+	if writer.alternate {
+		writer.writes++
+		if writer.writes%2 == 0 {
+			failure = nil
+		}
+	}
 	writer.mu.Unlock()
 	if failure != nil {
 		return 0, failure
@@ -90,6 +98,24 @@ func (writer *scriptedWriter) fail(err error) {
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
 	writer.failWith = err
+	writer.alternate = false
+}
+
+// failAlternating makes every second write fail, counted in writes rather than
+// scheduled in time.
+//
+// A previous version of this toggled the failure on a ticker at half the cell
+// cadence, which resonates: writes land on every second toggle, so they can
+// fall entirely in the healthy phase and nothing is ever dropped. The test then
+// fails with "nothing was dropped", which reads like a production defect and is
+// a harmonic. Counting writes removes the timing from a test that was never
+// about timing.
+func (writer *scriptedWriter) failAlternating(err error) {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	writer.failWith = err
+	writer.alternate = true
+	writer.writes = 0
 }
 
 func (writer *scriptedWriter) sequences() []uint32 {
@@ -403,26 +429,7 @@ func TestADroppedCellDoesNotBurnASequenceNumberOnTheWire(t *testing.T) {
 	var group sync.WaitGroup
 	group.Add(1)
 	go func() { defer group.Done(); _ = worker.Run(ctx) }()
-	group.Add(1)
-	go func() {
-		defer group.Done()
-		ticker := time.NewTicker(campaignIntervalMillis * time.Millisecond / 2)
-		defer ticker.Stop()
-		failing := false
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				failing = !failing
-				if failing {
-					writer.fail(&net.OpError{Op: "write", Net: "udp", Err: syscall.ENOBUFS})
-				} else {
-					writer.fail(nil)
-				}
-			}
-		}
-	}()
+	writer.failAlternating(&net.OpError{Op: "write", Net: "udp", Err: syscall.ENOBUFS})
 	time.Sleep(900 * time.Millisecond)
 	cancel()
 	group.Wait()

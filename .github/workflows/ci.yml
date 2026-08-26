@@ -181,6 +181,14 @@ jobs:
           # vendored component module is scanned too: they are separate modules
           # behind replace directives, so a root scan never reaches them, which
           # is the same gap that let an untested rlnc decoder ship.
+          # go mod verify answers a question govulncheck does not: whether
+          # every module in the build cache still hashes to what go.sum
+          # recorded. A vulnerability scan on substituted bytes reports on
+          # the wrong code.
+          go mod verify
+          for module in components/*/; do
+            (cd "$module" && go mod verify)
+          done
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck="$(go env GOPATH)/bin/govulncheck"
           "$govulncheck" ./...
