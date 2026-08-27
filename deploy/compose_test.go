@@ -42,6 +42,33 @@ func TestEveryComposeServiceSuppressesCrashDumps(t *testing.T) {
 	}
 }
 
+// A core file contains the complete process address space, so field allowlists
+// and GOTRACEBACK cannot make one safe. The shipping Compose anchor must
+// enforce the operator runbook's LimitCORE=0 equivalent for every service.
+func TestEveryComposeServiceDisablesCoreDumps(t *testing.T) {
+	encoded, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	anchorEnd := strings.Index(text, "\nservices:\n")
+	if anchorEnd < 0 {
+		t.Fatal("compose file has no services section")
+	}
+	anchor := text[:anchorEnd]
+	for _, required := range []string{"ulimits:", "core:", "soft: 0", "hard: 0"} {
+		if !strings.Contains(anchor, required) {
+			t.Fatalf("locked service anchor does not disable core dumps: missing %q", required)
+		}
+	}
+	for _, name := range serviceNames(t, text) {
+		block := serviceBlock(text, name)
+		if !strings.Contains(block, "<<: *locked-service") {
+			t.Fatalf("service %q bypasses the locked-service anchor and its core-dump limit", name)
+		}
+	}
+}
+
 func TestEveryNetworkNodeIsBoundToItsVerifiedEpochChain(t *testing.T) {
 	encoded, err := os.ReadFile("compose.yaml")
 	if err != nil {
