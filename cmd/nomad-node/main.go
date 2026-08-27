@@ -79,6 +79,17 @@ func run() error {
 	if err := topology.AcceptMonotonic(watermarkPath, verifiedTopology); err != nil {
 		return err
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// Starting a service before the signed public activation instant is a
+	// normal operational condition, not a crash. Wait locally and emit no
+	// network work until the descriptor says the epoch is eligible. The
+	// FreshGuard below re-reads the chain at the boundary, so a halt or other
+	// verified lifecycle change still fails closed before any socket opens.
+	if err := waitUntilPublicActivation(ctx, current.ActivateAt); err != nil {
+		return err
+	}
 	guard := epoch.FreshGuard{Chain: chain}
 	if err := guard.ServesEpoch(current.Epoch, time.Now().UTC()); err != nil {
 		return fmt.Errorf("epoch chain does not authorize network service: %w", err)
@@ -116,8 +127,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	watchDone := make(chan error, 1)
@@ -134,6 +143,26 @@ func run() error {
 		return runErr
 	}
 	return nil
+}
+
+// waitUntilPublicActivation is deliberately local-only. It opens no socket,
+// reads no private state and cannot accelerate the signed public boundary.
+func waitUntilPublicActivation(ctx context.Context, activateAt time.Time) error {
+	if ctx == nil {
+		return errors.New("activation wait context is required")
+	}
+	wait := time.Until(activateAt)
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // watchServingDeadline refreshes the public epoch chain on a fixed one-second
