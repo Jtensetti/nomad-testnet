@@ -1,7 +1,14 @@
 name: ci
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   unit:
@@ -148,7 +155,8 @@ jobs:
         run: |
           directory=runtime/evidence/publication-campaign
           test -f "$directory/control-a.txt" || {
-            echo "the publication campaign produced no captures"; exit 1; }
+            echo "the publication campaign produced no captures"; exit 1;
+          }
           findings=0
           # Against the steady control: publication succeeding, timing out or
           # being lost must not change what an observer sees.
