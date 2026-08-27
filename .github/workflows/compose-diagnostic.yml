@@ -7,6 +7,7 @@ on:
       - '.github/workflows/compose-diagnostic.yml'
       - 'cmd/nomad-node/**'
       - 'deploy/**'
+      - 'live/epoch/**'
       - 'scripts/compose-e2e.sh'
 
 permissions:
