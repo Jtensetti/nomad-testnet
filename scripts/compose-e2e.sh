@@ -101,8 +101,8 @@ import sys
 root = pathlib.Path(sys.argv[1])
 certificate = json.loads((root / "dkg-a-certificate.json").read_text())
 descriptor = json.loads((root / "descriptor.json").read_text())
-if descriptor.get("version") != "nomad-batch-descriptor-v2":
-    raise SystemExit("live descriptor is not the certified DKG format")
+if descriptor.get("version") != "nomad-batch-descriptor-v3":
+    raise SystemExit("live descriptor is not the current certified DKG format")
 if descriptor.get("dkg_certificate") != certificate:
     raise SystemExit("live descriptor does not embed the distributed DKG certificate")
 PY
