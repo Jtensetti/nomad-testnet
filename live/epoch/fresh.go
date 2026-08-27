@@ -21,7 +21,7 @@ func (chain *Chain) FreshStateOf(epochNumber uint64, now time.Time) (State, erro
 	chain.mu.Lock()
 	defer chain.mu.Unlock()
 
-	lock, err := acquireChainLock(chain.root)
+	lock, err := acquireChainReadLock(chain.root)
 	if err != nil {
 		return StateRetired, err
 	}
@@ -37,7 +37,7 @@ func (chain *Chain) FreshEpoch(epochNumber uint64) (Verified, bool, error) {
 	chain.mu.Lock()
 	defer chain.mu.Unlock()
 
-	lock, err := acquireChainLock(chain.root)
+	lock, err := acquireChainReadLock(chain.root)
 	if err != nil {
 		return Verified{}, false, err
 	}
@@ -66,7 +66,7 @@ func (chain *Chain) FreshServingDeadline(epochNumber uint64) (time.Time, error) 
 	chain.mu.Lock()
 	defer chain.mu.Unlock()
 
-	lock, err := acquireChainLock(chain.root)
+	lock, err := acquireChainReadLock(chain.root)
 	if err != nil {
 		return time.Time{}, err
 	}
