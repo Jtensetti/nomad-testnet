@@ -15,6 +15,13 @@ x-locked-service: &locked-service
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
   pids_limit: 128
+  # A core file is the complete address space, so application-level telemetry
+  # filtering cannot make one safe. Enforce the operator runbook's no-core
+  # rule in the shipping Compose boundary rather than leaving it advisory.
+  ulimits:
+    core:
+      soft: 0
+      hard: 0
   tmpfs:
     - /tmp:rw,noexec,nosuid,nodev,size=32m
   restart: unless-stopped
