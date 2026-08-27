@@ -49,6 +49,28 @@ jobs:
       - name: Wire two-world campaign and hostile-peer flood
         run: go test -count=1 -v -run 'TestWire|TestFlood|TestHostile' ./live/node/
 
+      # tcpdump is needed for the publication-path capture and is not in the
+      # runner image's default PATH-visible set on every generation.
+      # The publication-path capture needs tcpdump on the loopback interface.
+      # The capability goes on the binary rather than running the test as root:
+      # a root `go test` writes its build cache as root and the next step
+      # cannot read it.
+      - name: Install tcpdump and grant it capture capability
+        run: |
+          sudo apt-get update && sudo apt-get install -y tcpdump libcap2-bin
+          sudo setcap cap_net_raw,cap_net_admin=eip "$(command -v tcpdump)"
+
+      - name: Capacity measurement
+        run: go test -count=1 -v -run 'TestCapacityReport|TestTheRelayPathFits' ./live/capacity/
+
+      # The publication path as separate processes with a real capture. It runs
+      # here rather than in the per-push job because it holds two processes and
+      # a packet capture open for a quarter of a minute, and that load is
+      # enough to push the flood and cadence tests past their thresholds if it
+      # runs alongside them.
+      - name: Publication path across real processes
+        run: go test -count=1 -v -timeout 10m -run TestThePublicationPathAcrossRealProcesses ./cmd/nomad-entry/
+
       - name: Airlock timing and permutation-uniformity measurements
         run: |
           go test -count=1 -v -timeout 30m \

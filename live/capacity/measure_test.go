@@ -42,6 +42,24 @@ func deployedEnvelope() capacity.Envelope {
 	}
 }
 
+// requireQuietMachine gates the wall-clock measurements.
+//
+// Every figure in this file is a duration, and a duration measured while the
+// rest of the suite runs under -race on a shared container is a fact about the
+// container. Left in the default sweep these tests do two bad things at once:
+// they report numbers nobody should quote, and their own load pushes the
+// timing-sensitive tests in other packages over their thresholds.
+//
+// The arithmetic and validation tests in this file are pure and stay in the
+// default sweep, because those are the ones a refactor can break.
+func requireQuietMachine(t *testing.T) {
+	t.Helper()
+	if os.Getenv("NOMAD_TIMING_CAMPAIGN") != "1" {
+		t.Skip("wall-clock measurement; set NOMAD_TIMING_CAMPAIGN=1 to run it on a " +
+			"machine that is not also running the rest of the suite")
+	}
+}
+
 // measure times an operation over enough repetitions to be a mean rather than a
 // sample, and reports the mean. It deliberately does not report a minimum: the
 // question is whether a node keeps its cadence on a machine that is doing other
@@ -109,6 +127,7 @@ func publisherSession(tb testing.TB) *uplink.Session {
 // with their environment and their limits attached, and `go test -bench` prints
 // a number with neither.
 func TestCapacityReport(t *testing.T) {
+	requireQuietMachine(t)
 	envelope := deployedEnvelope()
 	if err := envelope.Validate(); err != nil {
 		t.Fatal(err)
@@ -310,6 +329,7 @@ func TestCapacityReport(t *testing.T) {
 // change this is really guarding against, which is somebody putting a
 // signature, a disk write or a network round trip on the per-cell path.
 func TestTheRelayPathFitsInsideTheCadence(t *testing.T) {
+	requireQuietMachine(t)
 	envelope := deployedEnvelope()
 	var key [32]byte
 	if _, err := rand.Read(key[:]); err != nil {

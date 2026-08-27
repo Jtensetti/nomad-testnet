@@ -124,9 +124,11 @@ code rather than about a deployment.
 
 - Not a soak. Nothing here runs longer than a few seconds, so none of it speaks
   to drift, leaks or degradation over weeks.
-- Not deployment hardware. Every figure comes from a shared container doing
-  other work concurrently. As upper bounds on a quiet machine they are useful;
-  as predictions for a small operator's box they are not.
+- Not deployment hardware, and not a bound in either direction. Every figure
+  comes from a shared container, and re-running the campaign while the rest of
+  the suite is running measures two to three times worse. These are a snapshot
+  of one run, not a best case and not a worst case, and they are not a
+  prediction for a small operator's box.
 - Not a composed system. Each cost is measured in isolation, not with the
   scheduler, the socket and the cache contending for the same core.
 - Not a capacity *target*. These are what the implementation costs today. An
