@@ -30,7 +30,15 @@ type Config struct {
 	HealthPath    string
 	CacheSweep    time.Duration
 	Seed          *bundle.Verified
+	// ServingDeadline is a public, chain-derived clock boundary. It may only
+	// move earlier when a verified emergency successor is imported. The hot
+	// send path reads it without disk or network I/O, so retirement cannot be
+	// delayed by cache or reader state.
+	ServingDeadline func() time.Time
+	Now             func() time.Time
 }
+
+var ErrEpochInactive = errors.New("epoch is no longer ACTIVE")
 
 type Stats struct {
 	StartedAt      time.Time `json:"started_at"`
@@ -67,6 +75,8 @@ type Node struct {
 	replay    map[uint16]*hop.ReplayWindow
 	stats     *counters
 	startedAt time.Time
+	now       func() time.Time
+	deadline  func() time.Time
 }
 
 type outgoingPeer struct {
@@ -90,6 +100,8 @@ type authenticatedSink struct {
 	sequence *hop.FileSequence
 	context  hop.Context
 	stats    *counters
+	now      func() time.Time
+	deadline func() time.Time
 }
 
 type coverSource struct{}
@@ -119,6 +131,16 @@ func New(config Config) (*Node, error) {
 	}
 	if config.CacheSweep <= 0 {
 		return nil, errors.New("public cache sweep interval must be positive")
+	}
+	if config.ServingDeadline == nil {
+		return nil, errors.New("public epoch serving deadline is required")
+	}
+	now := config.Now
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
+	if deadline := config.ServingDeadline(); deadline.IsZero() || !now().Before(deadline) {
+		return nil, ErrEpochInactive
 	}
 	listen, err := net.ResolveUDPAddr("udp", config.ListenAddress)
 	if err != nil {
@@ -192,6 +214,7 @@ func New(config Config) (*Node, error) {
 	stats := &counters{}
 	sink := &authenticatedSink{
 		conn: conn, self: self, peers: outgoing, plan: plan, sequence: sequence, stats: stats,
+		now: now, deadline: config.ServingDeadline,
 		context: hop.Context{
 			TopologyDigest: config.Topology.Digest, NetworkID: config.Topology.Document.NetworkID,
 			Epoch: config.Topology.Document.Epoch,
@@ -201,6 +224,7 @@ func New(config Config) (*Node, error) {
 	node := &Node{
 		config: config, conn: conn, queue: queue, cover: cover, sink: sink,
 		incoming: incoming, replay: replay, stats: stats, startedAt: time.Now().UTC(),
+		now: now, deadline: config.ServingDeadline,
 	}
 	if config.Seed != nil {
 		if err := node.seed(*config.Seed); err != nil {
@@ -213,6 +237,9 @@ func New(config Config) (*Node, error) {
 func (node *Node) Run(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("context is required")
+	}
+	if err := requireServing(node.now, node.deadline); err != nil {
+		return err
 	}
 	interval := time.Duration(node.config.Topology.Document.Traffic.CellIntervalMillis) * time.Millisecond
 	scheduler, err := fabric.NewScheduler(fabric.Config{
@@ -253,6 +280,9 @@ func (node *Node) Snapshot() Stats {
 func (sink *authenticatedSink) Send(ctx context.Context, cell fabric.Cell) error {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
+	if err := requireServing(sink.now, sink.deadline); err != nil {
+		return err
+	}
 	metadata, err := hop.MetadataFromCell(cell)
 	if err != nil {
 		return fmt.Errorf("scheduler source supplied an invalid cell: %w", err)
@@ -294,6 +324,9 @@ func (sink *authenticatedSink) Send(ctx context.Context, cell fabric.Cell) error
 func (node *Node) receive(ctx context.Context) error {
 	buffer := make([]byte, fabric.CellSize+1)
 	for {
+		if err := requireServing(node.now, node.deadline); err != nil {
+			return err
+		}
 		if err := node.conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 			return err
 		}
@@ -361,6 +394,9 @@ func (node *Node) maintain(ctx context.Context) error {
 		return err
 	}
 	for {
+		if err := requireServing(node.now, node.deadline); err != nil {
+			return err
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -374,6 +410,17 @@ func (node *Node) maintain(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func requireServing(now func() time.Time, deadline func() time.Time) error {
+	if now == nil || deadline == nil {
+		return errors.New("public epoch serving clock is unavailable")
+	}
+	boundary := deadline()
+	if boundary.IsZero() || !now().Before(boundary) {
+		return ErrEpochInactive
+	}
+	return nil
 }
 
 func (node *Node) seed(seed bundle.Verified) error {

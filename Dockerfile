@@ -4,8 +4,11 @@ WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 go test ./live/... && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-bootstrap ./cmd/nomad-bootstrap && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-conformance ./cmd/nomad-conformance && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-dkg ./cmd/nomad-dkg && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-fixture-publisher ./cmd/nomad-fixture-publisher && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-lifecycle ./cmd/nomad-lifecycle && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-rotation-controller ./cmd/nomad-rotation-controller && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-node ./cmd/nomad-node && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-operator ./cmd/nomad-operator && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-topology ./cmd/nomad-topology && \
@@ -21,8 +24,11 @@ RUN mkdir -p /runtime/public \
     /runtime/operators/operator-b \
     /runtime/operators/operator-c \
     /cache /state /partials /verified /config /operator /authority /dkg \
-    /certificate /published /operators/a /operators/b /operators/c && \
+    /certificate /published /operators/a /operators/b /operators/c \
+    /epoch-chain /revocations /rotation/topologies /rotation/secrets /rotation/state /rotation/shares /rotation/certificates \
+    /rotation/exchange /rotation/signature-journal && \
     chown -R 65532:65532 /runtime /cache /state /partials /verified /config /operator \
-    /authority /dkg /certificate /published /operators
+    /authority /dkg /certificate /published /operators /epoch-chain /revocations /rotation && \
+    chmod 0700 /rotation/secrets
 USER 65532:65532
 ENTRYPOINT []

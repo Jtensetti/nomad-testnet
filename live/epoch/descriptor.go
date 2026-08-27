@@ -10,10 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"time"
 
 	"github.com/Jtensetti/nomad-testnet/live/committee"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -71,6 +71,13 @@ type Verified struct {
 	NetworkID   string
 	ActivateAt  time.Time
 	RetireAt    time.Time
+
+	// These cumulative sets are derived only from the verified descriptor
+	// chain. They prevent an epoch-private key from being retired and then
+	// reintroduced after an intervening epoch, which would make a later
+	// compromise disclose material from the earlier epoch.
+	historicalKEXKeys map[string]struct{}
+	historicalDKGKeys map[string]struct{}
 }
 
 // RevocationSet lists revoked operator identity keys (base64 Ed25519 public
@@ -136,8 +143,10 @@ func approvalMessage(previousDigest, digest [32]byte, approver ed25519.PublicKey
 	return message
 }
 
-// Activate signs the descriptor digest as one of the epoch's own operators.
-func Activate(descriptor Descriptor, operator topology.Operator, identity ed25519.PrivateKey) (Activation, error) {
+// signActivation is the primitive Ed25519 operation. Production callers use
+// Journal.CreateActivationArtifact so authority, chain, membership,
+// revocation and anti-equivocation checks happen before this function runs.
+func signActivation(descriptor Descriptor, operator topology.Operator, identity ed25519.PrivateKey) (Activation, error) {
 	if err := requireMatchingIdentity(operator, identity); err != nil {
 		return Activation{}, err
 	}
@@ -149,8 +158,9 @@ func Activate(descriptor Descriptor, operator topology.Operator, identity ed2551
 	return Activation{OperatorID: operator.ID, Index: uint32(operator.Index), Signature: base64.StdEncoding.EncodeToString(signature)}, nil
 }
 
-// Approve signs the transition as one previous-epoch operator.
-func Approve(descriptor Descriptor, previous Verified, operator topology.Operator, identity ed25519.PrivateKey) (Approval, error) {
+// signApproval is the corresponding internal primitive for an outgoing
+// committee approval. It is intentionally not exported.
+func signApproval(descriptor Descriptor, previous Verified, operator topology.Operator, identity ed25519.PrivateKey) (Approval, error) {
 	if err := requireMatchingIdentity(operator, identity); err != nil {
 		return Approval{}, err
 	}
@@ -198,6 +208,9 @@ func Verify(encoded []byte, authority ed25519.PublicKey, previous *Verified, rev
 	if len(encoded) == 0 || len(encoded) > MaximumFileBytes {
 		return Verified{}, errors.New("epoch descriptor is empty or too large")
 	}
+	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
+		return Verified{}, fmt.Errorf("epoch descriptor is ambiguous: %w", err)
+	}
 	var descriptor Descriptor
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
@@ -207,6 +220,25 @@ func Verify(encoded []byte, authority ed25519.PublicKey, previous *Verified, rev
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return Verified{}, errors.New("trailing epoch descriptor data")
 	}
+	verified, err := ValidateDraft(descriptor, authority, previous, revoked)
+	if err != nil {
+		return Verified{}, err
+	}
+	if err := verifyApprovals(descriptor, verified.Digest, previous, revoked); err != nil {
+		return Verified{}, err
+	}
+	if err := verifyActivations(descriptor, verified.Digest, verified.Topology); err != nil {
+		return Verified{}, err
+	}
+	return verified, nil
+}
+
+// ValidateDraft verifies every signed public input, lifecycle boundary and
+// chain rule that defines a descriptor digest, but deliberately does not
+// require the approval or activation signature sets to be complete. Operator
+// tooling must call this before signing a draft; final admission still calls
+// Verify, which requires the complete sets.
+func ValidateDraft(descriptor Descriptor, authority ed25519.PublicKey, previous *Verified, revoked RevocationSet) (Verified, error) {
 	digest, err := Digest(descriptor)
 	if err != nil {
 		return Verified{}, err
@@ -251,17 +283,13 @@ func Verify(encoded []byte, authority ed25519.PublicKey, previous *Verified, rev
 	if err := verifyChainLink(descriptor, network, previous, activateAt); err != nil {
 		return Verified{}, err
 	}
-	if err := verifyApprovals(descriptor, digest, previous, revoked); err != nil {
-		return Verified{}, err
-	}
-	if err := verifyActivations(descriptor, digest, network); err != nil {
-		return Verified{}, err
-	}
+	historicalKEX, historicalDKG := extendEpochKeyHistory(previous, network)
 
 	return Verified{
 		Descriptor: descriptor, Digest: digest, Topology: network, Certificate: certified,
 		Epoch: network.Document.Epoch, NetworkID: network.Document.NetworkID,
 		ActivateAt: activateAt, RetireAt: retireAt,
+		historicalKEXKeys: historicalKEX, historicalDKGKeys: historicalDKG,
 	}, nil
 }
 
@@ -290,6 +318,9 @@ func verifyChainLink(descriptor Descriptor, network topology.Verified, previous 
 	if network.Document.Epoch != previous.Epoch+1 {
 		return errors.New("epoch numbers must increase by exactly one")
 	}
+	if err := verifyFreshEpochKeys(*previous, network); err != nil {
+		return err
+	}
 	switch descriptor.Transition {
 	case TransitionScheduled:
 		if !activateAt.Equal(previous.RetireAt) {
@@ -310,12 +341,71 @@ func verifyChainLink(descriptor Descriptor, network topology.Verified, previous 
 	return nil
 }
 
+// verifyFreshEpochKeys makes the topology's epoch-scoped key declaration a
+// protocol invariant. A later compromise of an operator's current secret file
+// must not reveal a DKG identity or hop-MAC secret from any earlier epoch,
+// including one separated by intervening rotations. Identity signing keys are
+// intentionally excluded: they are the stable operator identities that
+// authorize the cross-epoch transition.
+func verifyFreshEpochKeys(previous Verified, incoming topology.Verified) error {
+	previousKEX, previousDKG := epochKeyHistory(previous)
+	for _, operator := range incoming.Document.Operators {
+		if _, reused := previousKEX[operator.KEXKey]; reused {
+			return fmt.Errorf("operator %s reuses an earlier epoch key-agreement key", operator.ID)
+		}
+		if _, reused := previousDKG[operator.DKGIdentityKey]; reused {
+			return fmt.Errorf("operator %s reuses an earlier epoch DKG identity", operator.ID)
+		}
+	}
+	return nil
+}
+
+func epochKeyHistory(previous Verified) (map[string]struct{}, map[string]struct{}) {
+	kex := make(map[string]struct{}, len(previous.historicalKEXKeys)+len(previous.Topology.Document.Operators))
+	dkg := make(map[string]struct{}, len(previous.historicalDKGKeys)+len(previous.Topology.Document.Operators))
+	for key := range previous.historicalKEXKeys {
+		kex[key] = struct{}{}
+	}
+	for key := range previous.historicalDKGKeys {
+		dkg[key] = struct{}{}
+	}
+	// A zero-value history can arise only in focused package tests or callers
+	// that constructed Verified directly. Fail safely for the direct
+	// predecessor even in that case; production chains always carry the full
+	// cumulative sets produced by ValidateDraft.
+	for _, operator := range previous.Topology.Document.Operators {
+		kex[operator.KEXKey] = struct{}{}
+		dkg[operator.DKGIdentityKey] = struct{}{}
+	}
+	return kex, dkg
+}
+
+func extendEpochKeyHistory(previous *Verified, incoming topology.Verified) (map[string]struct{}, map[string]struct{}) {
+	kex := make(map[string]struct{}, len(incoming.Document.Operators))
+	dkg := make(map[string]struct{}, len(incoming.Document.Operators))
+	if previous != nil {
+		kex, dkg = epochKeyHistory(*previous)
+	}
+	for _, operator := range incoming.Document.Operators {
+		kex[operator.KEXKey] = struct{}{}
+		dkg[operator.DKGIdentityKey] = struct{}{}
+	}
+	return kex, dkg
+}
+
 func verifyApprovals(descriptor Descriptor, digest [32]byte, previous *Verified, revoked RevocationSet) error {
+	return verifyApprovalSet(descriptor, digest, previous, revoked, true)
+}
+
+func verifyApprovalSet(descriptor Descriptor, digest [32]byte, previous *Verified, revoked RevocationSet, requireQuorum bool) error {
 	if descriptor.Transition == TransitionGenesis {
 		return nil
 	}
+	if previous == nil {
+		return errors.New("non-genesis approval set requires the previous verified epoch")
+	}
 	quorum := ApprovalQuorum(*previous)
-	if len(descriptor.Approvals) < quorum {
+	if requireQuorum && len(descriptor.Approvals) < quorum {
 		return fmt.Errorf("transition requires at least %d previous-epoch approvals", quorum)
 	}
 	members := len(previous.Topology.Document.Operators)
@@ -347,24 +437,35 @@ func verifyApprovals(descriptor Descriptor, digest [32]byte, previous *Verified,
 			return fmt.Errorf("invalid transition approval from %s", approval.OperatorID)
 		}
 	}
-	if len(seen) < quorum {
+	if requireQuorum && len(seen) < quorum {
 		return fmt.Errorf("transition requires at least %d distinct previous-epoch approvals", quorum)
 	}
 	return nil
 }
 
 func verifyActivations(descriptor Descriptor, digest [32]byte, network topology.Verified) error {
-	if len(descriptor.Activations) != len(network.Document.Operators) {
+	return verifyActivationSet(descriptor, digest, network, true)
+}
+
+func verifyActivationSet(descriptor Descriptor, digest [32]byte, network topology.Verified, requireAll bool) error {
+	members := len(network.Document.Operators)
+	if requireAll && len(descriptor.Activations) != members {
 		return errors.New("epoch activation requires one signature from every configured operator")
 	}
 	message := activationMessage(digest)
-	activations := append([]Activation(nil), descriptor.Activations...)
-	sort.Slice(activations, func(i, j int) bool { return activations[i].Index < activations[j].Index })
-	for index, activation := range activations {
-		operator := network.Document.Operators[index]
-		if activation.Index != uint32(index) || activation.OperatorID != operator.ID {
-			return errors.New("activation signatures do not exactly match epoch membership")
+	seen := make(map[string]struct{}, len(descriptor.Activations))
+	for _, activation := range descriptor.Activations {
+		if activation.Index >= uint32(members) {
+			return errors.New("activation index is outside epoch membership")
 		}
+		operator, err := network.Operator(uint16(activation.Index))
+		if err != nil || activation.OperatorID != operator.ID {
+			return errors.New("activation signature does not match epoch membership")
+		}
+		if _, exists := seen[operator.ID]; exists {
+			return errors.New("duplicate epoch activation")
+		}
+		seen[operator.ID] = struct{}{}
 		public, err := decodeBase64(operator.IdentityKey, ed25519.PublicKeySize)
 		if err != nil {
 			return errors.New("invalid operator identity key")
@@ -373,6 +474,9 @@ func verifyActivations(descriptor Descriptor, digest [32]byte, network topology.
 		if err != nil || !ed25519.Verify(ed25519.PublicKey(public), message, signature) {
 			return fmt.Errorf("invalid epoch activation from %s", activation.OperatorID)
 		}
+	}
+	if requireAll && len(seen) != members {
+		return errors.New("epoch activation requires one signature from every configured operator")
 	}
 	return nil
 }

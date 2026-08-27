@@ -21,12 +21,12 @@ import (
 )
 
 const (
-	DefaultMaxInputBytes         = 64 << 10
-	DefaultMaxEmbeddingDims      = 8192
+	DefaultMaxInputBytes        = 64 << 10
+	DefaultMaxEmbeddingDims     = 8192
 	DefaultMaxEmbeddingResponse = 8 << 20
-	HardMaxInputBytes            = 1 << 20
-	HardMaxEmbeddingDims         = 1 << 16
-	HardMaxEmbeddingResponse     = 32 << 20
+	HardMaxInputBytes           = 1 << 20
+	HardMaxEmbeddingDims        = 1 << 16
+	HardMaxEmbeddingResponse    = 32 << 20
 )
 
 type Embedder interface {
@@ -101,12 +101,12 @@ func (h LexicalHashEmbedder) Embed(_ context.Context, text string) ([]float32, e
 // rejects redirects so private query text cannot leave the host through normal
 // HTTP client configuration.
 type LoopbackHTTPEmbedder struct {
-	BaseURL         string
-	Model           string
-	APIKey          string
-	Timeout         time.Duration
-	MaxInputBytes   int
-	MaxDimensions   int
+	BaseURL          string
+	Model            string
+	APIKey           string
+	Timeout          time.Duration
+	MaxInputBytes    int
+	MaxDimensions    int
 	MaxResponseBytes int
 }
 

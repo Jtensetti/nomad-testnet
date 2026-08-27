@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
+	"github.com/Jtensetti/nomad-constant-rate-fabric/fabric"
 	"github.com/Jtensetti/nomad-testnet/live/hop"
 	"github.com/Jtensetti/nomad-testnet/live/rawcache"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
@@ -35,9 +36,10 @@ func TestReceiveRejectsInvalidSourcesAuthenticationAndReplay(t *testing.T) {
 			InboundKeys:  map[uint16][32]byte{0: keyAB},
 		},
 		ListenAddress: endpoints[1], Cache: cache,
-		SequencePath: filepath.Join(t.TempDir(), "sequence"),
-		HealthPath:   filepath.Join(t.TempDir(), "health.json"),
-		CacheSweep:   time.Hour,
+		SequencePath:    filepath.Join(t.TempDir(), "sequence"),
+		HealthPath:      filepath.Join(t.TempDir(), "health.json"),
+		CacheSweep:      time.Hour,
+		ServingDeadline: func() time.Time { return time.Now().UTC().Add(time.Hour) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,6 +123,66 @@ func TestReceiveRejectsInvalidSourcesAuthenticationAndReplay(t *testing.T) {
 	if stats.Received != 5 || stats.Stored != 1 || stats.WrongSize != 1 || stats.UnknownPeer != 1 ||
 		stats.AuthRejected != 1 || stats.ReplayRejected != 1 {
 		t.Fatalf("unexpected receiver counters: %+v", stats)
+	}
+}
+
+func TestSendRefusesAtPublicEpochDeadlineBeforeNetworkWrite(t *testing.T) {
+	network, identities, endpoints := nodeTestTopology(t)
+	destinationAddress, err := net.ResolveUDPAddr("udp", endpoints[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := net.ListenUDP("udp", destinationAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	cache, err := rawcache.Open(filepath.Join(t.TempDir(), "raw"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	self := network.Document.Operators[1]
+	publicNow := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	deadline := publicNow.Add(time.Second)
+	worker, err := New(Config{
+		Topology: network,
+		Secrets: topology.VerifiedSecrets{
+			Operator: self, Identity: identities[self.ID],
+			OutboundKeys: map[uint16][32]byte{2: {2}},
+			InboundKeys:  map[uint16][32]byte{0: {1}},
+		},
+		ListenAddress: endpoints[1], Cache: cache,
+		SequencePath: filepath.Join(t.TempDir(), "sequence"),
+		HealthPath:   filepath.Join(t.TempDir(), "health.json"),
+		CacheSweep:   time.Hour,
+		Now:          func() time.Time { return publicNow },
+		ServingDeadline: func() time.Time {
+			return deadline
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.conn.Close()
+	cell, err := (coverSource{}).NextCell(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicNow = deadline
+	if err := worker.sink.Send(context.Background(), cell); !errors.Is(err, ErrEpochInactive) {
+		t.Fatalf("deadline send = %v, want ErrEpochInactive", err)
+	}
+	if worker.Snapshot().Sent != 0 {
+		t.Fatal("retired epoch incremented its sent counter")
+	}
+	if err := destination.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, fabric.CellSize)
+	if _, _, err := destination.ReadFromUDP(buffer); err == nil {
+		t.Fatal("retired epoch emitted a datagram")
+	} else if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
+		t.Fatalf("read after retired send: %v", err)
 	}
 }
 

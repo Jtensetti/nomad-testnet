@@ -199,6 +199,37 @@ func GenerateSecrets(operatorID string) (Secrets, error) {
 	}, nil
 }
 
+// RotateEpochSecrets creates the private material for a new epoch. The
+// operator identity is deliberately stable so it can approve the transition,
+// while both the hop key-agreement key and DKG identity are freshly generated.
+// The caller must persist the result in a new epoch-scoped file; overwriting
+// the predecessor would make authenticated retirement and erasure impossible.
+func RotateEpochSecrets(previous PrivateKeys) (Secrets, error) {
+	if !operatorIDPattern.MatchString(previous.OperatorID) || len(previous.Identity) != ed25519.PrivateKeySize || previous.KEX == nil {
+		return Secrets{}, errors.New("complete previous operator private keys are required")
+	}
+	if !bytes.Equal(previous.Identity, ed25519.NewKeyFromSeed(previous.Identity.Seed())) {
+		return Secrets{}, errors.New("previous operator identity private key is not canonical")
+	}
+	if _, err := mix.DKGPublicFromPrivate(previous.DKG); err != nil {
+		return Secrets{}, errors.New("previous operator DKG private key is invalid")
+	}
+	kex, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		return Secrets{}, err
+	}
+	_, dkgPrivate, err := mix.GenerateDKGIdentity()
+	if err != nil {
+		return Secrets{}, err
+	}
+	return Secrets{
+		Version: SecretVersion, OperatorID: previous.OperatorID,
+		IdentityPrivate: base64.StdEncoding.EncodeToString(previous.Identity),
+		KEXPrivate:      base64.StdEncoding.EncodeToString(kex.Bytes()),
+		DKGPrivate:      base64.StdEncoding.EncodeToString(dkgPrivate[:]),
+	}, nil
+}
+
 func EncodeSecrets(secrets Secrets) ([]byte, error) {
 	return json.MarshalIndent(secrets, "", "  ")
 }

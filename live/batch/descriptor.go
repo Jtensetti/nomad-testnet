@@ -19,11 +19,12 @@ import (
 	"github.com/Jtensetti/nomad-rlnc/rlnc"
 	"github.com/Jtensetti/nomad-testnet/live/committee"
 	"github.com/Jtensetti/nomad-testnet/live/hop"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
 const (
-	DescriptorVersion   = "nomad-batch-descriptor-v2"
+	DescriptorVersion   = "nomad-batch-descriptor-v3"
 	EnvelopeVersion     = 1
 	MaximumFileBytes    = 4 << 20
 	DefaultBatchSize    = 16
@@ -70,6 +71,7 @@ type Descriptor struct {
 	SymbolSize         uint16                `json:"symbol_size"`
 	OriginalSize       uint32                `json:"original_size"`
 	ContentHash        string                `json:"content_hash"`
+	SourceCommitments  []string              `json:"source_commitments"`
 	PublisherKey       string                `json:"publisher_key"`
 	ObjectSignature    string                `json:"object_signature"`
 	DKGCertificate     committee.Certificate `json:"dkg_certificate"`
@@ -87,6 +89,7 @@ type VerifiedDescriptor struct {
 	Committee   mix.ThresholdCommittee
 	Transcript  mix.DKGTranscript
 	Certificate committee.Verified
+	Commitments rlnc.SourceCommitments
 }
 
 func LoadDescriptor(path string, authority ed25519.PublicKey, network topology.Verified) (VerifiedDescriptor, error) {
@@ -110,6 +113,13 @@ func VerifyDescriptor(encoded []byte, authority ed25519.PublicKey, network topol
 	}
 	if len(authority) != ed25519.PublicKeySize {
 		return VerifiedDescriptor{}, errors.New("descriptor authority key is invalid")
+	}
+	// An encoding more than one parser can read differently is refused before
+	// anything is decoded: a signature check verifies against whatever this
+	// implementation parsed, so a duplicate key makes one implementation
+	// accept a descriptor another refuses.
+	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
+		return VerifiedDescriptor{}, fmt.Errorf("descriptor encoding is ambiguous: %w", err)
 	}
 	var descriptor Descriptor
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
@@ -177,6 +187,22 @@ func VerifyDescriptor(encoded []byte, authority ed25519.PublicKey, network topol
 		int(descriptor.K)+int(descriptor.SymbolSize) > rlnc.PacketSize-rlnc.PacketHeaderSize {
 		return VerifiedDescriptor{}, errors.New("invalid descriptor RLNC dimensions")
 	}
+	// One commitment per source symbol, required, under the authority
+	// signature. A descriptor without them cannot support pre-admission
+	// verification, and accepting one would quietly re-open the window in
+	// which a polluted systematic symbol spends decoder budget before the
+	// envelope check catches it.
+	if len(descriptor.SourceCommitments) != int(descriptor.K) {
+		return VerifiedDescriptor{}, errors.New("descriptor must commit to every source symbol")
+	}
+	commitments := make(rlnc.SourceCommitments, len(descriptor.SourceCommitments))
+	for index, encodedCommitment := range descriptor.SourceCommitments {
+		commitmentBytes, err := decodeHex(encodedCommitment, sha256.Size)
+		if err != nil {
+			return VerifiedDescriptor{}, fmt.Errorf("invalid source commitment %d", index)
+		}
+		copy(commitments[index][:], commitmentBytes)
+	}
 	certified, err := committee.Verify(descriptor.DKGCertificate, network)
 	if err != nil {
 		return VerifiedDescriptor{}, fmt.Errorf("verify DKG certificate: %w", err)
@@ -193,6 +219,7 @@ func VerifyDescriptor(encoded []byte, authority ed25519.PublicKey, network topol
 		Descriptor: descriptor, Stream: stream, Generation: generation, Root: root,
 		Publisher: ed25519.PublicKey(publisher), Signature: objectSignature,
 		Committee: certified.Committee, Transcript: certified.Transcript, Certificate: certified,
+		Commitments: commitments,
 	}, nil
 }
 

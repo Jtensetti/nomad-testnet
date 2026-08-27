@@ -16,14 +16,14 @@ import (
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"github.com/Jtensetti/nomad-testnet/live/batch"
+	"github.com/Jtensetti/nomad-testnet/live/epoch"
 	"github.com/Jtensetti/nomad-testnet/live/hop"
 	"github.com/Jtensetti/nomad-testnet/live/rawcache"
 )
 
-// EpochGuard reports whether an epoch may still be served. The share
-// service consults it before every partial decryption so that a retired
-// epoch's share cannot be used even though it remains cryptographically
-// valid for that epoch's ciphertext. live/epoch.Chain satisfies this.
+// EpochGuard reports whether an epoch may still be served. The share service
+// consults it before every partial decryption and before every HTTP response
+// so a retired epoch cannot remain usable merely because a partial file exists.
 type EpochGuard interface {
 	ServesEpoch(epochNumber uint64, now time.Time) error
 }
@@ -35,11 +35,8 @@ type Service struct {
 	OutputDir     string
 	Interval      time.Duration
 	ListenAddress string
-	// Guard is required. A nil guard is refused rather than treated as
-	// "always allowed": retirement must fail closed.
-	Guard EpochGuard
-	// Now supplies the clock, injectable for tests. Defaults to time.Now.
-	Now func() time.Time
+	Guard         EpochGuard
+	Now           func() time.Time
 }
 
 func (service Service) now() time.Time {
@@ -58,6 +55,12 @@ func (service Service) Run(ctx context.Context) error {
 	}
 	if service.Guard == nil {
 		return errors.New("share service requires an epoch guard")
+	}
+	if err := service.Guard.ServesEpoch(service.Descriptor.Committee.Epoch, service.now()); err != nil {
+		if errors.Is(err, epoch.ErrEpochNotActive) {
+			return nil
+		}
+		return fmt.Errorf("refusing to start threshold service for epoch %d: %w", service.Descriptor.Committee.Epoch, err)
 	}
 	if err := ensureOutputDirectory(service.OutputDir); err != nil {
 		return err
@@ -79,6 +82,9 @@ func (service Service) Run(ctx context.Context) error {
 	}()
 	for {
 		if _, err := service.ProcessOnce(); err != nil {
+			if errors.Is(err, epoch.ErrEpochNotActive) {
+				return nil
+			}
 			return err
 		}
 		select {
@@ -102,6 +108,14 @@ func (service Service) handler() http.Handler {
 		response.Header().Set("X-Content-Type-Options", "nosniff")
 		if request.Method != http.MethodGet || request.URL.Path != expectedPath || request.URL.RawQuery != "" {
 			http.NotFound(response, request)
+			return
+		}
+		if service.Guard == nil {
+			http.Error(response, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if err := service.Guard.ServesEpoch(service.Descriptor.Committee.Epoch, service.now()); err != nil {
+			http.Error(response, "retired", http.StatusGone)
 			return
 		}
 		info, err := os.Lstat(filePath)

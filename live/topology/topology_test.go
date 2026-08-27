@@ -176,3 +176,42 @@ func TestSignedOperatorAttestedTopologyAndSecrets(t *testing.T) {
 		t.Fatal("non-loopback plaintext DKG endpoint was accepted")
 	}
 }
+
+func TestRotateEpochSecretsPreservesOnlyStableIdentity(t *testing.T) {
+	initial, err := GenerateSecrets("operator-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialBytes, err := EncodeSecrets(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialKeys, err := DecodePrivateKeys(initialBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := RotateEpochSecrets(initialKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotatedBytes, err := EncodeSecrets(rotated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotatedKeys, err := DecodePrivateKeys(rotatedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotatedKeys.OperatorID != initialKeys.OperatorID || !bytes.Equal(rotatedKeys.Identity, initialKeys.Identity) {
+		t.Fatal("epoch rotation changed the stable operator identity")
+	}
+	if bytes.Equal(rotatedKeys.KEX.Bytes(), initialKeys.KEX.Bytes()) {
+		t.Fatal("epoch rotation reused the hop key-agreement private key")
+	}
+	if bytes.Equal(rotatedKeys.DKG[:], initialKeys.DKG[:]) {
+		t.Fatal("epoch rotation reused the DKG private identity")
+	}
+	if bytes.Contains(rotatedBytes, []byte(initial.KEXPrivate)) || bytes.Contains(rotatedBytes, []byte(initial.DKGPrivate)) {
+		t.Fatal("new epoch secret file retained predecessor private material")
+	}
+}

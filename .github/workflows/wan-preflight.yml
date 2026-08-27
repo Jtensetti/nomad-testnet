@@ -14,7 +14,10 @@ on:
   push:
     paths:
       - '.github/workflows/wan-preflight.yml'
-      - 'deploy/wan/**'
+      # The WAN tooling lives under scripts/wan. This used to name
+      # deploy/wan/**, a directory that does not exist, so on push the
+      # workflow only ever fired when it was edited itself.
+      - 'scripts/wan/**'
 
 permissions:
   contents: read
@@ -44,7 +47,10 @@ jobs:
                       SCALEWAY_SECRET_KEY SCALEWAY_PROJECT_ID \
                       SCALEWAY_ORGANIZATION_ID SCW_API_KEY SCW_TOKEN; do
             if [ -n "${!name}" ]; then
-              printf '%-32s set (%d chars)\n' "$name" "${#name}"
+              # Deliberately no length: the header above promises that only
+              # "set" or "MISSING" is emitted, and the count this printed was
+              # the length of the variable's NAME, which told nobody anything.
+              printf '%-32s set\n' "$name"
             else
               printf '%-32s MISSING\n' "$name"
             fi

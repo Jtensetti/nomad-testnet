@@ -8,16 +8,17 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// chainLock is an advisory whole-directory lock held for the duration of a
-// mutating chain operation. A process mutex alone is not enough: the
-// specification expects every verifier to keep a store, and a node plus an
-// operator CLI on one host is the ordinary deployment. Without cross-process
-// exclusion two instances can race on the same directory, and a genuine
-// conflict surfaces as a filesystem error rather than as equivocation.
+// chainLock is an advisory whole-directory lock. Writers take it exclusively;
+// production readers take it shared. The distinction matters because node and
+// share services receive the verified epoch-chain volume read-only. Requiring
+// O_RDWR merely to refresh immutable descriptors would unnecessarily give a
+// serving process write capability and fails on a correctly hardened mount.
 type chainLock struct {
 	file *os.File
 }
 
+// acquireChainLock is the writer lock. Mutating operations may create the
+// lock file because they already require a writable epoch-chain store.
 func acquireChainLock(root string) (*chainLock, error) {
 	path := filepath.Join(root, "LOCK")
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
@@ -25,6 +26,23 @@ func acquireChainLock(root string) (*chainLock, error) {
 		return nil, err
 	}
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return &chainLock{file: file}, nil
+}
+
+// acquireChainReadLock synchronizes a reader with an in-progress writer
+// without requiring any filesystem write capability. The lock file must have
+// been created by initialization/import before a chain is exposed read-only;
+// its absence therefore fails closed instead of silently reading unlocked.
+func acquireChainReadLock(root string) (*chainLock, error) {
+	path := filepath.Join(root, "LOCK")
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_SH); err != nil {
 		_ = file.Close()
 		return nil, err
 	}

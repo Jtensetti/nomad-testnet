@@ -173,6 +173,13 @@ func TestChainEmergencyRetiresPredecessor(t *testing.T) {
 	if state, err := chain.StateOf(1, probe); err != nil || state != StateRetired {
 		t.Fatalf("predecessor must be RETIRED under an active emergency successor, got %v %v", state, err)
 	}
+	deadline, err := chain.FreshServingDeadline(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deadline.Equal(successor.ActivateAt) {
+		t.Fatalf("serving deadline = %s, want emergency activation %s", deadline, successor.ActivateAt)
+	}
 }
 
 // TestJournalRefusesSecondActivation exercises the enforced signing path.
@@ -203,13 +210,13 @@ func TestJournalRefusesSecondActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	operator := network.Document.Operators[0]
-	if _, err := journal.ActivateWithJournal(first, operator, f.Operators[0].Identity); err != nil {
+	if _, err := journal.activateWithJournalUnchecked(first, operator, f.Operators[0].Identity); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := journal.ActivateWithJournal(first, operator, f.Operators[0].Identity); err != nil {
+	if _, err := journal.activateWithJournalUnchecked(first, operator, f.Operators[0].Identity); err != nil {
 		t.Fatalf("re-signing the identical descriptor must be idempotent: %v", err)
 	}
-	if _, err := journal.ActivateWithJournal(second, operator, f.Operators[0].Identity); !errors.Is(err, ErrConflictingSignature) {
+	if _, err := journal.activateWithJournalUnchecked(second, operator, f.Operators[0].Identity); !errors.Is(err, ErrConflictingSignature) {
 		t.Fatalf("expected a refusal to sign a second descriptor for epoch 1, got %v", err)
 	}
 	// A separate journal directory, i.e. a different operator, is unaffected.
@@ -217,7 +224,7 @@ func TestJournalRefusesSecondActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fresh.ActivateWithJournal(second, operator, f.Operators[0].Identity); err != nil {
+	if _, err := fresh.activateWithJournalUnchecked(second, operator, f.Operators[0].Identity); err != nil {
 		t.Fatalf("an independent operator journal must be unaffected: %v", err)
 	}
 }

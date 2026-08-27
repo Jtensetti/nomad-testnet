@@ -1,7 +1,14 @@
 name: ci
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   unit:
@@ -15,10 +22,10 @@ jobs:
         run: sha256sum --check --quiet COMPONENTS.sha256
       - name: Verify generated formatting and module graph
         run: |
-          unformatted="$(gofmt -l cmd live testnet)"
+          unformatted="$(gofmt -l cmd live testnet components supplychain deploy)"
           if test -n "$unformatted"; then
             printf 'unformatted Go files:\n%s\n' "$unformatted"
-            gofmt -d cmd live testnet
+            gofmt -d cmd live testnet components supplychain deploy
             exit 1
           fi
           go mod tidy
@@ -28,8 +35,10 @@ jobs:
           network_deps="$(go list -deps \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-node \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-dkg \
+            github.com/Jtensetti/nomad-testnet/cmd/nomad-lifecycle \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-operator \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-partial-fetch \
+            github.com/Jtensetti/nomad-testnet/cmd/nomad-rotation-controller \
             github.com/Jtensetti/nomad-testnet/cmd/nomad-topology \
             github.com/Jtensetti/nomad-testnet/live/node \
             github.com/Jtensetti/nomad-testnet/live/hop \
@@ -71,16 +80,108 @@ jobs:
             echo "publication airlock imports transport, peer selection or scheduling"
             exit 1
           fi
+          # An availability report is an externally observable artefact, so
+          # whatever decides to emit one must be public. If the observer could
+          # reach a query, a basin or a reconstruction, the presence or shape
+          # of a report would carry private activity onto the network.
+          availability_deps="$(go list -deps github.com/Jtensetti/nomad-testnet/live/availability)"
+          if printf '%s\n' "$availability_deps" | grep -Eq 'nomad-(semantic-basins|local-reconstruction|selection-firewall)|nomad-testnet/live/(fetchplan|partialfetch|materialize|publish)'; then
+            echo "availability observer reaches private selection, reconstruction or the reader path"
+            exit 1
+          fi
           materializer_imports="$(go list -f '{{join .Imports "\n"}}' github.com/Jtensetti/nomad-testnet/live/materialize)"
           if printf '%s\n' "$materializer_imports" | grep -Eq '(^net$|nomad-testnet/live/node|nomad-constant-rate-fabric|nomad-selection-firewall|nomad-semantic-basins)'; then
             echo "materializer directly imports network control or query code"
             exit 1
           fi
+      - name: Enforce the telemetry allowlist has a reason for every field
+        run: |
+          # A field may only be emitted if someone wrote down why it is
+          # public. This fails the build rather than a review comment.
+          go test ./live/telemetry/ ./live/node/ -run 'Telemetry|telemetry|SecretScan|OperationalOutput' -count=1
       - run: go test -race ./...
+      - name: Test every vendored component module
+        run: |
+          # components/* are separate Go modules wired in via replace
+          # directives, so `go test ./...` at the root never touches them.
+          # The rlnc decoder shipped a silent wrong-decode defect through this
+          # gap: the fix and its regression test existed in the standalone
+          # repo's suite while the vendored copy CI actually built went
+          # untested. What ships is what must be tested.
+          for module in components/*/; do
+            echo "== $module =="
+            (cd "$module" && go build ./... && go vet ./... && go test -race -count=1 ./...)
+          done
       - name: Verify the published conformance corpus matches its encoders
         run: go run ./cmd/nomad-conformance -check conformance/wire-vectors.json
+      - name: Verify the corpus is identical on a different word size
+        run: |
+          # A golden vector that depends on the host's int width is not a
+          # golden vector. 386 has 32-bit int against amd64's 64-bit, so an
+          # encoder that leaked word size would produce a different digest
+          # here. This is the cross-platform half of PROD-16 that a single
+          # architecture cannot supply.
+          GOARCH=386 go run ./cmd/nomad-conformance -check conformance/wire-vectors.json
+          GOARCH=386 go test -count=1 ./live/conformance/ ./live/topology/ ./live/batch/
+      - name: Verify the supported platforms still build
+        run: |
+          for target in linux/amd64 linux/386 linux/arm64 linux/arm darwin/amd64 darwin/arm64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build ./... \
+              || { echo "$target does not build"; exit 1; }
+          done
       - name: Verify the traffic-analysis harness still detects differences
         run: python3 scripts/test-two-world-analysis.py
+      - name: Verify the campaign verdict still separates noise from a finding
+        run: python3 scripts/wan/test-wan-verdict.py
+      - name: Run the deposit-path experiments and produce campaign evidence
+        run: |
+          # Deliberately not under -race, and this is the run that counts for
+          # both experiments in this package.
+          #
+          # The campaign times emissions against a 150 ms interval calibrated
+          # on the real ~87 ms seal cost. The race detector instruments every
+          # memory access and pushes a seal past the interval, so the loop
+          # stops following its ticker and the capture measures the detector
+          # rather than the protocol. The correlation experiment runs
+          # thirty-six full mixes and no goroutines at all, so the detector has
+          # nothing to find there and costs about eight times as much looking.
+          # Together they took the package past Go's ten-minute default
+          # timeout, which is how this split came about.
+          #
+          # Under -race both are shortened or skipped, and Drain's concurrency
+          # is still covered there by the emission, close and campaign tests.
+          go test -count=1 -timeout 25m ./live/deposit/
+      - name: Apply the preregistered rule to the publication campaign
+        run: |
+          directory=runtime/evidence/publication-campaign
+          test -f "$directory/control-a.txt" || {
+            echo "the publication campaign produced no captures"; exit 1;
+          }
+          findings=0
+          # Against the steady control: publication succeeding, timing out or
+          # being lost must not change what an observer sees.
+          for world in control-b success timeout loss; do
+            echo "== control-a vs $world =="
+            status=0
+            python3 scripts/two-world-analysis.py "$directory/control-a.txt" \
+              "$directory/$world.txt" 1200 150 || status=$?
+            if [ "$status" -eq 2 ]; then echo "the rule could not run"; exit 1; fi
+            if [ "$status" -ne 0 ]; then findings=$((findings + 1)); fi
+          done
+          # A restart is externally observable by construction, so the pair
+          # that answers the criterion is restart-with-work against
+          # restart-without-work: the interruption is common to both and the
+          # private variable is the only difference.
+          echo "== restart-idle vs restart =="
+          status=0
+          python3 scripts/two-world-analysis.py "$directory/restart-idle.txt" \
+            "$directory/restart.txt" 1200 150 || status=$?
+          if [ "$status" -eq 2 ]; then echo "the rule could not run"; exit 1; fi
+          if [ "$status" -ne 0 ]; then findings=$((findings + 1)); fi
+          if [ "$findings" -gt 0 ]; then
+            echo "$findings publication comparison(s) were rejected"
+            exit 1
+          fi
       - name: Run independent operator ceremony
         env:
           NOMAD_CEREMONY_EVIDENCE: runtime/evidence/operator-ceremony.json
@@ -93,50 +194,6 @@ jobs:
           name: operator-ceremony-evidence
           path: runtime/evidence/operator-ceremony.json
           if-no-files-found: warn
-      - name: Upload wire campaign captures
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: wire-campaign-captures
-          path: runtime/evidence/wire-campaign/
-          if-no-files-found: warn
-      - name: Apply the preregistered rule to the wire campaign captures
-        if: always()
-        run: |
-          directory=runtime/evidence/wire-campaign
-          if ! test -d "$directory"; then
-            echo "no wire campaign captures were produced"
-            exit 0
-          fi
-          # The Go campaign gates on the one statistic a shared runner can
-          # resolve. This step re-reads the same captures through the full
-          # preregistered rule, so the captures a reviewer downloads are the
-          # captures the published rule was actually run against, and its
-          # verdict is visible rather than inferred.
-          #
-          # It reports and does not gate, deliberately: on a shared runner the
-          # rule's packet-count and KS tests are dominated by ambient stalls,
-          # which the campaign measures directly as a control spread swinging
-          # between 0.01 and 0.7 across runs. Gating here would fail at random
-          # and get switched off. The gating version of this rule belongs on
-          # the quiet, multi-region hosts of E-01/E-03; until those exist, the
-          # verdicts below are evidence to read, not a passed criterion.
-          failures=0
-          for stressor in baseline cpu-starvation disk-pressure; do
-            control="$directory/$stressor-control-a.txt"
-            treatment="$directory/$stressor-active.txt"
-            test -f "$control" -a -f "$treatment" || continue
-            echo "== $stressor: idle vs active =="
-            python3 scripts/two-world-analysis.py "$control" "$treatment" 1200 20 || failures=$((failures + 1))
-            # The idle-versus-idle control run through the same rule. A rule
-            # that rejects two identical worlds is measuring the runner, and
-            # its verdict on the treatment pair means nothing this run.
-            echo "== $stressor: idle vs idle (control) =="
-            python3 scripts/two-world-analysis.py "$control" "$directory/$stressor-control-b.txt" 1200 20 \
-              || echo "control pair also rejected: this runner cannot resolve the treatment comparison"
-          done
-          echo "preregistered rule rejected $failures treatment pair(s); reported, not gating"
-
   live-compose:
     needs: unit
     runs-on: ubuntu-latest
@@ -198,7 +255,7 @@ jobs:
           GOARCH: amd64
         run: |
           mkdir -p dist
-          for command in nomad-bootstrap nomad-dkg nomad-fixture-publisher nomad-node nomad-operator nomad-topology nomad-share nomad-partial-fetch nomad-materializer; do
+          for command in nomad-bootstrap nomad-dkg nomad-fixture-publisher nomad-lifecycle nomad-node nomad-operator nomad-rotation-controller nomad-topology nomad-share nomad-partial-fetch nomad-materializer; do
             go build -trimpath -ldflags='-s -w' -o "dist/$command" "./cmd/$command"
           done
           tar -C dist -czf nomad-live-linux-amd64.tgz .

@@ -4,10 +4,24 @@ x-locked-service: &locked-service
   build:
     context: ..
   image: nomad-live:testnet
+  # A panic otherwise prints goroutine stacks whose frame arguments are raw
+  # machine words, which for these processes can be key material, and the
+  # container runtime keeps whatever a crashing service wrote. Only the Go
+  # runtime's own variable turns this off, and it is read at startup, so it
+  # has to be set here rather than in the program.
+  environment:
+    GOTRACEBACK: none
   read_only: true
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
   pids_limit: 128
+  # A core file is the complete address space, so application-level telemetry
+  # filtering cannot make one safe. Enforce the operator runbook's no-core
+  # rule in the shipping Compose boundary rather than leaving it advisory.
+  ulimits:
+    core:
+      soft: 0
+      hard: 0
   tmpfs:
     - /tmp:rw,noexec,nosuid,nodev,size=32m
   restart: unless-stopped
@@ -49,6 +63,10 @@ services:
       - --tls-certificate=/operator/dkg-tls.crt
       - --tls-private-key=/operator/dkg-tls.key
     environment:
+      # A merge key replaces this mapping rather than deep-merging it, so the
+      # anchor's GOTRACEBACK is lost unless it is repeated here. These are the
+      # processes holding DKG private identities.
+      GOTRACEBACK: none
       SSL_CERT_FILE: /config/dkg-test-ca.pem
     depends_on:
       bootstrap: {condition: service_completed_successfully}
@@ -74,6 +92,10 @@ services:
       - --tls-certificate=/operator/dkg-tls.crt
       - --tls-private-key=/operator/dkg-tls.key
     environment:
+      # A merge key replaces this mapping rather than deep-merging it, so the
+      # anchor's GOTRACEBACK is lost unless it is repeated here. These are the
+      # processes holding DKG private identities.
+      GOTRACEBACK: none
       SSL_CERT_FILE: /config/dkg-test-ca.pem
     depends_on:
       bootstrap: {condition: service_completed_successfully}
@@ -99,6 +121,10 @@ services:
       - --tls-certificate=/operator/dkg-tls.crt
       - --tls-private-key=/operator/dkg-tls.key
     environment:
+      # A merge key replaces this mapping rather than deep-merging it, so the
+      # anchor's GOTRACEBACK is lost unless it is repeated here. These are the
+      # processes holding DKG private identities.
+      GOTRACEBACK: none
       SSL_CERT_FILE: /config/dkg-test-ca.pem
     depends_on:
       bootstrap: {condition: service_completed_successfully}
@@ -136,12 +162,59 @@ services:
       - dkg-certificate-a:/certificate:ro
       - published-config:/published
 
+  epoch-init-a:
+    <<: *locked-service
+    restart: "no"
+    network_mode: none
+    command: &epoch-init-command
+      - nomad-lifecycle
+      - epoch-import
+      - --chain=/epoch-chain
+      - --revocations=/revocations
+      - --authority-key=/config/authority.pub
+      - --network=nomad-live-demo
+      - /published/epoch-descriptor.json
+    depends_on:
+      fixture-publisher: {condition: service_completed_successfully}
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - epoch-chain-a:/epoch-chain
+      - revocations-a:/revocations
+
+  epoch-init-b:
+    <<: *locked-service
+    restart: "no"
+    network_mode: none
+    command: *epoch-init-command
+    depends_on:
+      fixture-publisher: {condition: service_completed_successfully}
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - epoch-chain-b:/epoch-chain
+      - revocations-b:/revocations
+
+  epoch-init-c:
+    <<: *locked-service
+    restart: "no"
+    network_mode: none
+    command: *epoch-init-command
+    depends_on:
+      fixture-publisher: {condition: service_completed_successfully}
+    volumes:
+      - public-config:/config:ro
+      - published-config:/published:ro
+      - epoch-chain-c:/epoch-chain
+      - revocations-c:/revocations
+
   operator-a:
     <<: *locked-service
     command:
       - nomad-node
       - --topology=/config/topology.json
       - --authority-key=/config/authority.pub
+      - --epoch-chain=/epoch-chain
       - --secrets=/operator/node-secrets.json
       - --listen=:4200
       - --cache=/cache
@@ -151,11 +224,13 @@ services:
       - --cache-sweep=10s
     depends_on:
       fixture-publisher: {condition: service_completed_successfully}
+      epoch-init-a: {condition: service_completed_successfully}
     networks: [fabric]
     volumes:
       - public-config:/config:ro
       - published-config:/published:ro
       - operator-a-secret:/operator:ro
+      - epoch-chain-a:/epoch-chain:ro
       - raw-a:/cache
       - state-a:/state
     healthcheck:
@@ -170,6 +245,7 @@ services:
       - nomad-node
       - --topology=/config/topology.json
       - --authority-key=/config/authority.pub
+      - --epoch-chain=/epoch-chain
       - --secrets=/operator/node-secrets.json
       - --listen=:4200
       - --cache=/cache
@@ -178,11 +254,13 @@ services:
       - --cache-sweep=10s
     depends_on:
       fixture-publisher: {condition: service_completed_successfully}
+      epoch-init-b: {condition: service_completed_successfully}
     networks: [fabric]
     volumes:
       - public-config:/config:ro
       - published-config:/published:ro
       - operator-b-secret:/operator:ro
+      - epoch-chain-b:/epoch-chain:ro
       - raw-b:/cache
       - state-b:/state
     healthcheck:
@@ -197,6 +275,7 @@ services:
       - nomad-node
       - --topology=/config/topology.json
       - --authority-key=/config/authority.pub
+      - --epoch-chain=/epoch-chain
       - --secrets=/operator/node-secrets.json
       - --listen=:4200
       - --cache=/cache
@@ -205,11 +284,13 @@ services:
       - --cache-sweep=10s
     depends_on:
       fixture-publisher: {condition: service_completed_successfully}
+      epoch-init-c: {condition: service_completed_successfully}
     networks: [fabric]
     volumes:
       - public-config:/config:ro
       - published-config:/published:ro
       - operator-c-secret:/operator:ro
+      - epoch-chain-c:/epoch-chain:ro
       - raw-c:/cache
       - state-c:/state
     healthcheck:
@@ -224,6 +305,7 @@ services:
       - nomad-share
       - --topology=/config/topology.json
       - --authority-key=/config/authority.pub
+      - --epoch-chain=/epoch-chain
       - --descriptor=/published/descriptor.json
       - --share=/operator/distributed-threshold-share.json
       - --cache=/cache
@@ -232,6 +314,7 @@ services:
       - --listen=:4300
     depends_on:
       operator-a: {condition: service_healthy}
+      epoch-init-a: {condition: service_completed_successfully}
     networks: [fabric]
     volumes:
       - public-config:/config:ro
@@ -239,12 +322,14 @@ services:
       - operator-a-secret:/operator:ro
       - raw-a:/cache:ro
       - partial-a:/partials
+      - epoch-chain-a:/epoch-chain:ro
 
   share-b:
     <<: *locked-service
     command: *share-command
     depends_on:
       operator-b: {condition: service_healthy}
+      epoch-init-b: {condition: service_completed_successfully}
     networks: [fabric]
     volumes:
       - public-config:/config:ro
@@ -252,12 +337,14 @@ services:
       - operator-b-secret:/operator:ro
       - raw-b:/cache:ro
       - partial-b:/partials
+      - epoch-chain-b:/epoch-chain:ro
 
   share-c:
     <<: *locked-service
     command: *share-command
     depends_on:
       operator-c: {condition: service_healthy}
+      epoch-init-c: {condition: service_completed_successfully}
     networks: [fabric]
     volumes:
       - public-config:/config:ro
@@ -265,6 +352,7 @@ services:
       - operator-c-secret:/operator:ro
       - raw-c:/cache:ro
       - partial-c:/partials
+      - epoch-chain-c:/epoch-chain:ro
 
   partial-fetcher:
     <<: *locked-service
@@ -334,3 +422,9 @@ volumes:
   partial-b:
   partial-c:
   partials-local:
+  epoch-chain-a:
+  epoch-chain-b:
+  epoch-chain-c:
+  revocations-a:
+  revocations-b:
+  revocations-c:

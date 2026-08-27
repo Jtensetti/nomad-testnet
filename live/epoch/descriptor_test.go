@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
+	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
 func TestGenesisAndScheduledTransitionVerify(t *testing.T) {
@@ -112,14 +113,14 @@ func TestVerifyRejectsEpochSkip(t *testing.T) {
 	}
 	for index := 0; index < ApprovalQuorum(genesis); index++ {
 		operator, _ := genesis.Topology.Operator(uint16(index))
-		approval, err := Approve(descriptor, genesis, operator, f.Operators[index].Identity)
+		approval, err := signApproval(descriptor, genesis, operator, f.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
 		descriptor.Approvals = append(descriptor.Approvals, approval)
 	}
 	for index, operator := range network3.Document.Operators {
-		activation, err := Activate(descriptor, operator, f.Operators[index].Identity)
+		activation, err := signActivation(descriptor, operator, f.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -151,7 +152,7 @@ func TestVerifyRejectsTransplantedApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	operator, _ := genesis.Topology.Operator(0)
-	otherApproval, err := Approve(other, genesis, operator, f.Operators[0].Identity)
+	otherApproval, err := signApproval(other, genesis, operator, f.Operators[0].Identity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,14 +181,14 @@ func TestVerifyRejectsScheduledBoundaryMismatch(t *testing.T) {
 	}
 	for index := 0; index < ApprovalQuorum(genesis); index++ {
 		operator, _ := genesis.Topology.Operator(uint16(index))
-		approval, err := Approve(descriptor, genesis, operator, f.Operators[index].Identity)
+		approval, err := signApproval(descriptor, genesis, operator, f.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
 		descriptor.Approvals = append(descriptor.Approvals, approval)
 	}
 	for index, operator := range network.Document.Operators {
-		activation, err := Activate(descriptor, operator, f.Operators[index].Identity)
+		activation, err := signActivation(descriptor, operator, f.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,7 +246,7 @@ func TestVerifyRejectsActivationBeforeDKGCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index, operator := range network.Document.Operators {
-		activation, err := Activate(descriptor, operator, f.Operators[index].Identity)
+		activation, err := signActivation(descriptor, operator, f.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -340,7 +341,7 @@ func TestApprovalQuorumCannotBeForgedByOneOperator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	approval, err := Approve(descriptor, genesis, operator, f.Operators[1].Identity)
+	approval, err := signApproval(descriptor, genesis, operator, f.Operators[1].Identity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +352,7 @@ func TestApprovalQuorumCannotBeForgedByOneOperator(t *testing.T) {
 		{OperatorID: approval.OperatorID, Index: approval.Index + 2<<16, Signature: approval.Signature},
 	}
 	for index, member := range network2.Document.Operators {
-		activation, err := Activate(descriptor, member, f.Operators[index].Identity)
+		activation, err := signActivation(descriptor, member, f.Operators[index].Identity)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -392,6 +393,7 @@ func TestMembershipTransitionRequiresPreviousCommittee(t *testing.T) {
 	// Epoch 2 keeps four operators and replaces the fifth with a newcomer
 	// holding genuinely different keys.
 	replacement := newNamedFixture(t, "replacement", 5)
+	replacement.Operators[4].ID = "op-f"
 	incoming := &fixture{AuthorityPublic: outgoing.AuthorityPublic, AuthorityPrivate: outgoing.AuthorityPrivate}
 	incoming.Operators = append(incoming.Operators, outgoing.Operators[:4]...)
 	incoming.Operators = append(incoming.Operators, replacement.Operators[4])
@@ -409,14 +411,14 @@ func TestMembershipTransitionRequiresPreviousCommittee(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			approval, err := Approve(descriptor, genesis, operator, signWith.Operators[index].Identity)
+			approval, err := signApproval(descriptor, genesis, operator, signWith.Operators[index].Identity)
 			if err != nil {
 				t.Fatal(err)
 			}
 			descriptor.Approvals = append(descriptor.Approvals, approval)
 		}
 		for index, member := range network2.Document.Operators {
-			activation, err := Activate(descriptor, member, incoming.Operators[index].Identity)
+			activation, err := signActivation(descriptor, member, incoming.Operators[index].Identity)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -436,5 +438,83 @@ func TestMembershipTransitionRequiresPreviousCommittee(t *testing.T) {
 	}
 	if verified.Topology.Document.Operators[4].IdentityKey == genesis.Topology.Document.Operators[4].IdentityKey {
 		t.Fatal("fixture did not actually change membership")
+	}
+}
+
+func TestTransitionRejectsAnyPredecessorEpochKeyReuse(t *testing.T) {
+	f := newFixture(t, 3)
+	session1 := sha256.Sum256([]byte("key-rotation-1"))
+	topologyBytes1, network1 := f.buildSignedTopology(t, 1, 2, genesisTimes(), session1, 10)
+	certificateBytes1, _ := f.buildCertificate(t, network1)
+	_, genesis := f.buildDescriptor(t, nil, nil, TransitionGenesis, genesisTimes(), network1, topologyBytes1, certificateBytes1)
+
+	session2 := sha256.Sum256([]byte("key-rotation-2"))
+	topologyBytes2, network2 := f.buildSignedTopology(t, 2, 2, successorTimes(), session2, 30)
+	certificateBytes2, _ := f.buildCertificate(t, network2)
+	_, _ = topologyBytes2, certificateBytes2
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*topology.Document)
+	}{
+		{"KEX", func(document *topology.Document) {
+			document.Operators[0].KEXKey = genesis.Topology.Document.Operators[1].KEXKey
+		}},
+		{"DKG", func(document *topology.Document) {
+			document.Operators[0].DKGIdentityKey = genesis.Topology.Document.Operators[1].DKGIdentityKey
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reused := network2.Document
+			reused.Operators = append([]topology.Operator(nil), network2.Document.Operators...)
+			test.mutate(&reused)
+			if err := verifyFreshEpochKeys(genesis, topology.Verified{Document: reused}); err == nil || !strings.Contains(err.Error(), "reuses an earlier epoch") {
+				t.Fatalf("predecessor %s key reuse was accepted: %v", test.name, err)
+			}
+		})
+	}
+}
+
+func TestTransitionRejectsNonAdjacentHistoricalEpochKeyReuse(t *testing.T) {
+	f := newFixture(t, 3)
+	session1 := sha256.Sum256([]byte("historical-key-rotation-1"))
+	topologyBytes1, network1 := f.buildSignedTopology(t, 1, 2, genesisTimes(), session1, 10)
+	certificateBytes1, _ := f.buildCertificate(t, network1)
+	_, genesis := f.buildDescriptor(t, nil, nil, TransitionGenesis, genesisTimes(), network1, topologyBytes1, certificateBytes1)
+
+	session2 := sha256.Sum256([]byte("historical-key-rotation-2"))
+	topologyBytes2, network2 := f.buildSignedTopology(t, 2, 2, successorTimes(), session2, 30)
+	certificateBytes2, _ := f.buildCertificate(t, network2)
+	_, successor := f.buildDescriptor(t, &genesis, f, TransitionScheduled, successorTimes(), network2, topologyBytes2, certificateBytes2)
+
+	thirdTimes := epochTimes{
+		NotBefore: fixtureBase.Add(2 * time.Hour),
+		NotAfter:  fixtureBase.Add(14 * time.Hour),
+		DKGStart:  fixtureBase.Add(2*time.Hour + 2*time.Minute),
+		Activate:  fixtureBase.Add(4 * time.Hour),
+		Retire:    fixtureBase.Add(6 * time.Hour),
+	}
+	session3 := sha256.Sum256([]byte("historical-key-rotation-3"))
+	_, network3 := f.buildSignedTopology(t, 3, 2, thirdTimes, session3, 50)
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*topology.Document)
+	}{
+		{"KEX", func(document *topology.Document) {
+			document.Operators[0].KEXKey = genesis.Topology.Document.Operators[0].KEXKey
+		}},
+		{"DKG", func(document *topology.Document) {
+			document.Operators[0].DKGIdentityKey = genesis.Topology.Document.Operators[0].DKGIdentityKey
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reused := network3.Document
+			reused.Operators = append([]topology.Operator(nil), network3.Document.Operators...)
+			test.mutate(&reused)
+			if err := verifyFreshEpochKeys(successor, topology.Verified{Document: reused}); err == nil || !strings.Contains(err.Error(), "reuses an earlier epoch") {
+				t.Fatalf("non-adjacent historical %s key reuse was accepted: %v", test.name, err)
+			}
+		})
 	}
 }

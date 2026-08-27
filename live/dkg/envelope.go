@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -67,6 +68,9 @@ func EncodeEnvelope(envelope Envelope) ([]byte, error) {
 func DecodeEnvelope(encoded []byte, network topology.Verified) (Envelope, []byte, error) {
 	if len(encoded) == 0 || len(encoded) > MaximumEnvelopeSize {
 		return Envelope{}, nil, errors.New("DKG envelope is empty or too large")
+	}
+	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
+		return Envelope{}, nil, fmt.Errorf("DKG envelope is ambiguous: %w", err)
 	}
 	var envelope Envelope
 	decoder := json.NewDecoder(bytes.NewReader(encoded))

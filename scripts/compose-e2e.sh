@@ -12,18 +12,26 @@ mkdir -p "$evidence_root" "$verified_root"
 chmod 0777 "$verified_root"
 export NOMAD_VERIFIED_CACHE="$verified_root"
 
+capture_failure() {
+    docker compose -p "$project_name" -f "$compose_file" ps -a > "$evidence_root/compose-ps.txt" 2>&1 || true
+    docker compose -p "$project_name" -f "$compose_file" logs --no-color > "$evidence_root/compose.log" 2>&1 || true
+}
+
 cleanup() {
     docker compose -p "$project_name" -f "$compose_file" down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
-docker compose -p "$project_name" -f "$compose_file" up --build --detach
+if ! docker compose -p "$project_name" -f "$compose_file" up --build --detach; then
+    capture_failure
+    echo "compose startup failed; diagnostics saved under $evidence_root" >&2
+    exit 1
+fi
 
 deadline=$(( $(date +%s) + 180 ))
 while [ ! -s "$verified_root/$object_name" ]; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
-        docker compose -p "$project_name" -f "$compose_file" ps
-        docker compose -p "$project_name" -f "$compose_file" logs --no-color
+        capture_failure
         echo "timed out waiting for verified browser object" >&2
         exit 1
     fi
@@ -93,8 +101,8 @@ import sys
 root = pathlib.Path(sys.argv[1])
 certificate = json.loads((root / "dkg-a-certificate.json").read_text())
 descriptor = json.loads((root / "descriptor.json").read_text())
-if descriptor.get("version") != "nomad-batch-descriptor-v2":
-    raise SystemExit("live descriptor is not the certified DKG format")
+if descriptor.get("version") != "nomad-batch-descriptor-v3":
+    raise SystemExit("live descriptor is not the current certified DKG format")
 if descriptor.get("dkg_certificate") != certificate:
     raise SystemExit("live descriptor does not embed the distributed DKG certificate")
 PY

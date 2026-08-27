@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -340,6 +341,9 @@ func operatorByID(document topology.Document, id string) (topology.Operator, err
 func strictJSON(encoded []byte, destination any) error {
 	if len(encoded) == 0 || len(encoded) > MaximumArtifact {
 		return errors.New("ceremony artifact is empty or too large")
+	}
+	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
+		return fmt.Errorf("ceremony artifact is ambiguous: %w", err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()

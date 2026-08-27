@@ -21,11 +21,18 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/batch"
 	"github.com/Jtensetti/nomad-testnet/live/bundle"
 	"github.com/Jtensetti/nomad-testnet/live/committee"
+	"github.com/Jtensetti/nomad-testnet/live/epoch"
 	"github.com/Jtensetti/nomad-testnet/live/fetchplan"
+	"github.com/Jtensetti/nomad-testnet/live/telemetry"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
 func main() {
+	// This process holds key material, so a panic must not print goroutine
+	// stacks: Go renders frame arguments as raw machine words and an init
+	// system retains whatever a crashing service wrote. Only GOTRACEBACK can
+	// turn that off, and only from outside, so the process checks and says so.
+	telemetry.WarnIfCrashDumpsEnabled(os.Stderr)
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "nomad-fixture-publisher:", err)
 		os.Exit(1)
@@ -60,7 +67,11 @@ func run() error {
 	if !bytes.Equal(authorityPrivate.Public().(ed25519.PublicKey), authority) {
 		return errors.New("authority private key does not match pinned public key")
 	}
-	network, err := topology.Load(*topologyPath, authority, time.Now().UTC())
+	topologyBytes, err := readBounded(*topologyPath, committee.MaximumFileBytes)
+	if err != nil {
+		return err
+	}
+	network, err := topology.Verify(topologyBytes, authority, time.Now().UTC())
 	if err != nil {
 		return err
 	}
@@ -86,6 +97,22 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	epochDescriptor, err := buildGenesisEpochDescriptor(
+		network, topologyBytes, certificateBytes, identities, authority,
+		filepath.Join(*output, ".epoch-signing-journals"),
+	)
+	if err != nil {
+		return err
+	}
+	epochDescriptorBytes, err := epoch.Encode(epochDescriptor)
+	if err != nil {
+		return err
+	}
+	if _, err := epoch.Verify(epochDescriptorBytes, authority, nil, nil); err != nil {
+		return fmt.Errorf("self-verify fixture epoch descriptor: %w", err)
+	}
+
 	envelopeBytes, err := readBounded(*envelopePath, batch.MaximumFileBytes)
 	if err != nil {
 		return err
@@ -121,9 +148,10 @@ func run() error {
 		return err
 	}
 	for name, content := range map[string][]byte{
-		"descriptor.json": descriptorBytes,
-		"seed.json":       seedBytes,
-		"fetch-plan.json": planBytes,
+		"descriptor.json":       descriptorBytes,
+		"epoch-descriptor.json": epochDescriptorBytes,
+		"seed.json":             seedBytes,
+		"fetch-plan.json":       planBytes,
 	} {
 		if err := writeNew(filepath.Join(*output, name), content, 0o644); err != nil {
 			return err
@@ -134,6 +162,44 @@ func run() error {
 		StreamID             string `json:"stream_id"`
 		DKGCertificateDigest string `json:"dkg_certificate_digest"`
 	}{network.Document.NetworkID, generated.Descriptor.StreamID, fmt.Sprintf("%x", certified.Digest)})
+}
+
+func buildGenesisEpochDescriptor(network topology.Verified, topologyBytes, certificateBytes []byte, identities map[string]ed25519.PrivateKey, authority ed25519.PublicKey, journalRoot string) (epoch.Descriptor, error) {
+	dkgStart, err := time.Parse(time.RFC3339, network.Document.DKG.StartAt)
+	if err != nil {
+		return epoch.Descriptor{}, err
+	}
+	phase := time.Duration(network.Document.DKG.PhaseDurationMillis) * time.Millisecond
+	activateAt := dkgStart.Add(4 * phase).UTC().Format(time.RFC3339)
+	retireAt := network.Document.NotAfter
+	descriptor, err := epoch.New(nil, epoch.TransitionGenesis, activateAt, retireAt, topologyBytes, certificateBytes)
+	if err != nil {
+		return epoch.Descriptor{}, err
+	}
+	if err := os.Mkdir(journalRoot, 0o700); err != nil {
+		return epoch.Descriptor{}, err
+	}
+	artifacts := make([]epoch.SignatureArtifact, 0, len(network.Document.Operators))
+	for index, operator := range network.Document.Operators {
+		identity, exists := identities[operator.ID]
+		if !exists {
+			return epoch.Descriptor{}, fmt.Errorf("missing fixture identity for epoch activation by %s", operator.ID)
+		}
+		journal, err := epoch.OpenJournal(filepath.Join(journalRoot, fmt.Sprintf("operator-%03d", index)))
+		if err != nil {
+			return epoch.Descriptor{}, err
+		}
+		artifact, err := journal.CreateActivationArtifact(descriptor, authority, nil, nil, operator.ID, identity)
+		if err != nil {
+			return epoch.Descriptor{}, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	_, verified, err := epoch.Assemble(descriptor, artifacts, authority, nil, nil)
+	if err != nil {
+		return epoch.Descriptor{}, err
+	}
+	return verified.Descriptor, nil
 }
 
 func splitList(value string) []string {

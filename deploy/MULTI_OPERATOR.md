@@ -9,8 +9,9 @@ operator on separately administered infrastructure.
 Every operator receives only:
 
 - the authority-signed `topology.json` and authority public key;
-- its own `node-secrets.json`, containing only its Ed25519 identity and
-  epoch-scoped X25519 and dedicated DKG private keys;
+- its own canonical `epoch-%020d.secrets.json` files, each containing its
+  stable Ed25519 identity and only that epoch's X25519 and dedicated DKG
+  private keys;
 - its own `threshold-share.json` from the epoch DKG;
 - its own raw-cache and sequence-state volumes.
 
@@ -31,14 +32,14 @@ starting either process.
 Each operator runs locally (example A):
 
 ```bash
-install -d -m 0700 /var/lib/nomad/ceremony
+install -d -m 0700 /var/lib/nomad/ceremony/secrets
 nomad-operator init \
   --id=operator-a \
   --endpoint=203.0.113.10:4200 \
   --partial-endpoint=https://operator-a.example:4300 \
   --dkg-endpoint=https://operator-a.example:4400 \
-  --secret=/var/lib/nomad/ceremony/node-secrets.json \
-  --enrollment=/var/lib/nomad/ceremony/enrollment.json
+  --secret=/var/lib/nomad/ceremony/secrets/epoch-00000000000000000001.secrets.json \
+  --enrollment=/var/lib/nomad/ceremony/epoch-1.enrollment.json
 ```
 
 The coordinator collects only the public enrollment files and publishes the
@@ -61,7 +62,7 @@ operator returns an attestation:
 
 ```bash
 nomad-operator attest \
-  --secret=/var/lib/nomad/ceremony/node-secrets.json \
+  --secret=/var/lib/nomad/ceremony/secrets/epoch-00000000000000000001.secrets.json \
   --draft=topology-draft.json \
   --out=operator-a.attestation.json
 ```
@@ -77,7 +78,7 @@ nomad-topology finalize \
   --out=topology.json
 
 nomad-operator verify \
-  --secret=/var/lib/nomad/ceremony/node-secrets.json \
+  --secret=/var/lib/nomad/ceremony/secrets/epoch-00000000000000000001.secrets.json \
   --topology=topology.json \
   --authority-key=authority.pub
 ```
@@ -94,7 +95,7 @@ install -d -m 0700 /var/lib/nomad/dkg /run/nomad
 nomad-dkg \
   --topology=/etc/nomad/topology.json \
   --authority-key=/etc/nomad/authority.pub \
-  --secrets=/var/lib/nomad/ceremony/node-secrets.json \
+  --secrets=/var/lib/nomad/ceremony/secrets/epoch-00000000000000000001.secrets.json \
   --listen=:4400 \
   --state=/var/lib/nomad/dkg \
   --share-out=/run/nomad/threshold-share.json \
@@ -118,9 +119,14 @@ future publication protocol before making an anonymity claim.
 
 ## Network prerequisites
 
-The signed topology must name stable UDP endpoints for port 4200 and stable
-partial-proof endpoints for port 4300. The current proof service is plain HTTP;
-run both services inside an operator-authenticated tunnel such as WireGuard.
+The signed topology must name stable UDP endpoints for port 4200, stable
+partial-proof endpoints for port 4300 and DKG endpoints for port 4400. The
+automatic lifecycle service reserves the immediately following DKG TCP port
+(4401 in this example) and uses the same scheme. Its client derives that
+address from the signed topology; there is no discovery, redirect, proxy,
+retry or fallback address. Production DKG/lifecycle endpoints use HTTPS. The
+current partial-proof service is plain HTTP; run it inside an
+operator-authenticated tunnel such as WireGuard.
 The inner Nomad datagram HMAC remains mandatory because it binds topology,
 epoch, receiver, sender, batch coordinate and sequence independently of the
 tunnel.
@@ -138,7 +144,8 @@ Operator A starts its node with only operator A's files:
 nomad-node \
   --topology=/etc/nomad/topology.json \
   --authority-key=/etc/nomad/authority.pub \
-  --secrets=/run/nomad/node-secrets.json \
+  --epoch-chain=/var/lib/nomad/epoch-chain \
+  --secrets=/var/lib/nomad/ceremony/secrets/epoch-00000000000000000001.secrets.json \
   --listen=:4200 \
   --cache=/var/lib/nomad/raw \
   --state=/var/lib/nomad/sequence \
@@ -147,6 +154,7 @@ nomad-node \
 nomad-share \
   --topology=/etc/nomad/topology.json \
   --authority-key=/etc/nomad/authority.pub \
+  --epoch-chain=/var/lib/nomad/epoch-chain \
   --descriptor=/etc/nomad/descriptor.json \
   --share=/run/nomad/threshold-share.json \
   --cache=/var/lib/nomad/raw \
@@ -159,6 +167,70 @@ Repeat with distinct secrets, storage and hosts for B and C. Run as an
 unprivileged dedicated user with a read-only root filesystem, no Linux
 capabilities, a private temporary directory, an explicit file allowlist and an
 egress policy limited to the signed peers.
+
+## Automatic successor lifecycle
+
+Before publishing the N+1 enrollment, every continuing operator creates a new
+epoch file. Only the stable Ed25519 identity is retained; X25519 and DKG keys
+are replaced. The old and new files coexist until N retires:
+
+```bash
+nomad-operator rotate \
+  --from-secret=/var/lib/nomad/ceremony/secrets/epoch-00000000000000000001.secrets.json \
+  --endpoint=203.0.113.10:4200 \
+  --partial-endpoint=https://operator-a.example:4300 \
+  --dkg-endpoint=https://operator-a.example:4400 \
+  --secret=/var/lib/nomad/ceremony/secrets/epoch-00000000000000000002.secrets.json \
+  --enrollment=/var/lib/nomad/ceremony/epoch-2.enrollment.json
+```
+
+Every successor epoch requires this rotation. Retries inside one epoch must
+reuse that epoch's keys; a transition reusing any earlier epoch's KEX or DKG
+key, including after an intervening epoch, is invalid at every descriptor
+verifier.
+
+Pre-stage every independently attested retry topology at
+`/etc/nomad/rotation/topologies/epoch-N/attempt-AA/topology.json`, using the
+zero-padded names emitted by `nomad-lifecycle plan`. Run one controller per
+operator; it replaces the standalone `nomad-dkg` process for successor epochs:
+
+```bash
+nomad-rotation-controller \
+  --chain=/var/lib/nomad/epoch-chain \
+  --revocations=/var/lib/nomad/revocations \
+  --authority-key=/etc/nomad/authority.pub \
+  --network=nomad-live --operator-id=operator-a \
+  --topology-dir=/etc/nomad/rotation/topologies \
+  --secrets-dir=/var/lib/nomad/ceremony/secrets \
+  --listen=:4400 --control-listen=:4401 \
+  --state=/var/lib/nomad/rotation/state \
+  --share-dir=/var/lib/nomad/rotation/shares \
+  --certificate-dir=/var/lib/nomad/rotation/certificates \
+  --exchange=/var/lib/nomad/rotation/exchange \
+  --signature-journal=/var/lib/nomad/rotation/signature-journal \
+  --tls-certificate=/etc/nomad/tls/dkg.crt \
+  --tls-private-key=/etc/nomad/tls/dkg.key \
+  --prepare-lead=6h --retry-offsets=1h,2h \
+  --escalate-after=3h --control-interval=30s
+```
+
+The controller holds a process lock across planning and DKG, refuses an
+ambiguous interrupted attempt, destroys a failed-attempt share before the next
+public attempt, and accepts only the exact attempt currently selected by the
+public retry ladder. Retry topologies may change only the fresh session ID and
+strictly later DKG start. It publishes local immutable artifacts, performs one
+bounded GET per peer on each future UTC-aligned control tick, verifies every
+artifact independently, requires the previous approval quorum plus all
+incoming activations, and imports the assembled descriptor as READY.
+
+There is deliberately no catch-up activation. If READY is not persisted before
+the signed activation boundary, the controller stops and the outgoing epoch
+retires. Run the epoch-N and epoch-N+1 node/share units from public
+descriptor-derived service-manager timers. Use `Restart=on-failure`: the old
+node and share service exit normally at retirement, and unconditional restart
+would only loop a retired configuration. The node checks the same chain before
+binding its UDP socket and refuses every send at or after its chain-derived
+deadline; a verified emergency successor may only move that deadline earlier.
 
 ## Reader-side processes
 

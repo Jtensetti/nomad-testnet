@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -27,6 +28,10 @@ var (
 	ErrEquivocation = errors.New("epoch descriptor equivocation")
 	// ErrHalted is returned for every operation on a halted chain.
 	ErrHalted = errors.New("epoch chain is halted on recorded equivocation")
+	// ErrEpochNotActive is the normal fail-closed serving boundary. Long-lived
+	// network/share processes use it to exit cleanly at a public retirement
+	// instant rather than being restarted as if retirement were a crash.
+	ErrEpochNotActive = errors.New("epoch is not ACTIVE")
 )
 
 const haltedMarker = "HALTED"
@@ -314,6 +319,9 @@ func embeddedIdentity(descriptor Descriptor) (string, uint64, error) {
 	if err != nil {
 		return "", 0, errors.New("invalid embedded topology encoding")
 	}
+	if err := strictjson.RejectDuplicateKeys(topologyBytes); err != nil {
+		return "", 0, fmt.Errorf("embedded topology is ambiguous: %w", err)
+	}
 	var signed topology.Signed
 	decoder := json.NewDecoder(bytes.NewReader(topologyBytes))
 	decoder.DisallowUnknownFields()
@@ -327,6 +335,9 @@ func embeddedIdentity(descriptor Descriptor) (string, uint64, error) {
 }
 
 func decodeDescriptor(encoded []byte) (Descriptor, error) {
+	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
+		return Descriptor{}, fmt.Errorf("epoch descriptor is ambiguous: %w", err)
+	}
 	var descriptor Descriptor
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
@@ -513,7 +524,7 @@ func (chain *Chain) ServesEpoch(epochNumber uint64, now time.Time) error {
 		return err
 	}
 	if state != StateActive {
-		return fmt.Errorf("epoch %d is %s, not ACTIVE", epochNumber, state)
+		return fmt.Errorf("%w: epoch %d is %s", ErrEpochNotActive, epochNumber, state)
 	}
 	return nil
 }
