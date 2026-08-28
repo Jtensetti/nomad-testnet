@@ -173,6 +173,8 @@ jobs:
             GOOS="${target%/*}" GOARCH="${target#*/}" go build ./... \
               || { echo "$target does not build"; exit 1; }
           done
+      - name: Verify the vulnerability gate still fails closed
+        run: ./scripts/test-scan-vulnerabilities.sh
       - name: Scan dependencies for reachable vulnerabilities
         run: |
           # A vulnerability gate in one repository is a gate on one repository.
@@ -189,13 +191,7 @@ jobs:
           for module in components/*/; do
             (cd "$module" && go mod verify)
           done
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck="$(go env GOPATH)/bin/govulncheck"
-          "$govulncheck" ./...
-          for module in components/*/; do
-            echo "== $module =="
-            (cd "$module" && "$govulncheck" ./...)
-          done
+          ./scripts/scan-vulnerabilities.sh . components/*/
       - name: Verify the traffic-analysis harness still detects differences
         run: python3 scripts/test-two-world-analysis.py
       - name: Verify the campaign verdict still separates noise from a finding
