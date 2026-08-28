@@ -50,6 +50,7 @@ DOCUMENT_VERSION = "nomad-live-topology-v3"
 DRAFT_DOMAIN = b"nomad-topology-draft-v3"
 AUTHORITY_DOMAIN = b"nomad-topology-authority-v3"
 DIGEST_DOMAIN = b"nomad-topology-digest-v3"
+ATTESTATION_DOMAIN = b"nomad-operator-attestation-v3"
 
 DOCUMENT_MEMBERS = (
     "version", "network_id", "epoch", "not_before", "not_after",
@@ -79,16 +80,40 @@ try:  # pragma: no cover - presence depends on the environment
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
     SIGNATURES_CHECKABLE = True
+    SIGNATURE_BACKEND = "cryptography"
 except BaseException:  # noqa: BLE001  # pragma: no cover
     # BaseException, not Exception, and only here. A broken pyo3 extension
     # raises PanicException, which derives from BaseException, so the narrower
     # clause does not catch it. Around a single import at module load there is
     # nothing else this can swallow.
-    SIGNATURES_CHECKABLE = False
+    # Falling back rather than skipping. Skipping is how the attestation check
+    # below came to be wrong and stay wrong: every machine this tool was run on
+    # had a broken `cryptography`, so the one check that binds an operator to
+    # the membership it signed never executed, and a defect in it was invisible
+    # until a CI runner with a working library finally ran it.
+    import ed25519ref
+
+    SIGNATURES_CHECKABLE = True
+    SIGNATURE_BACKEND = "rfc8032-reference"
 
 
 class TopologyError(Exception):
     """A topology this implementation refuses."""
+
+
+def _verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
+    """Check one Ed25519 signature, whichever backend is available.
+
+    One helper for every signature in this file, so a backend that is missing
+    or broken cannot disable one check while leaving the others looking fine.
+    """
+    if SIGNATURE_BACKEND == "cryptography":
+        try:
+            Ed25519PublicKey.from_public_bytes(public_key).verify(signature, message)
+        except InvalidSignature:
+            return False
+        return True
+    return ed25519ref.verify(public_key, message, signature)
 
 
 def _escape(text: str) -> str:
@@ -192,12 +217,37 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict:
     return seen
 
 
-def draft_digest(document: dict) -> bytes:
-    """What each operator attests to: the document with attestations blanked."""
+def _blank_attestations(document: dict) -> dict:
     draft = json.loads(json.dumps(document), object_pairs_hook=_reject_duplicate_keys)
     for operator in draft.get("operators") or []:
         operator["attestation"] = ""
-    return hashlib.sha256(DRAFT_DOMAIN + canonical(draft)).digest()
+    return draft
+
+
+def draft_digest(document: dict) -> bytes:
+    """The value an operator compares by eye against what it attested.
+
+    This is NOT the message an attestation signs -- see attestation_message. It
+    is a short identifier for the draft, carried in the attestation artefact so
+    a human can check they signed the membership they meant to.
+    """
+    return hashlib.sha256(DRAFT_DOMAIN + canonical(_blank_attestations(document))).digest()
+
+
+def attestation_message(document: dict, operator_id: str) -> bytes:
+    """The exact bytes one operator's attestation signs.
+
+    Scoped to the operator, not just to the draft. Without the identifier every
+    operator in an epoch would sign the same bytes, so one operator's signature
+    would verify as any other's and a membership could be assembled from a
+    single cooperating signer's attestation replayed under every name.
+
+    The outer object is canonicalised like any other: members sorted by their
+    UTF-16 code units, which puts "document" before "operator_id".
+    """
+    draft = _blank_attestations(document)
+    return (ATTESTATION_DOMAIN + b'{"document":' + canonical(draft)
+            + b',"operator_id":' + _encode(operator_id).encode() + b"}")
 
 
 def topology_digest(document: dict) -> bytes:
@@ -231,22 +281,19 @@ def verify(encoded: bytes, authority: bytes, maximum_bytes: int = 1 << 20) -> di
     if len(signature) != 64:
         raise TopologyError("authority signature is not 64 bytes")
     if SIGNATURES_CHECKABLE:
-        try:
-            Ed25519PublicKey.from_public_bytes(authority).verify(signature, message)
-        except InvalidSignature as failure:
-            raise TopologyError("authority signature does not verify") from failure
+        if not _verify(authority, message, signature):
+            raise TopologyError("authority signature does not verify")
 
-        # Every operator attests to the same draft, so one bad attestation is
-        # an operator that signed a different membership from the rest.
-        draft = draft_digest(document)
+        # Every operator attests to the same membership, each under its own
+        # identifier, so one bad attestation is an operator that signed a
+        # different membership from the rest.
         for operator in document.get("operators") or []:
             attestation = base64.b64decode(operator["attestation"], validate=True)
             if len(attestation) != 64:
                 raise TopologyError(f"{operator['id']}: attestation is not 64 bytes")
             identity = base64.b64decode(operator["identity_key"], validate=True)
-            try:
-                Ed25519PublicKey.from_public_bytes(identity).verify(attestation, draft)
-            except InvalidSignature as failure:
+            message = attestation_message(document, operator["id"])
+            if not _verify(identity, message, attestation):
                 raise TopologyError(
                     f"{operator['id']}: attestation does not verify against the draft "
                     "every operator is supposed to have signed"
