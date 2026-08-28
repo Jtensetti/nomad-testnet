@@ -18,14 +18,106 @@ import (
 // 1/publisherCount.
 const (
 	publisherCount = 4
-	// trials is a compromise. Each full-path trial runs a complete shuffle
-	// chain and a threshold decryption, so the experiment is minutes rather
-	// than seconds; 12 trials of 4 publishers gives 48 observations per
-	// configuration, which resolves the difference between a matcher that
-	// works (1.00) and one at chance (0.25) with room to spare, and does not
-	// pretend to resolve anything finer.
-	trials = 12
+	// Each full-path trial runs a complete shuffle chain and a threshold
+	// decryption, so trials are the whole cost of this experiment. They are
+	// also the whole resolution of it, and the first version bought the cost
+	// down too far.
+	//
+	// It ran 12 trials -- 48 observations -- and failed when the recovered
+	// rate exceeded twice chance. Two things were wrong with that, and they
+	// pull in opposite directions, which is why neither was obvious.
+	//
+	// It failed by chance about once in 1500 runs. The exact null here is the
+	// fixed-point count of a uniform permutation of 4, summed over the trials;
+	// at 12 trials, P(hits >= 25) = 6.7e-4. That is often enough for a
+	// security gate to cry wolf, and the usual response to a security gate
+	// crying wolf is to loosen it.
+	//
+	// And it could barely detect the thing it exists to detect. Against a true
+	// recovery rate of 0.5 -- double the chance rate, a serious linkage defect
+	// -- a threshold of "more than twice chance" has about 50% power at 12
+	// trials, and a threshold strict enough to fix the false failures would
+	// have had 1.5%. The test was simultaneously too noisy to trust and too
+	// blunt to catch anything.
+	//
+	// Both are the same shortage. 40 measurement trials give 160 observations:
+	// the threshold below then fails by chance less than once in a million
+	// runs and still detects a doubled recovery rate 85% of the time. The
+	// control needs no such resolution -- full linkage scores 1.00, not
+	// something near a boundary -- so it stays cheap.
+	controlTrials = 12
+	trials        = 40
 )
+
+// falseFailureBudget is how often this experiment may fail when nothing is
+// wrong. It buys the threshold below, and it is stated rather than implied so
+// that a later change to publisherCount or trials cannot quietly move it.
+const falseFailureBudget = 1e-6
+
+// nullHitCutoff is the smallest number of position hits whose probability
+// under anonymity is at most falseFailureBudget.
+//
+// It is computed rather than written down. A magic number here would be a
+// number nobody could check, and the first version's "twice chance" was
+// exactly that: a threshold with no stated relationship to the distribution it
+// was thresholding.
+//
+// The null is exact. Under anonymity the released order is a uniform
+// permutation of the publishers, so per trial the adversary's hits are that
+// permutation's fixed-point count; the distribution over trials is that pmf
+// convolved with itself. Enumerating publisherCount! permutations is exact and
+// costs nothing at this size.
+func nullHitCutoff(publishers, trialCount int, budget float64) int {
+	perTrial := make([]float64, publishers+1)
+	total := 0
+	var walk func(remaining []int, chosen []int)
+	walk = func(remaining []int, chosen []int) {
+		if len(remaining) == 0 {
+			fixed := 0
+			for position, value := range chosen {
+				if position == value {
+					fixed++
+				}
+			}
+			perTrial[fixed]++
+			total++
+			return
+		}
+		for index, value := range remaining {
+			rest := make([]int, 0, len(remaining)-1)
+			rest = append(rest, remaining[:index]...)
+			rest = append(rest, remaining[index+1:]...)
+			walk(rest, append(chosen, value))
+		}
+	}
+	order := make([]int, publishers)
+	for index := range order {
+		order[index] = index
+	}
+	walk(order, nil)
+	for index := range perTrial {
+		perTrial[index] /= float64(total)
+	}
+
+	distribution := []float64{1}
+	for trial := 0; trial < trialCount; trial++ {
+		next := make([]float64, len(distribution)+publishers)
+		for hits, probability := range distribution {
+			for extra, chance := range perTrial {
+				next[hits+extra] += probability * chance
+			}
+		}
+		distribution = next
+	}
+	tail := 0.0
+	for hits := len(distribution) - 1; hits >= 0; hits-- {
+		tail += distribution[hits]
+		if tail > budget {
+			return hits + 1
+		}
+	}
+	return 0
+}
 
 // depositOne runs one publisher's deposit and returns the marker it deposited.
 func depositOne(t *testing.T, committee mix.ThresholdCommittee, ingress *Ingress,
@@ -167,10 +259,9 @@ func runTrial(t *testing.T, shuffled bool) ([][uplink.PayloadSize]byte, []mix.Pl
 // positionRecoveryRate is the adversary's best simple strategy: assume the
 // k-th released plaintext belongs to the k-th publisher that deposited. It is
 // the mapping the entry operator would guess from arrival order alone.
-func positionRecoveryRate(t *testing.T, mode int) float64 {
+func positionRecoveryRate(t *testing.T, mode, trialCount int) (hits, total int) {
 	t.Helper()
-	hits, total := 0, 0
-	for trial := 0; trial < trials; trial++ {
+	for trial := 0; trial < trialCount; trial++ {
 		var deposited [][uplink.PayloadSize]byte
 		var released []mix.PlainCell
 		switch mode {
@@ -194,7 +285,7 @@ func positionRecoveryRate(t *testing.T, mode int) float64 {
 	if total == 0 {
 		t.Fatal("no plaintext was released, so nothing was measured")
 	}
-	return float64(hits) / float64(total)
+	return hits, total
 }
 
 // The experiment, with its own positive control.
@@ -222,8 +313,10 @@ func TestPublisherToObjectMappingIsNotRecoverableFromDepositOrder(t *testing.T) 
 	}
 
 	chance := 1.0 / float64(publisherCount)
+	cutoff := nullHitCutoff(publisherCount, trials, falseFailureBudget)
 
-	control := positionRecoveryRate(t, modeRaw)
+	controlHits, controlTotal := positionRecoveryRate(t, modeRaw, controlTrials)
+	control := float64(controlHits) / float64(controlTotal)
 	if control < 0.9 {
 		t.Fatalf("positive control recovered only %.2f of the mapping from a batch "+
 			"with no airlock and no shuffle: the matcher cannot detect linkage that "+
@@ -236,22 +329,28 @@ func TestPublisherToObjectMappingIsNotRecoverableFromDepositOrder(t *testing.T) 
 	// randomises placement, so it destroys arrival order before any mixer
 	// touches the batch. That is worth measuring rather than assuming, so it
 	// is reported as its own configuration.
-	sealedOnly := positionRecoveryRate(t, modeSealed)
-	if sealedOnly > chance*2 {
-		t.Fatalf("the seal alone leaves deposit order recoverable at %.2f against a "+
-			"chance rate of %.2f", sealedOnly, chance)
+	sealedHits, sealedTotal := positionRecoveryRate(t, modeSealed, trials)
+	sealedOnly := float64(sealedHits) / float64(sealedTotal)
+	if sealedHits >= cutoff {
+		t.Fatalf("the seal alone leaves deposit order recoverable at %.3f (%d of %d "+
+			"positions) against a chance rate of %.3f; under anonymity %d or more "+
+			"hits has probability at most %.0e",
+			sealedOnly, sealedHits, sealedTotal, chance, cutoff, falseFailureBudget)
 	}
 
-	treatment := positionRecoveryRate(t, modeFull)
-	// A generous band: the point is that the mapping is destroyed, not that a
-	// 25-trial estimate lands on 0.25 exactly.
-	if treatment > chance*2 {
-		t.Fatalf("deposit order still predicts release position at %.2f against a "+
-			"chance rate of %.2f", treatment, chance)
+	treatmentHits, treatmentTotal := positionRecoveryRate(t, modeFull, trials)
+	treatment := float64(treatmentHits) / float64(treatmentTotal)
+	if treatmentHits >= cutoff {
+		t.Fatalf("deposit order still predicts release position at %.3f (%d of %d "+
+			"positions) against a chance rate of %.3f; under anonymity %d or more "+
+			"hits has probability at most %.0e",
+			treatment, treatmentHits, treatmentTotal, chance, cutoff, falseFailureBudget)
 	}
-	t.Logf("position recovery over %d trials of %d publishers: "+
-		"no defence %.2f, seal only %.2f, seal and shuffle chain %.2f, chance %.2f",
-		trials, publisherCount, control, sealedOnly, treatment, chance)
+	t.Logf("position recovery, %d publishers: no defence %.2f (%d trials), "+
+		"seal only %.3f, seal and shuffle chain %.3f, chance %.3f; "+
+		"failing at %d of %d hits, which anonymity produces with probability <= %.0e",
+		publisherCount, control, controlTrials, sealedOnly, treatment, chance,
+		cutoff, treatmentTotal, falseFailureBudget)
 
 	// What this does not establish, stated here because the previous
 	// unlinkability claim in this project was withdrawn for being read wider
