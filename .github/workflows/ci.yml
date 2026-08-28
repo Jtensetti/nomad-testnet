@@ -213,6 +213,13 @@ jobs:
           #
           # Under -race both are shortened or skipped, and Drain's concurrency
           # is still covered there by the emission, close and campaign tests.
+          #
+          # Two unlinkability measurements live behind this step for the same
+          # reason, and this is the only place they execute: the correlation
+          # experiment, and the chain-contribution experiment that measures an
+          # adversary inside the committee. Both skip under -race, so removing
+          # this step would leave the airlock's privacy claims with no CI
+          # evidence at all while every other gate still went green.
           go test -count=1 -timeout 25m ./live/deposit/
       - name: Apply the preregistered rule to the publication campaign
         run: |
