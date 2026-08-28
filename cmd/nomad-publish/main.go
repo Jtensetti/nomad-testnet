@@ -40,6 +40,7 @@ import (
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"github.com/Jtensetti/nomad-constant-rate-fabric/fabric"
+	"github.com/Jtensetti/nomad-testnet/live/airlock"
 	"github.com/Jtensetti/nomad-testnet/live/deposit"
 	"github.com/Jtensetti/nomad-testnet/live/publish"
 	"github.com/Jtensetti/nomad-testnet/live/telemetry"
@@ -66,6 +67,19 @@ func run() error {
 	publisherPath := flag.String("publisher-key", "", "file holding the site's ed25519 public "+
 		"key, in base64, that this object is published under")
 	maxFragments := flag.Int("queue-fragments", 4096, "bound on the local queue")
+	// The deposit window is public policy and the publisher needs it for the
+	// same reason the operator does: to know when a deposit would be refused.
+	// These must match the entry operator's flags exactly -- a publisher that
+	// thinks the window is wider than the operator does destroys work at the
+	// difference, and one that thinks it is narrower publishes less than it
+	// could. They are flags on both sides and belong in the signed topology,
+	// which is a wire-format change recorded as open work; see
+	// cmd/nomad-entry's releaseSchedule.
+	batchSize := flag.Int("batch-size", 64, "fixed slots per release epoch, real and cover")
+	period := flag.Duration("period", time.Minute, "length of one release epoch")
+	cutoff := flag.Duration("deposit-cutoff", 15*time.Second,
+		"how long before a release boundary the deposit window closes")
+	perSession := flag.Int("per-session", 8, "maximum deposits one session may hold in an epoch")
 	flag.Parse()
 
 	if *queuePath == "" {
@@ -140,7 +154,11 @@ func run() error {
 	}
 	session := initiator.Session()
 	handshakeCell := initiator.Cell()
-	drain, err := deposit.NewDrain(session, queue)
+	schedule, err := releaseSchedule(network, *period, *cutoff, *batchSize, *perSession)
+	if err != nil {
+		return err
+	}
+	drain, err := deposit.NewDrain(session, queue, schedule)
 	if err != nil {
 		return err
 	}
@@ -174,6 +192,30 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// releaseSchedule derives the same public deposit window the entry operator
+// derives, from the same signed bytes. It is duplicated rather than shared
+// because the two commands are the two sides of the boundary and neither may
+// depend on the other's package; the duplication is the reminder that these
+// parameters have no single signed home yet.
+func releaseSchedule(network topology.Verified, period, cutoff time.Duration,
+	batchSize, perSession int) (airlock.Schedule, error) {
+	genesis, err := time.Parse(time.RFC3339, network.Document.NotBefore)
+	if err != nil {
+		return airlock.Schedule{}, fmt.Errorf("topology not_before: %w", err)
+	}
+	schedule := airlock.Schedule{
+		Genesis:               genesis.UTC(),
+		Period:                period,
+		DepositCutoff:         cutoff,
+		BatchSize:             batchSize,
+		MaxDepositsPerSession: perSession,
+	}
+	if err := schedule.Validate(); err != nil {
+		return airlock.Schedule{}, err
+	}
+	return schedule, nil
 }
 
 func submitObject(queue *publish.Queue, path, publisherPath string) error {

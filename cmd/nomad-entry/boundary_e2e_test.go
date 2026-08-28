@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,7 +70,13 @@ func TestThePublicationPathAcrossRealProcesses(t *testing.T) {
 	// One object queued with no network configured at all. Submitting is a
 	// separate mode of the publisher for exactly this reason: queueing must not
 	// require, or touch, an uplink.
-	object := make([]byte, 4096)
+	// Large enough that draining it spans several deposit cutoffs. At 504
+	// bytes per fragment this is 54 of them, and the publisher can emit at
+	// most ~43 in the run below, so the queue is still non-empty every time a
+	// window shuts. A 4096-byte object drained inside the first open window,
+	// which made the shut-window check further down examine an empty
+	// directory and report success for having nothing to look at.
+	object := make([]byte, 24576)
 	if _, err := rand.Read(object); err != nil {
 		t.Fatal(err)
 	}
@@ -139,13 +146,24 @@ func TestThePublicationPathAcrossRealProcesses(t *testing.T) {
 	}()
 	time.Sleep(300 * time.Millisecond)
 
+	// The same schedule the operator was given, and this is load-bearing.
+	// The publisher decides what to carry from the deposit window, so a
+	// publisher configured with a different period or cutoff would hand work
+	// to its emission path while the operator's window was shut, which is the
+	// loss DEC-020 measured. These parameters are flags on both sides and
+	// belong in the signed topology; until they are, matching them is the
+	// deployment's job and this test is where that shows.
 	publisher := exec.Command(publishBinary,
 		"--topology", world.topologyPath,
 		"--authority-key", world.authorityPath,
 		"--queue", world.queuePath,
 		"--state", filepath.Join(world.directory, "uplink-state.json"),
 		"--committee-key", world.committeePath,
-		"--entry", world.entryID)
+		"--entry", world.entryID,
+		"--period", "3s",
+		"--deposit-cutoff", "1s",
+		"--batch-size", "8",
+		"--per-session", "8")
 	publisherOutput := &strings.Builder{}
 	publisher.Stdout, publisher.Stderr = publisherOutput, publisherOutput
 	if err := publisher.Start(); err != nil {
@@ -157,8 +175,11 @@ func TestThePublicationPathAcrossRealProcesses(t *testing.T) {
 	}()
 
 	// Long enough for a handshake, sixty-odd cells at the 200 ms cadence, and
-	// several release epochs at the 3 s period.
-	time.Sleep(13 * time.Second)
+	// several release epochs at the 3 s period. The queue is sampled
+	// throughout: when a fragment leaves the durable queue is the whole
+	// question, and it is answerable from the filesystem without decrypting
+	// anything.
+	samples := sampleQueue(t, world.queuePath, 13*time.Second, 50*time.Millisecond)
 
 	_ = publisher.Process.Signal(syscall.SIGTERM)
 	_ = publisher.Wait()
@@ -196,27 +217,57 @@ func TestThePublicationPathAcrossRealProcesses(t *testing.T) {
 			"never does, and one that re-seals a fragment always does", stats.Conflicted)
 	}
 
-	// The measured cost of the gap DEC-020 records. A publisher emits at a
-	// constant cadence across a schedule that closes, so every cell arriving
-	// after the cutoff is refused -- and because the publisher retains neither
-	// the fragment nor the sealed cell, any work among them is destroyed.
-	//
-	// This is asserted as present rather than absent. It is the current
-	// behaviour, it is a defect, and pinning it means the fix cannot land
-	// without this number moving.
+	// Cells still arrive outside the deposit window, and must: the cadence is
+	// fixed and does not consult the schedule, so an observer sees the same
+	// stream whatever the window is doing. What changed is what those cells
+	// carry. They are cover, and the work that used to be in them is still on
+	// the publisher's disk.
 	total := stats.Accepted + stats.OutsideWindow + stats.RefusedCell + stats.Conflicted
 	if total == 0 {
 		t.Fatal("no cell reached the mailbox path at all")
 	}
 	if stats.OutsideWindow == 0 {
 		t.Errorf("no cell arrived outside a deposit window in %s across a %s period; "+
-			"the run did not cross a cutoff and so does not measure the loss",
-			13*time.Second, 3*time.Second)
+			"the run did not cross a cutoff, so it does not exercise the boundary "+
+			"this test exists for", 13*time.Second, 3*time.Second)
 	}
-	t.Logf("MEASURED LOSS: %d of %d cells (%.0f%%) arrived outside a deposit window and "+
-		"were destroyed, because the publisher retains neither the fragment nor the "+
-		"sealed cell it could retransmit (DEC-020)",
+	t.Logf("%d of %d cells (%.0f%%) arrived outside a deposit window; the cadence is "+
+		"unchanged and every one of them was cover",
 		stats.OutsideWindow, total, 100*float64(stats.OutsideWindow)/float64(total))
+
+	// The fix DEC-022 records, at the boundary that decides it. Queue.Next
+	// unlinks a fragment as it hands it out, so a fragment that leaves the
+	// queue while the deposit window is shut is a fragment nothing holds any
+	// more. Before the window gate that was 25-43% of a publisher's work.
+	//
+	// This is measured from the filesystem, on the two real processes, with no
+	// access to either one's internals: a fragment count that falls between
+	// two samples that both lie inside a shut window is work destroyed.
+	shrinkages, considered := queueShrankWhileShut(t, samples, world.notBefore,
+		3*time.Second, time.Second)
+	// The positive control. An empty shrinkage list means nothing if no pair of
+	// samples ever landed inside a shut window together -- the check would be
+	// reporting that it had nothing to look at, in the same words it uses to
+	// report that it looked and found nothing.
+	if considered < 20 {
+		t.Fatalf("only %d sample intervals fell inside a shut deposit window with work "+
+			"still queued, across %s at a %s period; the shrinkage check below had "+
+			"almost nothing to examine and its silence means nothing",
+			considered, 13*time.Second, 3*time.Second)
+	}
+	t.Logf("%d sample intervals lay inside a shut deposit window with work queued",
+		considered)
+	if len(shrinkages) > 0 {
+		t.Errorf("the publication queue lost %d fragment(s) while the deposit window was "+
+			"shut: %v\nA fragment taken from the queue outside the window is refused by "+
+			"the airlock and cannot be resent, so it is publication work destroyed "+
+			"(DEC-020, DEC-022)", len(shrinkages), shrinkages)
+	}
+	if samples[len(samples)-1].fragments >= samples[0].fragments {
+		t.Errorf("the queue went from %d fragments to %d; a publisher that never drains "+
+			"would pass the check above by doing nothing",
+			samples[0].fragments, samples[len(samples)-1].fragments)
+	}
 	if stats.WrongSize != 0 {
 		t.Errorf("%d datagrams were not one cell", stats.WrongSize)
 	}
@@ -268,6 +319,81 @@ func TestThePublicationPathAcrossRealProcesses(t *testing.T) {
 	}
 
 	verifyPublicationCapture(t, pcapPath, port, captureOutput.String())
+}
+
+// queueSample is the publication queue's depth at one instant.
+type queueSample struct {
+	at        time.Time
+	fragments int
+}
+
+// sampleQueue counts queued fragments at a fixed interval for the whole run.
+// It is deliberately dumb: a directory listing, no locking, no coordination
+// with the publisher. A sample taken mid-unlink reads one fragment low, which
+// can only produce a false shrinkage, never hide a real one -- and the
+// shut-window check below requires BOTH samples to be inside the shut window,
+// where the publisher should be doing nothing to the directory at all.
+func sampleQueue(t *testing.T, queuePath string, duration, interval time.Duration) []queueSample {
+	t.Helper()
+	deadline := time.Now().Add(duration)
+	samples := make([]queueSample, 0, int(duration/interval)+1)
+	for {
+		names, err := filepath.Glob(filepath.Join(queuePath, "*.fragment"))
+		if err != nil {
+			t.Fatalf("sample queue: %v", err)
+		}
+		samples = append(samples, queueSample{at: time.Now().UTC(), fragments: len(names)})
+		if !time.Now().Before(deadline) {
+			return samples
+		}
+		time.Sleep(interval)
+	}
+}
+
+// queueShrankWhileShut reports every interval between consecutive samples that
+// lies wholly inside a shut deposit window and across which the queue lost
+// fragments.
+//
+// Both endpoints must be inside the shut part of the same epoch. An interval
+// straddling the cutoff proves nothing: the fragment may have left while the
+// window was still open, which is exactly what is supposed to happen.
+func queueShrankWhileShut(t *testing.T, samples []queueSample, genesis time.Time,
+	period, cutoff time.Duration) (shrinkages []string, considered int) {
+	t.Helper()
+	if len(samples) < 2 {
+		t.Fatalf("only %d queue samples; the run measured nothing", len(samples))
+	}
+	shut := func(at time.Time) (uint64, bool) {
+		if at.Before(genesis) {
+			return 0, false
+		}
+		elapsed := at.Sub(genesis)
+		epoch := uint64(elapsed / period)
+		into := elapsed - time.Duration(epoch)*period
+		return epoch, into >= period-cutoff
+	}
+	var found []string
+	for i := 1; i < len(samples); i++ {
+		previous, current := samples[i-1], samples[i]
+		firstEpoch, firstShut := shut(previous.at)
+		secondEpoch, secondShut := shut(current.at)
+		if !firstShut || !secondShut || firstEpoch != secondEpoch {
+			continue
+		}
+		// Only intervals where a shrinkage was possible count towards the
+		// control. An empty queue cannot shrink, so counting those intervals
+		// would let the check look thorough while examining nothing.
+		if previous.fragments > 0 {
+			considered++
+		}
+		if current.fragments >= previous.fragments {
+			continue
+		}
+		found = append(found, fmt.Sprintf("epoch %d: %d -> %d fragments between %s and %s",
+			firstEpoch, previous.fragments, current.fragments,
+			previous.at.Format("15:04:05.000"), current.at.Format("15:04:05.000")))
+	}
+	return found, considered
 }
 
 func readEntryHealth(t *testing.T, path string) entry.Stats {

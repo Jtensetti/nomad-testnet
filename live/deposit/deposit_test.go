@@ -114,11 +114,7 @@ func newQueue(t *testing.T, objects ...string) *publish.Queue {
 func TestQueuedObjectReachesTheAirlockThroughTheUplink(t *testing.T) {
 	f := newPathFixture(t)
 	queue := newQueue(t, `{"title":"a publication","body":"through the airlock"}`)
-	drain, err := NewDrain(f.session, queue)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer drain.Close()
+	drain := newTestDrain(t, f.session, queue, f.now)
 
 	// Emit for a while. Some ticks carry the object's fragments, the rest
 	// carry cover; the operator deposits every one of them identically.
@@ -167,19 +163,11 @@ func TestQueuedObjectReachesTheAirlockThroughTheUplink(t *testing.T) {
 func TestEmissionCountDoesNotDependOnHavingWork(t *testing.T) {
 	const ticks = 60
 	busy := newPathFixture(t)
-	busyDrain, err := NewDrain(busy.session, newQueue(t,
-		`{"title":"one","body":"aaaa"}`, `{"title":"two","body":"bbbb"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer busyDrain.Close()
+	busyDrain := newTestDrain(t, busy.session, newQueue(t,
+		`{"title":"one","body":"aaaa"}`, `{"title":"two","body":"bbbb"}`), busy.now)
 
 	idle := newPathFixture(t)
-	idleDrain, err := NewDrain(idle.session, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer idleDrain.Close()
+	idleDrain := newTestDrain(t, idle.session, nil, idle.now)
 
 	busyCells, idleCells := 0, 0
 	for sequence := uint64(1); sequence <= ticks; sequence++ {
@@ -219,10 +207,7 @@ func TestEmissionCountDoesNotDependOnHavingWork(t *testing.T) {
 // nothing to say would announce exactly that.
 func TestDrainAlwaysProducesACellIncludingAfterClose(t *testing.T) {
 	f := newPathFixture(t)
-	drain, err := NewDrain(f.session, newQueue(t, `{"title":"x","body":"y"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	drain := newTestDrain(t, f.session, newQueue(t, `{"title":"x","body":"y"}`), f.now)
 	drain.Close()
 	drain.Close() // idempotent
 	for sequence := uint64(1); sequence <= 20; sequence++ {
@@ -237,11 +222,7 @@ func TestDrainAlwaysProducesACellIncludingAfterClose(t *testing.T) {
 // then the shuffle chain has destroyed the link to the depositor.
 func TestEntryOperatorCannotTellWorkFromCover(t *testing.T) {
 	f := newPathFixture(t)
-	drain, err := NewDrain(f.session, newQueue(t, `{"title":"secret","body":"zzzz"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer drain.Close()
+	drain := newTestDrain(t, f.session, newQueue(t, `{"title":"secret","body":"zzzz"}`), f.now)
 
 	sizes := map[int]int{}
 	for sequence := uint64(1); sequence <= 30; sequence++ {
@@ -274,11 +255,7 @@ func TestEntryOperatorCannotTellWorkFromCover(t *testing.T) {
 func TestIngressRefusesACellFromAnotherSession(t *testing.T) {
 	f := newPathFixture(t)
 	other := newPathFixture(t)
-	drain, err := NewDrain(other.session, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer drain.Close()
+	drain := newTestDrain(t, other.session, nil, other.now)
 	cell, err := drain.Emit(7)
 	if err != nil {
 		t.Fatal(err)
@@ -292,11 +269,7 @@ func TestIngressRefusesACellFromAnotherSession(t *testing.T) {
 // as something a depositor could read occupancy from.
 func TestIngressRefusesOutsideTheDepositWindow(t *testing.T) {
 	f := newPathFixture(t)
-	drain, err := NewDrain(f.session, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer drain.Close()
+	drain := newTestDrain(t, f.session, nil, f.now)
 	cell, err := drain.Emit(3)
 	if err != nil {
 		t.Fatal(err)

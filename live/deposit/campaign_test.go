@@ -65,10 +65,10 @@ func publicationWorld(t *testing.T, label string, queue *publish.Queue,
 	disturb func(tick int, drain *Drain) *Drain) *wire.Capture {
 	t.Helper()
 	f := newPathFixture(t)
-	drain, err := NewDrain(f.session, queue)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The clock is pinned inside the deposit window. This campaign measures
+	// emission timing, and a real clock would drift across the cutoff partway
+	// through a run and change what the drain carries mid-measurement.
+	drain := newTestDrain(t, f.session, queue, f.now)
 	defer func() { drain.Close() }()
 
 	started := time.Now()
@@ -179,11 +179,7 @@ func TestPublicationCampaignUnderFailureAndRetry(t *testing.T) {
 					return nil
 				}
 				restarted++
-				replacement, err := NewDrain(newSession(t), queue)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return replacement
+				return newTestDrain(t, newSession(t), queue, testDepositInstant())
 			})
 		if restarted != 1 {
 			t.Fatalf("%s restarted %d times", label, restarted)
