@@ -14,8 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: {go-version: '1.25.x'}
       - name: Verify pinned component snapshots
         run: sha256sum --check --quiet COMPONENTS.sha256
@@ -251,7 +251,7 @@ jobs:
       - run: go vet ./...
       - name: Upload operator ceremony evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: operator-ceremony-evidence
           path: runtime/evidence/operator-ceremony.json
@@ -261,14 +261,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install packet-capture verifier
         run: command -v tcpdump >/dev/null || (sudo apt-get update && sudo apt-get install -y tcpdump)
       - name: Run isolated multi-process fabric-to-cache network
         run: ./scripts/compose-e2e.sh
       - name: Upload packet and process evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: live-fabric-evidence
           path: runtime/evidence/
@@ -284,7 +284,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Verify release commit marker
@@ -296,15 +296,15 @@ jobs:
           else
             echo 'release=false' >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.3.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         if: steps.eligibility.outputs.release == 'true'
         with: {go-version: '1.25.x'}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         if: steps.eligibility.outputs.release == 'true'
         with:
           name: live-fabric-evidence
           path: evidence/fabric
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         if: steps.eligibility.outputs.release == 'true'
         with:
           name: operator-ceremony-evidence
