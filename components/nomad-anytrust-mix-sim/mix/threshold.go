@@ -298,24 +298,75 @@ func CreatePartialDecryption(committee ThresholdCommittee, member MemberSecret, 
 		"member-public": publicShare,
 	}
 	predicates := []proof.Predicate{proof.Rep("member-public", "share", "base")}
+
+	// The scalar multiplications are computed across cores; the proof is not.
+	//
+	// This member multiplies its secret share into every ciphertext point in
+	// the batch -- ChunkCount by batch width of them, independent of each
+	// other and, at roughly 43% of this call, the largest part of it that can
+	// be split. The rest is proof.HashProve over the conjunction, which is
+	// kyber's to parallelise and not this package's: a proof assembled by
+	// reaching into another library's prover is a proof nobody can review.
+	//
+	// The predicate list, the point names and their order are built afterwards
+	// in exactly the sequence they were built in before, so the proof this
+	// produces is the proof it produced before.
+	type product struct {
+		point   kyber.Point
+		encoded [pointSize]byte
+		err     error
+	}
+	width := batch.Len()
+	products := make([]product, ChunkCount*width)
+	workers := runtime.GOMAXPROCS(0)
+	if workers > len(products) {
+		workers = len(products)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	var nextProduct atomic.Int64
+	var productGroup sync.WaitGroup
+	productGroup.Add(workers)
+	for worker := 0; worker < workers; worker++ {
+		go func() {
+			defer productGroup.Done()
+			local := newSuite()
+			localSecret := secret.Clone()
+			for {
+				index := int(nextProduct.Add(1)) - 1
+				if index >= len(products) {
+					return
+				}
+				cipher := batch.x[index/width][index%width]
+				partialPoint := local.Point().Mul(localSecret, cipher)
+				encoded, err := partialPoint.MarshalBinary()
+				if err != nil {
+					products[index].err = err
+					continue
+				}
+				if len(encoded) != pointSize {
+					products[index].err = errors.New("unexpected partial-decryption point size")
+					continue
+				}
+				products[index].point = partialPoint
+				copy(products[index].encoded[:], encoded)
+			}
+		}()
+	}
+	productGroup.Wait()
+
 	pointIndex := 0
 	for row := 0; row < ChunkCount; row++ {
-		for col := 0; col < batch.Len(); col++ {
+		for col := 0; col < width; col++ {
+			if products[pointIndex].err != nil {
+				return nil, products[pointIndex].err
+			}
 			cipherName := fmt.Sprintf("cipher-%d", pointIndex)
 			partialName := fmt.Sprintf("partial-%d", pointIndex)
-			partialPoint := s.Point().Mul(secret, batch.x[row][col])
-			encoded, err := partialPoint.MarshalBinary()
-			if err != nil {
-				return nil, err
-			}
-			if len(encoded) != pointSize {
-				return nil, errors.New("unexpected partial-decryption point size")
-			}
-			var stored [pointSize]byte
-			copy(stored[:], encoded)
-			partial.Points = append(partial.Points, stored)
+			partial.Points = append(partial.Points, products[pointIndex].encoded)
 			points[cipherName] = batch.x[row][col]
-			points[partialName] = partialPoint
+			points[partialName] = products[pointIndex].point
 			predicates = append(predicates, proof.Rep(partialName, "share", cipherName))
 			pointIndex++
 		}
