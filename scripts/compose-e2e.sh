@@ -191,6 +191,7 @@ cat "$evidence_root/pcap-evidence-loaded.json"
 python3 "$repo_root/scripts/verify-load.py" \
     "$evidence_root/pcap-evidence.json" \
     "$evidence_root/pcap-evidence-loaded.json" \
+    "$pcap" \
     "$evidence_root/fabric-loaded.pcap" \
     "$flood_source" > "$evidence_root/load-evidence.json"
 test -s "$evidence_root/load-evidence.json"

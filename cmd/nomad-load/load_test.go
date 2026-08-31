@@ -113,3 +113,43 @@ func TestTheGeneratorRefusesArgumentsThatWouldSendNothing(t *testing.T) {
 		})
 	}
 }
+
+// A rate below one datagram per minimum tick must lengthen the tick, not clamp
+// the burst up. Clamping sent at 1/minimumTick regardless of the flag -- 200 a
+// second for --rate 10 -- so a gate configured for gentle load would have got
+// twenty times it, and the tool's own report would have said so while the
+// requested figure sat beside it looking authoritative.
+func TestALowRateIsHonoured(t *testing.T) {
+	listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	directory := t.TempDir()
+	reportPath := filepath.Join(directory, "load.json")
+	binary := filepath.Join(directory, "nomad-load")
+	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, output)
+	}
+	command := exec.Command(binary,
+		"--target", listener.LocalAddr().String(),
+		"--rate", "20", "--duration", "1s", "--report", reportPath)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("run: %v\n%s", err, output)
+	}
+
+	encoded, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary report
+	if err := json.Unmarshal(encoded, &summary); err != nil {
+		t.Fatal(err)
+	}
+	// One second at 20/s, with a tick of scheduling slack either side.
+	if summary.Sent < 15 || summary.Sent > 25 {
+		t.Fatalf("--rate 20 for 1s sent %d datagrams (%.0f/s); the tick is not "+
+			"tracking the requested rate", summary.Sent, summary.Achieved)
+	}
+}

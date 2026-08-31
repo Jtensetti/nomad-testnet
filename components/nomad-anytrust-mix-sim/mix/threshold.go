@@ -303,6 +303,11 @@ func CreatePartialDecryption(committee ThresholdCommittee, member MemberSecret, 
 	//
 	// Names and predicate order are built afterwards in the sequence they
 	// were built in before, so this produces the proof it produced before.
+	//
+	// secret and the batch points are shared across lanes rather than cloned
+	// into them. kyber's Mul writes only its receiver and geScalarMult reads
+	// its scalar and point arguments, so an operand is safe to share;
+	// TestSharedOperandsSurviveConcurrentUse holds that to it.
 	type product struct {
 		point   kyber.Point
 		encoded [pointSize]byte
@@ -311,7 +316,6 @@ func CreatePartialDecryption(committee ThresholdCommittee, member MemberSecret, 
 	width := batch.Len()
 	products := make([]product, ChunkCount*width)
 	parallel(len(products), func(l *lane, index int) {
-		secret := secret.Clone()
 		point := l.point().Mul(secret, batch.x[index/width][index%width])
 		encoded, err := point.MarshalBinary()
 		switch {

@@ -115,7 +115,6 @@ func Encrypt(pub PublicKey, cells []PlainCell) (*Batch, error) {
 	parallel(ChunkCount, func(l *lane, row int) {
 		b.x[row] = make([]kyber.Point, len(cells))
 		b.y[row] = make([]kyber.Point, len(cells))
-		h := h.Clone()
 		start := row * ChunkSize
 		for col := range cells {
 			message := l.point().Embed(cells[col][start:start+ChunkSize], l.stream)
@@ -466,7 +465,6 @@ func encryptCellWithPadding(pub PublicKey, cell PlainCell, padding io.Reader) (W
 	}
 	rows := make([]rowOutput, ChunkCount)
 	parallel(ChunkCount, func(l *lane, row int) {
-		h := h.Clone()
 		start := row * ChunkSize
 		message := l.point().Embed(cell[start:start+ChunkSize], l.stream)
 		r := l.scalar().Pick(l.stream)

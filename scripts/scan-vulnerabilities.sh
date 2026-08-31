@@ -51,10 +51,15 @@ scan() {
     if test "$status" -eq 0; then
       return 0
     fi
-    # Anything that does not name the database fetch is a finding, or a build
-    # that does not compile, and is never retried: re-running a scan because it
-    # found something is how a finding gets lost.
-    if ! printf '%s' "$output" | grep -q 'fetching vulnerabilities'; then
+    # Anchored on govulncheck's own error prefix rather than the phrase alone:
+    # stdout and stderr are merged here, so a finding whose text happened to
+    # contain those words would otherwise be retried and then reported as an
+    # unreachable database -- a failure either way, but the wrong one.
+    #
+    # Anything that is not that error is a finding, or a build that does not
+    # compile, and is never retried: re-running a scan because it found
+    # something is how a finding gets lost.
+    if ! printf '%s' "$output" | grep -q '^govulncheck: fetching vulnerabilities'; then
       return "$status"
     fi
     if test "$attempt" -ge "$ATTEMPTS"; then

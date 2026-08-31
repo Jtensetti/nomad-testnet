@@ -87,11 +87,16 @@ func run() error {
 	}
 
 	// Bursts on a ticker, not one datagram per tick: at thousands a second a
-	// per-datagram timer costs more than the send, and would measure itself.
-	const tick = 5 * time.Millisecond
-	perTick := *rate * int(tick) / int(time.Second)
-	if perTick < 1 {
-		perTick = 1
+	// per-datagram timer costs more than the send does and would measure
+	// itself. Below one datagram per minimumTick the tick lengthens instead,
+	// because clamping the burst up to one would send at 1/minimumTick
+	// whatever the flag said -- 200 a second for --rate 10.
+	const minimumTick = 5 * time.Millisecond
+	tick := time.Second / time.Duration(*rate)
+	perTick := 1
+	if tick < minimumTick {
+		perTick = int(minimumTick / tick)
+		tick = minimumTick
 	}
 	summary := report{Target: *target, Rate: *rate, Size: *size}
 	ticker := time.NewTicker(tick)

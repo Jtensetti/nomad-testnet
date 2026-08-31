@@ -77,6 +77,18 @@ if ! grep -q "nothing was scanned" "${work}/output"; then
   failures=$((failures + 1))
 fi
 
+# A finding whose text mentions the database fetch must still be a finding.
+# The discriminator is one grep, and an unanchored one would retry this and
+# then report an unreachable database instead of the vulnerability it found.
+stub <<'EOF'
+#!/bin/sh
+echo call >> "$CALLS"
+echo "Vulnerability #1: GO-2026-9999"
+echo "  A flaw while fetching vulnerabilities from a registry."
+exit 3
+EOF
+check "a finding that mentions the fetch is still a finding" 3 1
+
 stub <<'EOF'
 #!/bin/sh
 echo call >> "$CALLS"

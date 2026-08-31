@@ -42,3 +42,54 @@ func TestEachLaneHasItsOwnSuite(t *testing.T) {
 		t.Fatal("no lane ran")
 	}
 }
+
+// Sharing an operand across lanes is safe only while kyber treats scalars and
+// points as read-only arguments. Encrypt, EncryptCell and
+// CreatePartialDecryption all rest on that rather than cloning per index, so
+// it is held here: the same scalar and point used concurrently from many
+// goroutines must give the answer a sequential run gives, and must come back
+// unchanged.
+func TestSharedOperandsSurviveConcurrentUse(t *testing.T) {
+	s := newSuite()
+	secret := s.Scalar().Pick(s.RandomStream())
+	base := s.Point().Mul(s.Scalar().Pick(s.RandomStream()), nil)
+
+	before, err := secret.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	basePoint, err := base.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := s.Point().Mul(secret, base).MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const count = 512
+	got := make([][]byte, count)
+	parallel(count, func(l *lane, index int) {
+		encoded, err := l.point().Mul(secret, base).MarshalBinary()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		got[index] = encoded
+	})
+	for index, encoded := range got {
+		if string(encoded) != string(want) {
+			t.Fatalf("concurrent use %d produced a different product than a "+
+				"sequential one; a shared operand is being mutated", index)
+		}
+	}
+
+	after, _ := secret.MarshalBinary()
+	if string(after) != string(before) {
+		t.Fatal("the shared scalar changed during concurrent use")
+	}
+	afterPoint, _ := base.MarshalBinary()
+	if string(afterPoint) != string(basePoint) {
+		t.Fatal("the shared point changed during concurrent use")
+	}
+}

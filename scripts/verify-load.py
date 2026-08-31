@@ -20,6 +20,7 @@ Two failures this is built to avoid, both of which look like success:
 """
 
 import argparse
+import ipaddress
 import json
 import pathlib
 import sys
@@ -31,24 +32,49 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("baseline_evidence", help="verify-pcap.py JSON from the quiet window")
     parser.add_argument("loaded_evidence", help="verify-pcap.py JSON from the loaded window")
+    parser.add_argument("quiet_capture", help="the quiet window's pcap")
     parser.add_argument("loaded_capture", help="the loaded window's pcap")
     parser.add_argument("flood_source", help="source address of the load generator")
     parser.add_argument("--minimum-flood-packets", type=int, default=2000,
-                        help="fewest flood datagrams the capture must show")
+                        help="fewest flood datagrams the loaded capture must show")
+    parser.add_argument("--maximum-quiet-packets", type=int, default=0,
+                        help="most flood datagrams the quiet capture may show")
     parser.add_argument("--tolerance", type=float, default=0.15,
                         help="allowed fractional change in a sender's mean interval")
     arguments = parser.parse_args()
 
+    try:
+        ipaddress.ip_address(arguments.flood_source)
+    except ValueError:
+        raise SystemExit(f"flood source {arguments.flood_source!r} is not an address")
+
     baseline = json.loads(pathlib.Path(arguments.baseline_evidence).read_text())
     loaded = json.loads(pathlib.Path(arguments.loaded_evidence).read_text())
 
-    # The flood, read off the wire it was supposed to be on.
-    try:
-        times, _, destinations, _ = read_capture(
-            arguments.loaded_capture, f"udp and src host {arguments.flood_source}"
+    def flood_datagrams(capture: str) -> tuple[list, list]:
+        try:
+            times, _, destinations, _ = read_capture(
+                capture, f"udp and src host {arguments.flood_source}"
+            )
+        except CaptureError as error:
+            raise SystemExit(f"{capture} could not be read: {error}")
+        return times, destinations
+
+    # Both windows are checked, and for opposite things. The loaded one must
+    # carry the flood, or it is a second quiet window whose agreement with the
+    # first means nothing. The quiet one must not, or the comparison is between
+    # two loaded windows and means nothing either -- a flood that started early
+    # would otherwise pass silently, which is the failure this rule exists to
+    # refuse, arriving from the other side.
+    quiet_flood, _ = flood_datagrams(arguments.quiet_capture)
+    if len(quiet_flood) > arguments.maximum_quiet_packets:
+        raise SystemExit(
+            f"the quiet window carries {len(quiet_flood)} datagrams from "
+            f"{arguments.flood_source}; it was not quiet, so nothing here is a "
+            "comparison between a loaded window and an unloaded one"
         )
-    except CaptureError as error:
-        raise SystemExit(f"loaded capture could not be read: {error}")
+
+    times, destinations = flood_datagrams(arguments.loaded_capture)
     if len(times) < arguments.minimum_flood_packets:
         raise SystemExit(
             f"the capture shows {len(times)} datagrams from {arguments.flood_source}, "
@@ -93,6 +119,7 @@ def main() -> int:
 
     print(json.dumps({
         "flood_source": arguments.flood_source,
+        "flood_datagrams_in_the_quiet_window": len(quiet_flood),
         "flood_datagrams_on_the_wire": len(times),
         "flood_destinations": sorted(set(destinations)),
         "tolerance": arguments.tolerance,

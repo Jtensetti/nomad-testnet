@@ -8,7 +8,7 @@
 # pointing at a fabric with no ErrCellDropped while the vendored tree had
 # one: anyone auditing which fabric this integration carries would have
 # checked out the wrong code. supplychain/snapshot_test.go checks it now.
-github.com/Jtensetti/nomad-anytrust-mix-sim a397537 claude/nomad-production-ready-dxv4ql 6ceddad365a432ea91a37ad3e5e163fe74460e7ba482550fd1eab8382b6eaf9a
+github.com/Jtensetti/nomad-anytrust-mix-sim a397537 claude/nomad-production-ready-dxv4ql d1b656a2976df0ad2b2f87695316801fdc942a01df170d7f1dd019b249af5ced
 github.com/Jtensetti/nomad-constant-rate-fabric 5aab244 claude/nomad-production-ready-dxv4ql 0d2a38d76b4d4ed63bef77a15dc13894fa981af32bed1b6276593768e16d914f
 github.com/Jtensetti/nomad-local-reconstruction 3f87f8f claude/nomad-production-ready-dxv4ql 9ee1057224f0f5938b0990ba6b6adc9e49b64d90cb02d95d885ad0699a95e4f9
 github.com/Jtensetti/nomad-rlnc 8491ae3 claude/nomad-production-ready-dxv4ql f288ab87f4216e2ed4710a862efcdaf2bb4e848c10c86066efccafd83ac1a24c

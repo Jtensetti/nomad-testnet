@@ -64,8 +64,9 @@ def sender(mean: float, cells: int = 100, destinations=("10.0.0.9",)) -> dict:
     }
 
 
-def run(directory: pathlib.Path, baseline: dict, loaded: dict,
-        flood_packets: int, flood_source: str = "10.0.0.99") -> subprocess.CompletedProcess:
+def run(directory: pathlib.Path, baseline: dict, loaded: dict, flood_packets: int,
+        flood_source: str = "10.0.0.99",
+        quiet_flood: int = 0) -> subprocess.CompletedProcess:
     baseline_path = directory / "baseline.json"
     loaded_path = directory / "loaded.json"
     baseline_path.write_text(json.dumps(baseline))
@@ -80,12 +81,21 @@ def run(directory: pathlib.Path, baseline: dict, loaded: dict,
     for index in range(flood_packets):
         packets.append((when + index * 0.0001, packet(flood_source, "10.0.0.1", 1200)))
     packets.sort(key=lambda item: item[0])
-    capture = directory / "loaded.pcap"
-    write_pcap(capture, packets)
+    loaded_capture = directory / "loaded.pcap"
+    write_pcap(loaded_capture, packets)
+
+    quiet = [(when + index * 0.05, packet("10.0.0.1", "10.0.0.9", 1200))
+             for index in range(200)]
+    quiet += [(when + index * 0.0001, packet(flood_source, "10.0.0.1", 1200))
+              for index in range(quiet_flood)]
+    quiet.sort(key=lambda item: item[0])
+    quiet_capture = directory / "quiet.pcap"
+    write_pcap(quiet_capture, quiet)
 
     return subprocess.run(
         [sys.executable, str(VERIFY), str(baseline_path), str(loaded_path),
-         str(capture), flood_source, "--minimum-flood-packets", "2000"],
+         str(quiet_capture), str(loaded_capture), flood_source,
+         "--minimum-flood-packets", "2000"],
         capture_output=True, text=True,
     )
 
@@ -113,6 +123,18 @@ def main() -> int:
              evidence({"10.0.0.1": sender(50.4, destinations=("10.0.0.8",)),
                        "10.0.0.2": sender(50.1)}), 3000, False, "peer plan"),
         ]
+        # The same refusal from the other side: if the flood was already
+        # running during the quiet window, the comparison is between two
+        # loaded windows and proves nothing.
+        loaded_pair = evidence({"10.0.0.1": sender(50.4), "10.0.0.2": sender(50.1)})
+        result = run(directory, quiet, loaded_pair, 3000, quiet_flood=3000)
+        output = result.stdout + result.stderr
+        if result.returncode == 0 or "was not quiet" not in output:
+            print(f"FAIL a flood during the quiet window is refused: "
+                  f"exit {result.returncode}\n{output}")
+            failures += 1
+        else:
+            print("ok   a flood during the quiet window is refused")
         for name, baseline, loaded, flood, want_pass, want_text in cases:
             result = run(directory, baseline, loaded, flood)
             passed = result.returncode == 0
