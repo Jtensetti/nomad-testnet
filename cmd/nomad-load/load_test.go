@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-// The generator against a real socket. It is the instrument the load gate
-// reads, so an instrument that silently sends nothing would make the gate
-// report a quiet stack under a flood that never happened.
+// The generator against a real socket. The gate reads its report as evidence
+// that a flood happened, so an instrument that silently sends nothing would
+// make the gate report a quiet stack under a flood that never was.
 func TestTheGeneratorDeliversWhatItReports(t *testing.T) {
 	listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {
@@ -89,9 +89,8 @@ func TestTheGeneratorDeliversWhatItReports(t *testing.T) {
 	t.Logf("reported %d sent, %d arrived at the socket", summary.Sent, received.Load())
 }
 
-// Every refusal the flags are supposed to make. A generator that accepted a
-// zero rate or an absent target would fail open in the gate: no load, no
-// error, and a capture that looks like a quiet stack under flood.
+// Every refusal the flags should make. One that accepted a zero rate or an
+// absent target fails open in the gate: no load, no error, no finding.
 func TestTheGeneratorRefusesArgumentsThatWouldSendNothing(t *testing.T) {
 	directory := t.TempDir()
 	binary := filepath.Join(directory, "nomad-load")

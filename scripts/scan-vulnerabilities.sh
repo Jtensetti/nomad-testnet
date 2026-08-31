@@ -3,21 +3,16 @@
 #
 # Two things this deliberately does not do.
 #
-# It does not install govulncheck at @latest. CI runs this tool over the same
-# source it is gating, with the same privileges, so the tool is part of the
-# trusted set; @latest is whichever build the module proxy serves that minute,
-# with nothing in the repository recording what actually ran. Pinning the tool
-# does not stale the findings: the vulnerability data is fetched live, only the
-# code doing the fetching is fixed.
+# It does not install govulncheck at @latest. CI runs this tool over the source
+# it is gating, so the tool is part of the trusted set, and @latest is whichever
+# build the proxy served that minute with nothing recording what ran. Pinning
+# does not stale the findings: only the fetching code is fixed, not the data.
 #
-# It does not treat an unreachable vulnerability database as a pass. The
-# database is a third-party service that rate-limits, and govulncheck exits
-# non-zero both for "found vulnerabilities" and for "could not fetch the list
-# to compare against". Collapsing those two would let the gate report success
-# on a day the service was down, which is precisely the day it is worth having.
-# So a fetch failure is retried, and if it still cannot read the database the
-# run fails saying that no scan happened -- never quietly, and never as a
-# finding it did not make.
+# It does not treat an unreachable database as a pass. govulncheck exits
+# non-zero both for "found vulnerabilities" and "could not fetch the list to
+# compare against", and collapsing those would let the gate report success on
+# the one day it is worth having. A fetch failure is retried; if it still
+# cannot read the database the run fails saying no scan happened.
 
 set -euo pipefail
 
@@ -56,9 +51,9 @@ scan() {
     if test "$status" -eq 0; then
       return 0
     fi
-    # govulncheck names the database on the line it fails on. Anything else is
-    # a finding, or a build that does not compile, and is not retried: running
-    # a scan again because it found something is how a finding gets lost.
+    # Anything that does not name the database fetch is a finding, or a build
+    # that does not compile, and is never retried: re-running a scan because it
+    # found something is how a finding gets lost.
     if ! printf '%s' "$output" | grep -q 'fetching vulnerabilities'; then
       return "$status"
     fi

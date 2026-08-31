@@ -13,40 +13,27 @@ import (
 
 // What the shuffle chain is for, measured.
 //
-// The correlation experiment next door models an entry operator that matches
-// arrival order to release position, and that adversary is defeated by the
-// seal alone -- Seal orders by deposit ID and randomises placement before any
-// mixer runs. So it measures the airlock, and says nothing about the chain.
-// The chain exists for a different adversary: one inside the committee.
+// The correlation experiment next door models an entry operator matching
+// arrival order to release position, and the seal alone defeats it: Seal
+// orders by deposit ID and randomises placement before any mixer runs. So it
+// measures the airlock and says nothing about the chain, which exists for an
+// adversary inside the committee.
 //
-// This measures that one. The adversary is given every corrupt mixer's
-// permutation, which is more than a corrupt mixer has to work for: it chose
-// its own permutation, so knowing it is definitional. Here the permutations
-// are recovered by decrypting each round's input and output, which grants the
-// adversary exactly what the real one holds and no less.
-//
-// The claim under test is the anytrust assumption stated mechanically in
-// airlock.VerifyChain: the chain is unlinkable if at least ONE shuffler is
-// honest. Two configurations separate that from nothing:
-//
-//   - every mixer corrupt. The adversary composes the whole chain and reads
-//     the mapping off. This must recover it completely, or the experiment
-//     cannot detect the linkage it is looking for.
-//   - exactly one mixer honest, its position drawn per trial. The adversary
-//     composes everything else and is left with one uniform permutation.
-//
-// The distance between those two is the chain's contribution, and it is the
-// thing PROD-17 records as unmeasured.
+// This measures that one, under the anytrust assumption airlock.VerifyChain
+// states mechanically: the chain is unlinkable if at least ONE shuffler is
+// honest. Every corrupt mixer's permutation is handed to the adversary, which
+// is definitional -- a corrupt mixer chose its own. Two configurations
+// separate the assumption from nothing: every mixer corrupt, where composing
+// the chain must recover the mapping completely; and exactly one honest, its
+// position drawn per trial, where the adversary is left with one uniform
+// permutation. The distance between them is the chain's contribution, which
+// PROD-17 records as unmeasured.
 
-// chainPublishers fills the batch exactly, with no cover.
-//
-// Cover matters here in a way it does not elsewhere: every cover column
-// decrypts to the same reserved empty fragment, so two cover columns are
-// indistinguishable and a permutation cannot be read off the plaintexts at
-// all. Filling the batch keeps every column distinct and makes the recovery
-// exact. It also gives the adversary the easiest batch it will ever see --
-// no cover to confuse it -- which is the right direction for a test of
-// whether it still fails.
+// chainPublishers fills the batch exactly, with no cover: every cover column
+// decrypts to the same reserved empty fragment, so two of them are
+// indistinguishable and no permutation can be read off the plaintexts. A full
+// batch also gives the adversary the easiest case it will ever see, which is
+// the right direction for a test of whether it still fails.
 const chainPublishers = 8
 
 // chainTrials buys the null. With 8 publishers, 20 trials is 160 observations
@@ -65,10 +52,9 @@ const chainTrials = 20
 // that. Twenty was twenty runs of a check that cannot land between two values.
 const chainControlTrials = 5
 
-// decryptInOrder returns every column's plaintext in batch order.
-//
-// Position is the whole point, so this cannot use airlock.Release, which drops
-// cover and returns a shorter list whose indices no longer mean anything.
+// decryptInOrder returns every column's plaintext in batch order. It cannot
+// use airlock.Release, which drops cover and returns a list whose indices no
+// longer mean anything.
 func decryptInOrder(t *testing.T, committee mix.ThresholdCommittee,
 	members []mix.MemberSecret, batch *mix.Batch) []mix.PlainCell {
 	t.Helper()
@@ -95,12 +81,9 @@ func decryptInOrder(t *testing.T, committee mix.ThresholdCommittee,
 }
 
 // sourceOf reads one round's permutation off its plaintexts: sourceOf[j] is
-// the input position that output position j came from.
-//
-// It refuses anything that is not a bijection. A round whose plaintexts are
-// not a rearrangement of its input's is not a permutation this experiment can
-// reason about, and silently tolerating one would let the adversary's
-// composition be wrong in a direction that flatters the result.
+// the input position output position j came from. It refuses anything that is
+// not a bijection -- tolerating one would let the adversary's composition be
+// wrong in a direction that flatters the result.
 func sourceOf(t *testing.T, before, after []mix.PlainCell) []int {
 	t.Helper()
 	if len(before) != len(after) {
@@ -245,12 +228,10 @@ func TestOneHonestMixerIsEnoughAgainstACorruptCommittee(t *testing.T) {
 	controlHits, controlTotal := chainRecoveryRate(t, true)
 	control := float64(controlHits) / float64(controlTotal)
 	if control < 1.0 {
-		t.Fatalf("with every mixer corrupt the adversary recovered only %.3f (%d of %d) "+
-			"of the mapping. The adversary composes the per-round permutations; the "+
-			"truth is matched end to end from the plaintexts entering and leaving the "+
-			"chain. Those are two derivations of the same thing and they must agree "+
-			"exactly, so a shortfall means the experiment cannot see linkage that is "+
-			"fully present and its verdict on the honest case would mean nothing",
+		t.Fatalf("with every mixer corrupt the adversary recovered %.3f (%d of %d). "+
+			"Composing the per-round permutations and matching plaintexts end to end "+
+			"are two derivations of the same mapping and must agree exactly; a "+
+			"shortfall means this experiment cannot see linkage that is fully present",
 			control, controlHits, controlTotal)
 	}
 
@@ -258,9 +239,8 @@ func TestOneHonestMixerIsEnoughAgainstACorruptCommittee(t *testing.T) {
 	treatment := float64(treatmentHits) / float64(treatmentTotal)
 	if treatmentHits >= cutoff {
 		t.Fatalf("one honest mixer left the mapping recoverable at %.3f (%d of %d) "+
-			"against a chance rate of %.3f; under anonymity %d or more hits has "+
-			"probability at most %.0e. The anytrust assumption is that ONE honest "+
-			"shuffler suffices, and this says it does not",
+			"against chance %.3f; %d or more hits has probability <= %.0e under "+
+			"anonymity. The anytrust assumption says one honest shuffler suffices",
 			treatment, treatmentHits, treatmentTotal, chance, cutoff, falseFailureBudget)
 	}
 	t.Logf("chain contribution, %d publishers and %d mixers: every mixer corrupt "+
@@ -269,14 +249,10 @@ func TestOneHonestMixerIsEnoughAgainstACorruptCommittee(t *testing.T) {
 		chainPublishers, mixerCount(t), control, chainControlTrials,
 		treatment, chainTrials, chance, cutoff, treatmentTotal, falseFailureBudget)
 
-	// Stated because the previous unlinkability claim in this project was
-	// withdrawn for being read wider than its measurement.
-	//
-	// This measures an adversary inside the committee holding every corrupt
-	// mixer's permutation, against the release positions. It does not measure
-	// an adversary correlating across epochs, one with side information about
-	// who submits when, one attacking the proofs rather than the permutation,
-	// or a committee where every mixer is corrupt -- which is the assumption
-	// failing, not the chain. It measures the chain's contribution and only
-	// that, which is what PROD-17 records as missing.
+	// Stated because the previous unlinkability claim here was withdrawn for
+	// being read wider than its measurement. This covers an adversary inside
+	// the committee holding every corrupt mixer's permutation. It does not
+	// cover correlation across epochs, side information about who submits
+	// when, an attack on the proofs rather than the permutation, or a wholly
+	// corrupt committee -- which is the assumption failing, not the chain.
 }

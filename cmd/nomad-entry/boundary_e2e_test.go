@@ -258,10 +258,10 @@ func TestThePublicationPathAcrossRealProcesses(t *testing.T) {
 	t.Logf("%d sample intervals lay inside a shut deposit window with work queued",
 		considered)
 	if len(shrinkages) > 0 {
-		t.Errorf("the publication queue lost %d fragment(s) while the deposit window was "+
-			"shut: %v\nA fragment taken from the queue outside the window is refused by "+
-			"the airlock and cannot be resent, so it is publication work destroyed "+
-			"(DEC-020, DEC-022)", len(shrinkages), shrinkages)
+		t.Errorf("the queue lost %d fragment(s) while the deposit window was shut: %v\n"+
+			"A fragment taken outside the window is refused by the airlock and cannot "+
+			"be resent, so it is publication work destroyed (DEC-020, DEC-022)",
+			len(shrinkages), shrinkages)
 	}
 	if samples[len(samples)-1].fragments >= samples[0].fragments {
 		t.Errorf("the queue went from %d fragments to %d; a publisher that never drains "+

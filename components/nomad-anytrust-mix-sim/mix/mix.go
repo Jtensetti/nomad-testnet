@@ -6,9 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime"
-	"sync"
-	"sync/atomic"
 
 	"go.dedis.ch/kyber/v4"
 	"go.dedis.ch/kyber/v4/group/edwards25519"
@@ -112,53 +109,21 @@ func Encrypt(pub PublicKey, cells []PlainCell) (*Batch, error) {
 	}
 	b := &Batch{x: make([][]kyber.Point, ChunkCount), y: make([][]kyber.Point, ChunkCount)}
 
-	// One worker per chunk row, for the reason EncryptCell already does it:
-	// the rows are independent, and encrypting a batch is two scalar
-	// multiplications per row per column with nothing shared between them.
-	//
-	// The randomness is per worker rather than per batch. Each draws its own
-	// stream from the same source, so the r values are still independent and
-	// uniform -- what changes is which of them lands where, and that was never
-	// a property anything could rely on. Sharing one stream would also be a
-	// data race, and kyber's is not safe to share.
-	workers := runtime.GOMAXPROCS(0)
-	if workers > ChunkCount {
-		workers = ChunkCount
-	}
-	if workers < 1 {
-		workers = 1
-	}
-	var next atomic.Int64
-	var group sync.WaitGroup
-	group.Add(workers)
-	for worker := 0; worker < workers; worker++ {
-		go func() {
-			defer group.Done()
-			local := newSuite()
-			stream := local.RandomStream()
-			// h is only ever an operand here, but each worker takes its own
-			// copy rather than resting on that: a point implementation that
-			// cached anything internally would make the sharing a race, and
-			// a clone costs one allocation per worker.
-			localH := h.Clone()
-			for {
-				row := int(next.Add(1)) - 1
-				if row >= ChunkCount {
-					return
-				}
-				b.x[row] = make([]kyber.Point, len(cells))
-				b.y[row] = make([]kyber.Point, len(cells))
-				start := row * ChunkSize
-				for col := range cells {
-					message := local.Point().Embed(cells[col][start:start+ChunkSize], stream)
-					r := local.Scalar().Pick(stream)
-					b.x[row][col] = local.Point().Mul(r, nil)
-					b.y[row][col] = local.Point().Add(message, local.Point().Mul(r, localH))
-				}
-			}
-		}()
-	}
-	group.Wait()
+	// Rows are independent: two scalar multiplications per row per column,
+	// nothing shared. The r values stay independent and uniform; only which
+	// of them lands where changes, and nothing relies on that.
+	parallel(ChunkCount, func(l *lane, row int) {
+		b.x[row] = make([]kyber.Point, len(cells))
+		b.y[row] = make([]kyber.Point, len(cells))
+		h := h.Clone()
+		start := row * ChunkSize
+		for col := range cells {
+			message := l.point().Embed(cells[col][start:start+ChunkSize], l.stream)
+			r := l.scalar().Pick(l.stream)
+			b.x[row][col] = l.point().Mul(r, nil)
+			b.y[row][col] = l.point().Add(message, l.point().Mul(r, h))
+		}
+	})
 	return b, nil
 }
 
@@ -486,72 +451,42 @@ func encryptCellWithPadding(pub PublicKey, cell PlainCell, padding io.Reader) (W
 	// The eighteen rows are independent -- each is its own ElGamal encryption
 	// with its own ephemeral -- so they are encrypted in parallel.
 	//
-	// This is worth doing because of where the cost actually is. Measured on
-	// a 2.1 GHz Xeon, one cell takes about 36 ms, and 30 ms of that is
-	// kyber's Point.Embed: to put 28 bytes in a point's y-coordinate it picks
-	// a random candidate and multiplies by the group order to test subgroup
-	// membership, retrying until one lands. A random candidate is on the
-	// curve about half the time and in the prime-order subgroup one time in
-	// eight, so it discards roughly sixteen full scalar multiplications per
-	// chunk. The ElGamal itself -- two scalar multiplications per row -- is
-	// under 4 ms of the total. See DEC-0xx in nomad-protocol for the encoding
-	// choice that would remove the rejection loop rather than spread it.
+	// Most of the cost is not the ElGamal. Measured on a 2.1 GHz Xeon, 30 ms
+	// of a 36 ms cell is kyber's Point.Embed, whose rejection loop discards
+	// roughly sixteen scalar multiplications per chunk to find a point in the
+	// prime-order subgroup; the two multiplications per row are under 4 ms of
+	// it. A prime-order encoding would remove that loop rather than spread it.
 	//
-	// Doing this on the publisher's own machine, ahead of time, is safe for
-	// the emission invariant: the uplink queue is pull-only and a scheduler
-	// on a public clock decides when anything leaves. How long sealing took
-	// never reaches the wire.
+	// Sealing ahead of time is safe for the emission invariant: the uplink
+	// queue is pull-only and a scheduler on a public clock decides when
+	// anything leaves, so how long this took never reaches the wire.
 	type rowOutput struct {
 		encoded [2][]byte
 		err     error
 	}
 	rows := make([]rowOutput, ChunkCount)
-	workers := runtime.GOMAXPROCS(0)
-	if workers > ChunkCount {
-		workers = ChunkCount
-	}
-	if workers < 1 {
-		workers = 1
-	}
-	var next atomic.Int64
-	var group sync.WaitGroup
-	group.Add(workers)
-	for worker := 0; worker < workers; worker++ {
-		go func() {
-			defer group.Done()
-			// A suite and a random stream per worker: kyber's stream is not
-			// safe to share, and sharing one would serialise exactly the part
-			// this is parallelising.
-			local := newSuite()
-			stream := local.RandomStream()
-			for {
-				row := int(next.Add(1)) - 1
-				if row >= ChunkCount {
-					return
-				}
-				start := row * ChunkSize
-				message := local.Point().Embed(cell[start:start+ChunkSize], stream)
-				r := local.Scalar().Pick(stream)
-				// Same order as MarshalWire: x then y, per row.
-				for index, point := range []kyber.Point{
-					local.Point().Mul(r, nil),
-					local.Point().Add(message, local.Point().Mul(r, h)),
-				} {
-					encoded, err := point.MarshalBinary()
-					if err != nil {
-						rows[row].err = err
-						break
-					}
-					if len(encoded) != pointSize {
-						rows[row].err = errors.New("unexpected ciphertext point size")
-						break
-					}
-					rows[row].encoded[index] = encoded
-				}
+	parallel(ChunkCount, func(l *lane, row int) {
+		h := h.Clone()
+		start := row * ChunkSize
+		message := l.point().Embed(cell[start:start+ChunkSize], l.stream)
+		r := l.scalar().Pick(l.stream)
+		// Same order as MarshalWire: x then y, per row.
+		for index, point := range []kyber.Point{
+			l.point().Mul(r, nil),
+			l.point().Add(message, l.point().Mul(r, h)),
+		} {
+			encoded, err := point.MarshalBinary()
+			if err != nil {
+				rows[row].err = err
+				return
 			}
-		}()
-	}
-	group.Wait()
+			if len(encoded) != pointSize {
+				rows[row].err = errors.New("unexpected ciphertext point size")
+				return
+			}
+			rows[row].encoded[index] = encoded
+		}
+	})
 
 	offset := 0
 	for row := range rows {

@@ -18,54 +18,34 @@ import (
 // 1/publisherCount.
 const (
 	publisherCount = 4
-	// Each full-path trial runs a complete shuffle chain and a threshold
-	// decryption, so trials are the whole cost of this experiment. They are
-	// also the whole resolution of it, and the first version bought the cost
-	// down too far.
+	// Trials are the whole cost of this experiment and the whole resolution of
+	// it, and the first version bought the cost down too far. At 12 trials it
+	// was wrong in both directions at once, which is why neither half showed:
+	// it failed by chance about once in 1500 runs (the exact null is the
+	// fixed-point count of a uniform permutation of 4 summed over the trials,
+	// P(hits >= 25) = 6.7e-4), and it had only ~50% power against a doubled
+	// recovery rate. Too noisy to trust and too blunt to catch anything.
 	//
-	// It ran 12 trials -- 48 observations -- and failed when the recovered
-	// rate exceeded twice chance. Two things were wrong with that, and they
-	// pull in opposite directions, which is why neither was obvious.
-	//
-	// It failed by chance about once in 1500 runs. The exact null here is the
-	// fixed-point count of a uniform permutation of 4, summed over the trials;
-	// at 12 trials, P(hits >= 25) = 6.7e-4. That is often enough for a
-	// security gate to cry wolf, and the usual response to a security gate
-	// crying wolf is to loosen it.
-	//
-	// And it could barely detect the thing it exists to detect. Against a true
-	// recovery rate of 0.5 -- double the chance rate, a serious linkage defect
-	// -- a threshold of "more than twice chance" has about 50% power at 12
-	// trials, and a threshold strict enough to fix the false failures would
-	// have had 1.5%. The test was simultaneously too noisy to trust and too
-	// blunt to catch anything.
-	//
-	// Both are the same shortage. 40 measurement trials give 160 observations:
-	// the threshold below then fails by chance less than once in a million
-	// runs and still detects a doubled recovery rate 85% of the time. The
-	// control needs no such resolution -- full linkage scores 1.00, not
-	// something near a boundary -- so it stays cheap.
+	// 40 trials give 160 observations: the threshold below fails by chance
+	// less than once in a million runs and detects a doubled rate 85% of the
+	// time. The control needs no such resolution, so it stays cheap.
 	controlTrials = 12
 	trials        = 40
 )
 
 // falseFailureBudget is how often this experiment may fail when nothing is
-// wrong. It buys the threshold below, and it is stated rather than implied so
-// that a later change to publisherCount or trials cannot quietly move it.
+// wrong. Stated rather than implied, so a later change to publisherCount or
+// trials cannot quietly move it.
 const falseFailureBudget = 1e-6
 
 // nullHitCutoff is the smallest number of position hits whose probability
 // under anonymity is at most falseFailureBudget.
 //
-// It is computed rather than written down. A magic number here would be a
-// number nobody could check, and the first version's "twice chance" was
-// exactly that: a threshold with no stated relationship to the distribution it
-// was thresholding.
-//
-// The null is exact. Under anonymity the released order is a uniform
-// permutation of the publishers, so per trial the adversary's hits are that
-// permutation's fixed-point count; the distribution over trials is that pmf
-// convolved with itself. Enumerating publisherCount! permutations is exact and
+// Computed rather than written down: a magic number here would be one nobody
+// could check, which is what the first version's "twice chance" was. The null
+// is exact -- under anonymity the released order is a uniform permutation, so
+// per-trial hits are its fixed-point count and the distribution over trials is
+// that pmf convolved with itself. Enumerating publisherCount! permutations
 // costs nothing at this size.
 func nullHitCutoff(publishers, trialCount int, budget float64) int {
 	perTrial := make([]float64, publishers+1)

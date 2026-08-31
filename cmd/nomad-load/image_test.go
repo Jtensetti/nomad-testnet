@@ -19,16 +19,11 @@ var notShipped = map[string]string{
 	"nomad-entry":       "the entry operator service, not part of the relay fabric image",
 }
 
-// The image's contents, checked in both directions.
+// The image's contents, checked in both directions. A command missing from the
+// Dockerfile is a service the deployment cannot run; one that should not ship
+// but does is quieter and worse, since nothing fails at all.
 //
-// A command missing from the Dockerfile is a service the deployment cannot
-// run, and the failure surfaces as a container that exits immediately with
-// "executable file not found" -- long after the change that caused it. A
-// command that should not ship but does is worse and quieter: nothing fails,
-// and the release carries a tool it was never meant to.
-//
-// This lives here because nomad-load is the reason it exists. The check is
-// about the whole cmd/ tree.
+// This lives here because nomad-load is the reason it exists.
 func TestTheImageBuildsEveryCommandThatShouldShipAndNoneThatShouldNot(t *testing.T) {
 	dockerfile, err := os.ReadFile("../../Dockerfile")
 	if err != nil {
@@ -56,10 +51,10 @@ func TestTheImageBuildsEveryCommandThatShouldShipAndNoneThatShouldNot(t *testing
 				"not shipped because it is %s. Either the exclusion is wrong or the "+
 				"image now carries something it should not", name, reason)
 		case !built && !excluded:
-			t.Errorf("the Dockerfile does not build %s, and it is not listed as "+
-				"deliberately excluded. A deployment that needs it gets a container "+
-				"that exits with \"executable file not found\"; if it is not meant to "+
-				"ship, say so in notShipped with the reason", name)
+			t.Errorf("the Dockerfile does not build %s and notShipped does not list "+
+				"it. A deployment that needs it gets a container that exits with "+
+				"\"executable file not found\"; if it should not ship, say so with "+
+				"the reason", name)
 		}
 	}
 

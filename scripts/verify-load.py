@@ -9,17 +9,14 @@ fabric port.
 
 Two failures this is built to avoid, both of which look like success:
 
-  - a flood that never arrived. Then the loaded window is a second quiet
-    window, the cadence matches trivially, and the gate reports that load
-    changed nothing. So the flood is required to be visible ON THE WIRE, in
-    the same capture the cadence is read from -- not inferred from the
-    generator's own report, and not only from a counter inside the process
-    under test.
-  - a cadence comparison loose enough to accept anything. The per-sender means
-    must agree within a stated tolerance, and every sender present in the
-    quiet window must still be emitting in the loaded one. A sender that fell
-    silent under load is the failure this exists to catch, and a comparison
-    over whoever happens to be present would miss it entirely.
+  - a flood that never arrived, which makes the loaded window a second quiet
+    one that matches trivially. So the flood must be visible ON THE WIRE, in
+    the capture the cadence is read from -- not taken from the generator's own
+    report, and not only from a counter inside the process under test.
+  - a cadence comparison loose enough to accept anything. Per-sender means must
+    agree within a stated tolerance, and every sender present in the quiet
+    window must still be emitting in the loaded one; a comparison over whoever
+    happens to be present would miss a node that fell silent.
 """
 
 import argparse

@@ -1,25 +1,20 @@
 // Command nomad-load floods one UDP endpoint at a fixed rate, for this
 // project's own load gate and nothing else.
 //
-// It exists because PROD-14 claims a resource limit does not change what a
-// node emits, and every measurement behind that claim was in-process: a
-// goroutine writing to a channel is not a network interface, and a test binary
-// holding both ends is not a composed deployment. The claim needs the real
-// stack under real load with a capture of a real interface, and nothing here
+// PROD-14 claims a resource limit does not change what a node emits, and every
+// measurement behind that claim was in-process. The claim needs the real stack
+// under real load with a capture of a real interface, and nothing here
 // generated load.
 //
-// It is deliberately NOT in the container image. The Dockerfile builds the
-// nine commands a deployment runs; a release image has no business carrying a
-// flood generator, and the load gate runs this from the host against the
-// compose bridge instead. Nothing in deploy/ references it.
+// It is deliberately NOT in the container image -- a release has no business
+// carrying a flood generator -- so the gate runs it from the host against the
+// compose bridge. cmd/nomad-load/image_test.go enforces that.
 //
-// What it sends is uniform random bytes of the cell size. That is the
-// expensive case for the receiver and the honest one for this claim: a
-// wrong-size datagram is rejected on a length comparison, while a correctly
-// sized one from an unrecognised source costs the peer lookup before it is
-// refused. It cannot be mistaken for work -- it authenticates against nothing
-// -- so the gate measures the cost of rejecting load, not the cost of
-// carrying it.
+// It sends uniform random bytes of the cell size, which is the expensive case
+// for the receiver: a wrong-size datagram is rejected on a length comparison,
+// while a correctly sized one from an unrecognised source costs the peer
+// lookup first. It authenticates against nothing, so the gate measures the
+// cost of rejecting load rather than of carrying it.
 package main
 
 import (
@@ -33,10 +28,8 @@ import (
 	"time"
 )
 
-// maximumRate bounds what this can be pointed at anything with. The load gate
-// needs thousands per second, not millions, and a tool that will happily
-// saturate a link because a flag had an extra digit is a tool that eventually
-// does.
+// maximumRate bounds this: the gate needs thousands per second, and a tool
+// that saturates a link because a flag had an extra digit eventually will.
 const maximumRate = 200_000
 
 type report struct {
@@ -93,9 +86,8 @@ func run() error {
 		return err
 	}
 
-	// Sent in bursts on a ticker rather than one datagram per timer tick: at
-	// several thousand a second a per-datagram timer costs more than the send
-	// does, and the resulting rate would measure the timer.
+	// Bursts on a ticker, not one datagram per tick: at thousands a second a
+	// per-datagram timer costs more than the send, and would measure itself.
 	const tick = 5 * time.Millisecond
 	perTick := *rate * int(tick) / int(time.Second)
 	if perTick < 1 {
@@ -137,8 +129,8 @@ func run() error {
 			return err
 		}
 	}
-	// A run that sent nothing is a run that measured nothing, and the gate
-	// reading this report must not have to infer that from a zero.
+	// A run that sent nothing measured nothing; the gate must not infer that
+	// from a zero.
 	if summary.Sent == 0 {
 		return fmt.Errorf("sent no datagrams to %s in %s", *target, *duration)
 	}

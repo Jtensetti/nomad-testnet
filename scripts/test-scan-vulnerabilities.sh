@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 # Prove the vulnerability gate fails closed.
 #
-# The gate's whole value is the difference between "scanned, found nothing"
-# and "could not scan". That difference is one grep on an error message, so it
-# is the kind of thing that rots silently: a wording change upstream, or a
-# well-meant `|| true`, and the step goes green on days the database is down.
-# These four cases are cheap and they pin it.
-#
-# govulncheck is stubbed. This tests the wrapper's decisions, not the scanner.
+# The gate's value is the difference between "scanned, found nothing" and
+# "could not scan", and that difference is one grep on an error message -- a
+# wording change upstream, or a well-meant `|| true`, and the step goes green
+# on the days the database is down. govulncheck is stubbed here: this tests the
+# wrapper's decisions, not the scanner.
 
 set -euo pipefail
 

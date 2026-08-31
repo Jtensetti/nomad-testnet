@@ -6,9 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"runtime"
-	"sync"
-	"sync/atomic"
 
 	"go.dedis.ch/kyber/v4"
 	"go.dedis.ch/kyber/v4/proof"
@@ -299,18 +296,13 @@ func CreatePartialDecryption(committee ThresholdCommittee, member MemberSecret, 
 	}
 	predicates := []proof.Predicate{proof.Rep("member-public", "share", "base")}
 
-	// The scalar multiplications are computed across cores; the proof is not.
+	// The scalar multiplications are split across cores; the proof is not.
+	// The rest of this call is proof.HashProve over the conjunction, which is
+	// kyber's to parallelise: a proof assembled by reaching into another
+	// library's prover is a proof nobody can review.
 	//
-	// This member multiplies its secret share into every ciphertext point in
-	// the batch -- ChunkCount by batch width of them, independent of each
-	// other and, at roughly 43% of this call, the largest part of it that can
-	// be split. The rest is proof.HashProve over the conjunction, which is
-	// kyber's to parallelise and not this package's: a proof assembled by
-	// reaching into another library's prover is a proof nobody can review.
-	//
-	// The predicate list, the point names and their order are built afterwards
-	// in exactly the sequence they were built in before, so the proof this
-	// produces is the proof it produced before.
+	// Names and predicate order are built afterwards in the sequence they
+	// were built in before, so this produces the proof it produced before.
 	type product struct {
 		point   kyber.Point
 		encoded [pointSize]byte
@@ -318,43 +310,20 @@ func CreatePartialDecryption(committee ThresholdCommittee, member MemberSecret, 
 	}
 	width := batch.Len()
 	products := make([]product, ChunkCount*width)
-	workers := runtime.GOMAXPROCS(0)
-	if workers > len(products) {
-		workers = len(products)
-	}
-	if workers < 1 {
-		workers = 1
-	}
-	var nextProduct atomic.Int64
-	var productGroup sync.WaitGroup
-	productGroup.Add(workers)
-	for worker := 0; worker < workers; worker++ {
-		go func() {
-			defer productGroup.Done()
-			local := newSuite()
-			localSecret := secret.Clone()
-			for {
-				index := int(nextProduct.Add(1)) - 1
-				if index >= len(products) {
-					return
-				}
-				cipher := batch.x[index/width][index%width]
-				partialPoint := local.Point().Mul(localSecret, cipher)
-				encoded, err := partialPoint.MarshalBinary()
-				if err != nil {
-					products[index].err = err
-					continue
-				}
-				if len(encoded) != pointSize {
-					products[index].err = errors.New("unexpected partial-decryption point size")
-					continue
-				}
-				products[index].point = partialPoint
-				copy(products[index].encoded[:], encoded)
-			}
-		}()
-	}
-	productGroup.Wait()
+	parallel(len(products), func(l *lane, index int) {
+		secret := secret.Clone()
+		point := l.point().Mul(secret, batch.x[index/width][index%width])
+		encoded, err := point.MarshalBinary()
+		switch {
+		case err != nil:
+			products[index].err = err
+		case len(encoded) != pointSize:
+			products[index].err = errors.New("unexpected partial-decryption point size")
+		default:
+			products[index].point = point
+			copy(products[index].encoded[:], encoded)
+		}
+	})
 
 	pointIndex := 0
 	for row := 0; row < ChunkCount; row++ {
@@ -489,7 +458,7 @@ func ThresholdDecryptColumns(committee ThresholdCommittee, batch *Batch, partial
 	if err != nil {
 		return nil, err
 	}
-	return recoverColumns(newSuite(), committee, batch, decoded)
+	return recoverColumns(committee, batch, decoded)
 }
 
 func verifiedPartialPoints(committee ThresholdCommittee, batch *Batch,
@@ -497,58 +466,33 @@ func verifiedPartialPoints(committee ThresholdCommittee, batch *Batch,
 	if len(partials) < int(committee.Threshold) {
 		return nil, errors.New("not enough partial decryptions")
 	}
-	// Each partial is verified and decoded independently, so they are done in
-	// parallel. Verifying one is a non-interactive proof over every point in
-	// the batch, and doing three of them one after another was the largest
-	// single cost in a release.
+	// Partials are verified in parallel: each is a proof over every point in
+	// the batch, and three in series was the largest cost in a release.
 	//
-	// The refusals are unchanged, including WHICH refusal a caller sees. The
-	// results are collected per partial and then walked in the original slice
-	// order, so a batch with both an invalid partial and a duplicate member
-	// still reports the one it reported before. An error whose identity
-	// depends on goroutine scheduling is not a check, it is a coin toss.
+	// Results are then walked in slice order, so a batch carrying both an
+	// invalid partial and a duplicated member reports the fault it reported
+	// before. An error whose identity depends on scheduling is a coin toss.
 	type verified struct {
 		points []kyber.Point
 		err    error
 	}
 	results := make([]verified, len(partials))
-	workers := runtime.GOMAXPROCS(0)
-	if workers > len(partials) {
-		workers = len(partials)
-	}
-	if workers < 1 {
-		workers = 1
-	}
-	var next atomic.Int64
-	var group sync.WaitGroup
-	group.Add(workers)
-	for worker := 0; worker < workers; worker++ {
-		go func() {
-			defer group.Done()
-			local := newSuite()
-			for {
-				index := int(next.Add(1)) - 1
-				if index >= len(partials) {
-					return
-				}
-				partial := partials[index]
-				if err := VerifyPartialDecryption(committee, batch, partial); err != nil {
-					results[index].err = err
-					continue
-				}
-				points := make([]kyber.Point, len(partial.Points))
-				for point := range partial.Points {
-					points[point] = local.Point()
-					if err := points[point].UnmarshalBinary(partial.Points[point][:]); err != nil {
-						results[index].err = err
-						break
-					}
-				}
-				results[index].points = points
+	parallel(len(partials), func(l *lane, index int) {
+		partial := partials[index]
+		if err := VerifyPartialDecryption(committee, batch, partial); err != nil {
+			results[index].err = err
+			return
+		}
+		points := make([]kyber.Point, len(partial.Points))
+		for i := range partial.Points {
+			points[i] = l.point()
+			if err := points[i].UnmarshalBinary(partial.Points[i][:]); err != nil {
+				results[index].err = err
+				return
 			}
-		}()
-	}
-	group.Wait()
+		}
+		results[index].points = points
+	})
 
 	seen := make(map[uint32]struct{}, len(partials))
 	decoded := make(map[uint32][]kyber.Point, len(partials))
@@ -587,65 +531,40 @@ func verifiedPartialPoints(committee ThresholdCommittee, batch *Batch,
 // A column that fails to decrypt still fails only itself, which is the
 // property ThresholdDecryptColumns exists for; a recovery failure is still a
 // committee-level fault and still fails the whole call.
-func recoverColumns(s proof.Suite, committee ThresholdCommittee, batch *Batch,
+func recoverColumns(committee ThresholdCommittee, batch *Batch,
 	decoded map[uint32][]kyber.Point) ([]DecryptedCell, error) {
 	columns := batch.Len()
 	out := make([]DecryptedCell, columns)
 	failures := make([]error, columns)
-
-	workers := runtime.GOMAXPROCS(0)
-	if workers > columns {
-		workers = columns
-	}
-	if workers < 1 {
-		workers = 1
-	}
-	var next atomic.Int64
-	var group sync.WaitGroup
-	group.Add(workers)
-	for worker := 0; worker < workers; worker++ {
-		go func() {
-			defer group.Done()
-			local := newSuite()
-			for {
-				col := int(next.Add(1)) - 1
-				if col >= columns {
-					return
-				}
-				for row := 0; row < ChunkCount; row++ {
-					pointIndex := row*columns + col
-					publicShares := make([]*share.PubShare, 0, len(decoded))
-					for memberIndex, points := range decoded {
-						publicShares = append(publicShares,
-							&share.PubShare{I: memberIndex, V: points[pointIndex]})
-					}
-					sharedPoint, err := share.RecoverCommit(local, publicShares,
-						committee.Threshold, uint32(len(committee.Members)))
-					if err != nil {
-						// Share recovery failing is a committee-level fault
-						// rather than a property of this column, so it fails
-						// the call.
-						failures[col] = fmt.Errorf(
-							"recover shared point for cell %d chunk %d: %w", col, row, err)
-						break
-					}
-					message := local.Point().Sub(batch.y[row][col], sharedPoint)
-					data, err := message.Data()
-					if err != nil {
-						out[col].Err = fmt.Errorf("decrypt cell %d chunk %d: %w", col, row, err)
-						break
-					}
-					if len(data) != ChunkSize {
-						out[col].Err = fmt.Errorf("decrypt cell %d chunk %d: got %d bytes",
-							col, row, len(data))
-						break
-					}
-					copy(out[col].Cell[row*ChunkSize:], data)
-				}
+	parallel(columns, func(l *lane, col int) {
+		for row := 0; row < ChunkCount; row++ {
+			pointIndex := row*columns + col
+			shares := make([]*share.PubShare, 0, len(decoded))
+			for member, points := range decoded {
+				shares = append(shares, &share.PubShare{I: member, V: points[pointIndex]})
 			}
-		}()
-	}
-	group.Wait()
+			sharedPoint, err := share.RecoverCommit(l.suite, shares,
+				committee.Threshold, uint32(len(committee.Members)))
+			if err != nil {
+				// A recovery failure is a committee-level fault, not a
+				// property of this column, so it fails the whole call.
+				failures[col] = fmt.Errorf(
+					"recover shared point for cell %d chunk %d: %w", col, row, err)
+				return
+			}
+			data, err := l.point().Sub(batch.y[row][col], sharedPoint).Data()
+			if err != nil {
+				out[col].Err = fmt.Errorf("decrypt cell %d chunk %d: %w", col, row, err)
+				return
+			}
+			if len(data) != ChunkSize {
+				out[col].Err = fmt.Errorf("decrypt cell %d chunk %d: got %d bytes",
+					col, row, len(data))
+				return
+			}
+			copy(out[col].Cell[row*ChunkSize:], data)
+		}
+	})
 	// Reported in column order rather than in whichever order the workers
 	// finished, so the error a caller sees does not depend on scheduling.
 	for _, err := range failures {
