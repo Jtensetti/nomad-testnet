@@ -111,18 +111,54 @@ func Encrypt(pub PublicKey, cells []PlainCell) (*Batch, error) {
 		return nil, err
 	}
 	b := &Batch{x: make([][]kyber.Point, ChunkCount), y: make([][]kyber.Point, ChunkCount)}
-	stream := s.RandomStream()
-	for row := 0; row < ChunkCount; row++ {
-		b.x[row] = make([]kyber.Point, len(cells))
-		b.y[row] = make([]kyber.Point, len(cells))
-		for col := range cells {
-			start := row * ChunkSize
-			message := s.Point().Embed(cells[col][start:start+ChunkSize], stream)
-			r := s.Scalar().Pick(stream)
-			b.x[row][col] = s.Point().Mul(r, nil)
-			b.y[row][col] = s.Point().Add(message, s.Point().Mul(r, h))
-		}
+
+	// One worker per chunk row, for the reason EncryptCell already does it:
+	// the rows are independent, and encrypting a batch is two scalar
+	// multiplications per row per column with nothing shared between them.
+	//
+	// The randomness is per worker rather than per batch. Each draws its own
+	// stream from the same source, so the r values are still independent and
+	// uniform -- what changes is which of them lands where, and that was never
+	// a property anything could rely on. Sharing one stream would also be a
+	// data race, and kyber's is not safe to share.
+	workers := runtime.GOMAXPROCS(0)
+	if workers > ChunkCount {
+		workers = ChunkCount
 	}
+	if workers < 1 {
+		workers = 1
+	}
+	var next atomic.Int64
+	var group sync.WaitGroup
+	group.Add(workers)
+	for worker := 0; worker < workers; worker++ {
+		go func() {
+			defer group.Done()
+			local := newSuite()
+			stream := local.RandomStream()
+			// h is only ever an operand here, but each worker takes its own
+			// copy rather than resting on that: a point implementation that
+			// cached anything internally would make the sharing a race, and
+			// a clone costs one allocation per worker.
+			localH := h.Clone()
+			for {
+				row := int(next.Add(1)) - 1
+				if row >= ChunkCount {
+					return
+				}
+				b.x[row] = make([]kyber.Point, len(cells))
+				b.y[row] = make([]kyber.Point, len(cells))
+				start := row * ChunkSize
+				for col := range cells {
+					message := local.Point().Embed(cells[col][start:start+ChunkSize], stream)
+					r := local.Scalar().Pick(stream)
+					b.x[row][col] = local.Point().Mul(r, nil)
+					b.y[row][col] = local.Point().Add(message, local.Point().Mul(r, localH))
+				}
+			}
+		}()
+	}
+	group.Wait()
 	return b, nil
 }
 
