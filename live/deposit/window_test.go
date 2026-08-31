@@ -1,7 +1,9 @@
 package deposit
 
 import (
+	"crypto/rand"
 	"errors"
+	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"testing"
 	"time"
 
@@ -297,5 +299,54 @@ func TestASequenceIsNeverSealedTwice(t *testing.T) {
 	}
 	if _, err := drain.Emit(0); err == nil {
 		t.Fatal("sequence zero was accepted; seal refuses it and so must this")
+	}
+}
+
+// A seal that fails must not cost the fragment.
+//
+// Emit takes the fragment off the buffer before it can seal it, and Queue.Next
+// unlinked it from disk before that, so an early return on a seal error
+// destroys publication work for a reason that has nothing to do with the
+// deposit window. That is the loss DEC-022 exists to prevent, reached down a
+// different path.
+func TestASealFailureDoesNotCostTheFragment(t *testing.T) {
+	queue := newQueue(t, `{"title":"kept","body":"ffff"}`)
+
+	// An all-zero committee key is a small-order point, which mix refuses, so
+	// every seal on this session fails.
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		t.Fatal(err)
+	}
+	var digest [32]byte
+	copy(digest[:], []byte("seal-failure-topology-digest----"))
+	var unusable mix.PublicKey
+	session, err := uplink.NewSession(secret, unusable, uplink.Context{
+		NetworkID: "seal-failure", Epoch: 3, TopologyDigest: digest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain := newTestDrain(t, session, queue, testDepositInstant())
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(drain.ready) == 0 {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if len(drain.ready) == 0 {
+		t.Fatal("the buffer never filled, so the case under test did not arise")
+	}
+
+	for sequence := uint64(1); sequence <= 5; sequence++ {
+		if _, err := drain.Emit(sequence); err == nil {
+			t.Fatalf("emit %d sealed with an unusable committee key", sequence)
+		}
+		if len(drain.ready) == 0 {
+			t.Fatalf("the fragment was destroyed by a failed seal on emit %d; "+
+				"it is off the durable queue and nothing else holds it", sequence)
+		}
+	}
+	if work, _ := drain.Counts(); work != 0 {
+		t.Fatalf("counted %d work emissions that never left", work)
 	}
 }

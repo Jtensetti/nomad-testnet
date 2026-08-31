@@ -203,6 +203,17 @@ func (drain *Drain) Emit(sequence uint64) (fabric.Cell, error) {
 			copy(payload[:], fragment.Payload[:])
 			cell, err := drain.session.SealWork(sequence, payload)
 			if err != nil {
+				// The receive already took it off the buffer, and Queue.Next
+				// unlinked it before that, so returning early here would
+				// destroy the fragment for a reason that has nothing to do
+				// with the deposit window -- the same loss DEC-022 exists to
+				// prevent, arriving down a different path. The buffer holds
+				// one slot and this emptied it, so the send only fails if
+				// fill refilled it first, and then nothing was idle anyway.
+				select {
+				case drain.ready <- fragment:
+				default:
+				}
 				return fabric.Cell{}, err
 			}
 			drain.count(emissionWork)
