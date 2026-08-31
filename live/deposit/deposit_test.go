@@ -3,12 +3,12 @@ package deposit
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/binary"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/Jtensetti/nomad-constant-rate-fabric/fabric"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"github.com/Jtensetti/nomad-testnet/live/airlock"
@@ -87,6 +87,31 @@ func newPathFixture(t *testing.T) *pathFixture {
 	copy(sessionID[:], []byte("uplink-session-identifier-------1"))
 	return &pathFixture{committee: committee, members: members, session: session,
 		sessionID: sessionID, airlock: lock, ingress: ingress, now: now}
+}
+
+// emitTicks drives one tick per sequence and returns the cleartext sequence
+// prefix an observer reads off each emitted cell.
+//
+// The prefix is read back out of the cell rather than copied from the loop
+// variable, or a comparison between two runs is a comparison between two
+// copies of the same counter. Cell length is not part of what is returned:
+// fabric.Cell is a fixed-size array, so every cell is CellSize bytes by
+// construction and asserting it only restates the type.
+//
+// Both runs of a comparison are paced identically, so that one drain is not
+// given more wall-clock to refill its buffer than the other.
+func emitTicks(t *testing.T, label string, drain *Drain, ticks int) []uint64 {
+	t.Helper()
+	prefixes := make([]uint64, 0, ticks)
+	for sequence := uint64(1); sequence <= uint64(ticks); sequence++ {
+		cell, err := drain.Emit(sequence)
+		if err != nil {
+			t.Fatalf("%s tick %d: %v", label, sequence, err)
+		}
+		prefixes = append(prefixes, binary.BigEndian.Uint64(cell[:uplink.SequenceSize]))
+		time.Sleep(time.Millisecond)
+	}
+	return prefixes
 }
 
 func newQueue(t *testing.T, objects ...string) *publish.Queue {
@@ -169,31 +194,11 @@ func TestEmissionCountDoesNotDependOnHavingWork(t *testing.T) {
 	idle := newPathFixture(t)
 	idleDrain := newTestDrain(t, idle.session, nil, idle.now)
 
-	busyCells, idleCells := 0, 0
-	for sequence := uint64(1); sequence <= ticks; sequence++ {
-		cell, err := busyDrain.Emit(sequence)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(cell) != fabric.CellSize {
-			t.Fatalf("busy tick %d emitted %d bytes", sequence, len(cell))
-		}
-		busyCells++
-		time.Sleep(time.Millisecond)
-	}
-	for sequence := uint64(1); sequence <= ticks; sequence++ {
-		cell, err := idleDrain.Emit(sequence)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(cell) != fabric.CellSize {
-			t.Fatalf("idle tick %d emitted %d bytes", sequence, len(cell))
-		}
-		idleCells++
-	}
-	if busyCells != idleCells {
-		t.Fatalf("a busy publisher emitted %d cells and an idle one %d",
-			busyCells, idleCells)
+	busyCells := emitTicks(t, "busy", busyDrain, ticks)
+	idleCells := emitTicks(t, "idle", idleDrain, ticks)
+	if !slices.Equal(busyCells, idleCells) {
+		t.Fatalf("a busy publisher and an idle one are separable on the wire:\n"+
+			" busy %v\n idle %v", busyCells, idleCells)
 	}
 	if work, _ := busyDrain.Counts(); work == 0 {
 		t.Fatal("the busy drain never carried work, so the comparison is vacuous")
@@ -224,26 +229,29 @@ func TestEntryOperatorCannotTellWorkFromCover(t *testing.T) {
 	f := newPathFixture(t)
 	drain := newTestDrain(t, f.session, newQueue(t, `{"title":"secret","body":"zzzz"}`), f.now)
 
-	sizes := map[int]int{}
+	// What the operator can actually compute from the cell is the inner
+	// ciphertext. Its length is fixed by the type, so the claim worth testing
+	// is that work and cover ciphertexts come from one distribution: none is a
+	// recognisable constant, and none repeats.
+	seen := map[[uplink.InnerSize]byte]uint64{}
 	for sequence := uint64(1); sequence <= 30; sequence++ {
 		cell, err := drain.Emit(sequence)
 		if err != nil {
 			t.Fatal(err)
 		}
-		sizes[len(cell)]++
-		// What the operator can actually compute from the cell is the inner
-		// ciphertext, and it is the same length either way.
 		_, inner, err := f.session.Open(cell)
 		if err != nil {
 			t.Fatalf("tick %d: %v", sequence, err)
 		}
-		if len(inner) != airlock.DepositSize {
-			t.Fatalf("tick %d: inner layer is %d bytes", sequence, len(inner))
+		if inner == ([uplink.InnerSize]byte{}) {
+			t.Fatalf("tick %d: the inner layer is all zero, which marks it as cover", sequence)
 		}
+		if earlier, repeat := seen[inner]; repeat {
+			t.Fatalf("ticks %d and %d carry the same inner ciphertext, so the "+
+				"operator can group cells without decrypting them", earlier, sequence)
+		}
+		seen[inner] = sequence
 		time.Sleep(time.Millisecond)
-	}
-	if len(sizes) != 1 {
-		t.Fatalf("cells came in %d distinct sizes: %v", len(sizes), sizes)
 	}
 	if work, cover := drain.Counts(); work == 0 || cover == 0 {
 		t.Fatalf("the run was not mixed (work=%d cover=%d), so nothing was compared",

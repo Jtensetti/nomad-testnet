@@ -292,9 +292,6 @@ func TestAHandshakeIsTheSameShapeAsAnyOtherUplinkCell(t *testing.T) {
 		t.Fatal(err)
 	}
 	handshake := initiator.Cell()
-	if len(handshake) != fabric.CellSize {
-		t.Fatalf("a handshake is %d bytes", len(handshake))
-	}
 
 	var payload [PayloadSize]byte
 	copy(payload[:], "a publication fragment")
@@ -302,8 +299,14 @@ func TestAHandshakeIsTheSameShapeAsAnyOtherUplinkCell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(work) != len(handshake) {
-		t.Fatal("a handshake and a work cell are different lengths")
+	// Equal length is a type-level guarantee -- Cell and SealWork both return a
+	// fabric.Cell -- so it is not what this test can add. What it can add is
+	// that neither cell carries something an observer could sort them by.
+	if work == handshake {
+		t.Fatal("a work cell and a handshake are byte-identical")
+	}
+	if bytes.Contains(work[:], []byte("a publication fragment")) {
+		t.Fatal("the work cell carries its fragment in plaintext")
 	}
 
 	// The ephemeral key is in the clear, so it must not be something an

@@ -3,9 +3,11 @@ package deposit
 import (
 	"crypto/rand"
 	"errors"
-	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 
 	"github.com/Jtensetti/nomad-testnet/live/publish"
 	"github.com/Jtensetti/nomad-testnet/live/uplink"
@@ -216,17 +218,15 @@ func TestABufferedFragmentIsHeldAcrossTheCutoffAndSentWhenTheWindowReopens(t *te
 }
 
 // The gate must not become a wire signal. Whatever the window and whatever the
-// queue, a tick produces exactly one cell of one size, and the sequence
-// advances by one -- so an observer counting cells or reading the cleartext
-// sequence prefix learns the same thing in all four combinations.
+// queue, a tick produces exactly one cell and the cleartext sequence prefix
+// advances by one, so an observer counting cells or reading the prefix learns
+// the same thing in all four combinations.
+//
+// Cell size is deliberately not compared: fabric.Cell is a fixed-size array,
+// so a size assertion restates the type rather than testing the drain.
 func TestTheWindowGateIsInvisibleOnTheWire(t *testing.T) {
 	const ticks = 40
-	type run struct {
-		name  string
-		cells []fabricCell
-	}
-	var runs []run
-	for _, situation := range []struct {
+	situations := []struct {
 		name    string
 		objects []string
 		at      time.Time
@@ -235,7 +235,9 @@ func TestTheWindowGateIsInvisibleOnTheWire(t *testing.T) {
 		{"work, window shut", []string{`{"title":"a","body":"aaaa"}`}, testShutInstant()},
 		{"no work, window open", nil, testDepositInstant()},
 		{"no work, window shut", nil, testShutInstant()},
-	} {
+	}
+	observed := make([][]uint64, len(situations))
+	for index, situation := range situations {
 		f := newPathFixture(t)
 		var queue *publish.Queue
 		if situation.objects != nil {
@@ -243,34 +245,14 @@ func TestTheWindowGateIsInvisibleOnTheWire(t *testing.T) {
 		}
 		drain := newTestDrain(t, f.session, queue, situation.at)
 		time.Sleep(50 * time.Millisecond)
-		cells := make([]fabricCell, 0, ticks)
-		for sequence := uint64(1); sequence <= ticks; sequence++ {
-			cell, err := drain.Emit(sequence)
-			if err != nil {
-				t.Fatalf("%s: %v", situation.name, err)
-			}
-			cells = append(cells, fabricCell{sequence: sequence, size: len(cell)})
-		}
-		runs = append(runs, run{name: situation.name, cells: cells})
+		observed[index] = emitTicks(t, situation.name, drain, ticks)
 	}
-	for _, candidate := range runs[1:] {
-		if len(candidate.cells) != len(runs[0].cells) {
-			t.Fatalf("%q emitted %d cells, %q emitted %d", candidate.name,
-				len(candidate.cells), runs[0].name, len(runs[0].cells))
-		}
-		for i := range candidate.cells {
-			if candidate.cells[i] != runs[0].cells[i] {
-				t.Fatalf("%q differs from %q at cell %d: %+v vs %+v",
-					candidate.name, runs[0].name, i,
-					candidate.cells[i], runs[0].cells[i])
-			}
+	for index, candidate := range observed[1:] {
+		if !slices.Equal(candidate, observed[0]) {
+			t.Fatalf("%q is separable from %q on the wire:\n %v\n %v",
+				situations[index+1].name, situations[0].name, candidate, observed[0])
 		}
 	}
-}
-
-type fabricCell struct {
-	sequence uint64
-	size     int
 }
 
 // The retransmission DEC-020 proposed, refused where it would be written.

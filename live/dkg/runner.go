@@ -114,7 +114,7 @@ func Run(ctx context.Context, network topology.Verified, secrets topology.Verifi
 	select {
 	case outcome := <-protocol.WaitEnd():
 		if outcome.Error != nil {
-			return RunResult{}, fmt.Errorf("Pedersen DKG failed: %w", outcome.Error)
+			return RunResult{}, fmt.Errorf("the Pedersen DKG did not complete: %w", outcome.Error)
 		}
 		protocolResult = outcome.Result
 	case err := <-store.Fatal():
@@ -125,7 +125,7 @@ func Run(ctx context.Context, network topology.Verified, secrets topology.Verifi
 		return RunResult{}, ctx.Err()
 	}
 	if protocolResult == nil {
-		return RunResult{}, errors.New("Pedersen DKG returned no result")
+		return RunResult{}, errors.New("the Pedersen DKG completed without a result")
 	}
 	if len(protocolResult.QUAL) != len(network.Document.Operators) {
 		return RunResult{}, errors.New("fail-closed DKG activation requires every configured operator in QUAL")

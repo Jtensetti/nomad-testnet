@@ -92,10 +92,12 @@ func publicationWorld(t *testing.T, label string, queue *publish.Queue,
 		// the schedule said it should. Synthesising it from the tick index
 		// would make every capture perfectly regular by construction and the
 		// inter-arrival comparison would report agreement it never measured.
+		// The observer measures the datagram, not its meaning, and every
+		// fabric datagram carries exactly one cell.
+		datagram := cell[:]
 		capture.Add(wire.Packet{
-			At: time.Now(),
-			// The observer measures the cell, not its meaning.
-			Size:        len(cell),
+			At:          time.Now(),
+			Size:        len(datagram),
 			Source:      "10.0.0.2.4200",
 			Destination: "10.0.0.3.4200",
 		})

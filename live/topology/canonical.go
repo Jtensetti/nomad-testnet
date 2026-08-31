@@ -131,10 +131,7 @@ func writeCanonicalNumber(out *bytes.Buffer, number json.Number) error {
 	if literal == "" {
 		return errors.New("canonical encoding: empty number")
 	}
-	body := literal
-	if strings.HasPrefix(body, "-") {
-		body = body[1:]
-	}
+	body := strings.TrimPrefix(literal, "-")
 	if body == "" {
 		return fmt.Errorf("canonical encoding: %q is not an integer", literal)
 	}

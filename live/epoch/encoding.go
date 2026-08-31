@@ -17,12 +17,6 @@ import (
 // strings and lists, no floats, absent optional fields encode as zero length.
 // JSON is transport/storage only and is never hashed or signed directly.
 
-func appendUint32(out []byte, value uint32) []byte {
-	var buffer [4]byte
-	binary.BigEndian.PutUint32(buffer[:], value)
-	return append(out, buffer[:]...)
-}
-
 func appendUint64(out []byte, value uint64) []byte {
 	var buffer [8]byte
 	binary.BigEndian.PutUint64(buffer[:], value)
