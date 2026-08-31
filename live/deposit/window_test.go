@@ -140,11 +140,11 @@ func TestWorkIsTakenFromTheQueueInsideTheWindow(t *testing.T) {
 	drain := newTestDrain(t, f.session, queue, testDepositInstant())
 
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	for sequence := uint64(1); time.Now().Before(deadline); sequence++ {
 		if work, _ := drain.Counts(); work > 0 {
 			break
 		}
-		if _, err := drain.Emit(nextSequence()); err != nil {
+		if _, err := drain.Emit(sequence); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(2 * time.Millisecond)
@@ -155,13 +155,6 @@ func TestWorkIsTakenFromTheQueueInsideTheWindow(t *testing.T) {
 	if drain.Deferred() != 0 {
 		t.Fatalf("deferred %d cells inside an open window", drain.Deferred())
 	}
-}
-
-var sequenceCounter uint64
-
-func nextSequence() uint64 {
-	sequenceCounter++
-	return sequenceCounter
 }
 
 // A fragment buffered just before the cutoff is held, not sent into a shut
