@@ -57,6 +57,14 @@ const chainPublishers = 8
 // contributes nothing, and that one reads 1.00.
 const chainTrials = 20
 
+// The control needs far fewer, because it is not a statistical measurement.
+// With every mixer corrupt the adversary composes the whole chain, and the
+// answer is exact arithmetic against a truth read end to end: it is 1.000 or
+// the experiment is broken. Trials here buy repetition against a
+// non-deterministic bug, not resolution, and five full chains is enough of
+// that. Twenty was twenty runs of a check that cannot land between two values.
+const chainControlTrials = 5
+
 // decryptInOrder returns every column's plaintext in batch order.
 //
 // Position is the whole point, so this cannot use airlock.Release, which drops
@@ -189,7 +197,11 @@ func chainTrial(t *testing.T, honest int) (truth, guess []int) {
 
 func chainRecoveryRate(t *testing.T, everyMixerCorrupt bool) (hits, total int) {
 	t.Helper()
-	for trial := 0; trial < chainTrials; trial++ {
+	count := chainTrials
+	if everyMixerCorrupt {
+		count = chainControlTrials
+	}
+	for trial := 0; trial < count; trial++ {
 		honest := -1
 		if !everyMixerCorrupt {
 			// Drawn per trial. A fixed position would measure one arrangement
@@ -251,11 +263,11 @@ func TestOneHonestMixerIsEnoughAgainstACorruptCommittee(t *testing.T) {
 			"shuffler suffices, and this says it does not",
 			treatment, treatmentHits, treatmentTotal, chance, cutoff, falseFailureBudget)
 	}
-	t.Logf("chain contribution over %d trials of %d publishers and %d mixers: "+
-		"every mixer corrupt %.3f, one honest mixer %.3f, chance %.3f; "+
+	t.Logf("chain contribution, %d publishers and %d mixers: every mixer corrupt "+
+		"%.3f (%d trials, exact), one honest mixer %.3f (%d trials), chance %.3f; "+
 		"failing at %d of %d hits, which anonymity produces with probability <= %.0e",
-		chainTrials, chainPublishers, mixerCount(t),
-		control, treatment, chance, cutoff, treatmentTotal, falseFailureBudget)
+		chainPublishers, mixerCount(t), control, chainControlTrials,
+		treatment, chainTrials, chance, cutoff, treatmentTotal, falseFailureBudget)
 
 	// Stated because the previous unlinkability claim in this project was
 	// withdrawn for being read wider than its measurement.
