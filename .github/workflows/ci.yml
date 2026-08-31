@@ -111,7 +111,22 @@ jobs:
           # A field may only be emitted if someone wrote down why it is
           # public. This fails the build rather than a review comment.
           go test ./live/telemetry/ ./live/node/ -run 'Telemetry|telemetry|SecretScan|OperationalOutput' -count=1
-      - run: go test -race ./...
+      - name: Run the suite, leaving the cadence tests their own machine
+        run: |
+          # live/node holds the tests that measure a running node against a
+          # wall-clock cadence, and `go test ./...` runs up to GOMAXPROCS
+          # packages at once. Its neighbours here are live/airlock, live/deposit
+          # and live/materialize, at 254s, 188s and 220s in the run that failed,
+          # and all three drive the mix, whose Encrypt spawns GOMAXPROCS
+          # goroutines per call. A receive loop competing with that misses
+          # datagrams in the kernel, and TestAFloodFromOnePeerDoesNotStarveAnother
+          # then reports a starvation it never measured.
+          #
+          # That test is deliberately a failure rather than a skip -- a machine
+          # where the property is untested should be visible, not green -- so
+          # the fix is to give it a machine rather than to soften the verdict.
+          go test -race $(go list ./... | grep -v '/live/node$')
+          go test -race ./live/node/
       - name: Test every vendored component module
         run: |
           # components/* are separate Go modules wired in via replace
