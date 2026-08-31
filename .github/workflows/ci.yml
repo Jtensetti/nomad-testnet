@@ -196,6 +196,8 @@ jobs:
         run: python3 scripts/test-two-world-analysis.py
       - name: Verify the campaign verdict still separates noise from a finding
         run: python3 scripts/wan/test-wan-verdict.py
+      - name: Verify the load verdict refuses a flood that never arrived
+        run: python3 scripts/test-load-verdict.py
       - name: Run the deposit-path experiments and produce campaign evidence
         run: |
           # Deliberately not under -race, and this is the run that counts for
@@ -271,6 +273,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install packet-capture verifier
         run: command -v tcpdump >/dev/null || (sudo apt-get update && sudo apt-get install -y tcpdump)
+      # The load generator is built on the host rather than shipped in the
+      # release image, so this job needs a toolchain of its own. Without it the
+      # gate would build against whatever Go the runner happens to preinstall.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       - name: Run isolated multi-process fabric-to-cache network
         run: ./scripts/compose-e2e.sh
       - name: Upload packet and process evidence

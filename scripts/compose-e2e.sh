@@ -110,38 +110,154 @@ fi
 network_id=$(docker network inspect -f '{{.Id}}' "${project_name}_fabric")
 capture_interface="br-$(printf '%s' "$network_id" | cut -c1-12)"
 ip link show "$capture_interface" >/dev/null
-set +e
-if [ "$(id -u)" -eq 0 ]; then
-    timeout 6 tcpdump -i "$capture_interface" -s 0 -U -w "$pcap" udp port 4200 >/dev/null 2>&1
-    capture_status=$?
-elif command -v sudo >/dev/null 2>&1; then
-    sudo timeout 6 tcpdump -i "$capture_interface" -s 0 -U -w "$pcap" udp port 4200 >/dev/null 2>&1
-    capture_status=$?
-    sudo chown "$(id -u):$(id -g)" "$pcap"
-else
-    echo "packet capture requires root or sudo" >&2
-    exit 1
-fi
-set -e
-if [ "$capture_status" -ne 0 ] && [ "$capture_status" -ne 124 ]; then
-    echo "tcpdump failed with status $capture_status" >&2
-    exit "$capture_status"
-fi
-test -s "$pcap"
+# capture_window writes one window of fabric traffic to $1 over $2 seconds.
+#
+# It is a function because the load gate below needs two windows that differ
+# by exactly one thing. Two copies of this would drift, and the direction they
+# would drift is toward the quiet window being captured more carefully than
+# the loaded one.
+capture_window() {
+    local destination="$1" seconds="$2" status
+    set +e
+    if [ "$(id -u)" -eq 0 ]; then
+        timeout "$seconds" tcpdump -i "$capture_interface" -s 0 -U -B 16384 \
+            -w "$destination" udp port 4200 >/dev/null 2>&1
+        status=$?
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo timeout "$seconds" tcpdump -i "$capture_interface" -s 0 -U -B 16384 \
+            -w "$destination" udp port 4200 >/dev/null 2>&1
+        status=$?
+        sudo chown "$(id -u):$(id -g)" "$destination"
+    else
+        echo "packet capture requires root or sudo" >&2
+        exit 1
+    fi
+    set -e
+    # 124 is timeout's own exit for the deadline it was given, which is how
+    # every one of these captures is meant to end.
+    if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+        echo "tcpdump failed with status $status" >&2
+        exit "$status"
+    fi
+    test -s "$destination"
+}
+
+capture_window "$pcap" 6
 python3 "$repo_root/scripts/verify-pcap.py" "$pcap" 50 > "$evidence_root/pcap-evidence.json"
 test -s "$evidence_root/pcap-evidence.json"
 cat "$evidence_root/pcap-evidence.json"
 
 for service in operator-a operator-b operator-c; do
-    docker compose -p "$project_name" -f "$compose_file" exec -T "$service" cat /state/health.json > "$evidence_root/$service-health.json"
+    docker compose -p "$project_name" -f "$compose_file" exec -T "$service" \
+        cat /state/health.json > "$evidence_root/$service-health-quiet.json"
 done
+
+# The load gate. PROD-14 claims a resource limit does not change what a node
+# emits, and every measurement behind that claim was in-process: a goroutine
+# writing to a channel is not an interface, and a test binary holding both
+# ends is not a deployment. This is the composed stack, on the fabric bridge,
+# with an unrecognised sender flooding an operator's port.
+#
+# The flood comes from the host rather than a container, so the release image
+# does not ship a flood generator. Host-to-container traffic crosses the same
+# bridge, so it lands in the same capture the cadence is read from -- which is
+# the point: the gate refuses a run where the flood is not visible on the
+# wire, because a flood that never arrived produces a second quiet window and
+# reads as a pass.
+operator_a_address=$(docker inspect -f \
+    "{{(index .NetworkSettings.Networks \"${project_name}_fabric\").IPAddress}}" \
+    "$(docker compose -p "$project_name" -f "$compose_file" ps -q operator-a)")
+test -n "$operator_a_address"
+flood_source=$(ip -4 -o addr show dev "$capture_interface" | awk '{print $4}' | cut -d/ -f1)
+test -n "$flood_source"
+
+go build -o "$evidence_root/nomad-load" "$repo_root/cmd/nomad-load"
+"$evidence_root/nomad-load" --target "${operator_a_address}:4200" --rate 3000 \
+    --duration 9s --report "$evidence_root/load.json" > /dev/null &
+load_pid=$!
+# Started after the flood so the whole window is loaded, and shorter than it
+# so the flood outlives the capture at both ends.
+sleep 1
+capture_window "$evidence_root/fabric-loaded.pcap" 6
+wait "$load_pid"
+cat "$evidence_root/load.json"
+
+python3 "$repo_root/scripts/verify-pcap.py" "$evidence_root/fabric-loaded.pcap" 50 \
+    --filter "udp port 4200 and not src host $flood_source" \
+    > "$evidence_root/pcap-evidence-loaded.json"
+test -s "$evidence_root/pcap-evidence-loaded.json"
+cat "$evidence_root/pcap-evidence-loaded.json"
+
+python3 "$repo_root/scripts/verify-load.py" \
+    "$evidence_root/pcap-evidence.json" \
+    "$evidence_root/pcap-evidence-loaded.json" \
+    "$evidence_root/fabric-loaded.pcap" \
+    "$flood_source" > "$evidence_root/load-evidence.json"
+test -s "$evidence_root/load-evidence.json"
+cat "$evidence_root/load-evidence.json"
+
+for service in operator-a operator-b operator-c; do
+    docker compose -p "$project_name" -f "$compose_file" exec -T "$service" \
+        cat /state/health.json > "$evidence_root/$service-health-loaded.json"
+done
+python3 - "$evidence_root" <<'LOADPY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+findings = []
+for name in "abc":
+    operator = f"operator-{name}"
+    quiet = json.loads((root / f"{operator}-health-quiet.json").read_text())
+    loaded = json.loads((root / f"{operator}-health-loaded.json").read_text())
+
+    # A flood costs cells, never the node. send_dropped exists so that a local
+    # emission failure costs one cell instead of the process; under load it
+    # must still be zero, and health_deferred with it. The other three would
+    # mean the flood was mistaken for something it is not.
+    for counter in ("send_dropped", "health_deferred", "wrong_size",
+                    "auth_rejected", "replay_rejected", "cache_rejected"):
+        if loaded[counter] != 0:
+            findings.append(f"{operator} reports {counter}={loaded[counter]} under load")
+
+    # Emission continued. A node that stopped emitting altogether would show
+    # exactly the same zero counters as one that carried on.
+    if loaded["sent"] <= quiet["sent"]:
+        findings.append(
+            f"{operator} had sent {quiet['sent']} cells before the flood and "
+            f"{loaded['sent']} after, so it emitted nothing during it")
+
+# The positive control, inside the process this time. The capture proves the
+# flood was on the wire; this proves it reached the code that had to refuse
+# it. Only operator-a was targeted, so only operator-a shows the refusals.
+quiet = json.loads((root / "operator-a-health-quiet.json").read_text())
+loaded = json.loads((root / "operator-a-health-loaded.json").read_text())
+refused = loaded["unknown_peer"] - quiet["unknown_peer"]
+if refused < 1000:
+    findings.append(
+        f"operator-a refused {refused} datagrams from unrecognised senders across the "
+        "flood. The flood is supposed to reach the peer lookup and be refused there, "
+        "so a count this low means it never cost the process anything -- and the zero "
+        "counters above then say nothing about behaviour under load")
+
+if findings:
+    for finding in findings:
+        print(finding, file=sys.stderr)
+    raise SystemExit("the fabric did not survive the load gate")
+print(json.dumps({"operator_a_unknown_peer_refusals_under_load": refused}, sort_keys=True))
+LOADPY
+
 python3 - "$evidence_root" <<'PY'
 import json
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
-health = [json.loads((root / f"operator-{name}-health.json").read_text()) for name in "abc"]
+# The quiet snapshot, taken before the load gate ran. The strict zero
+# counters below are what a fabric with nothing attacking it must show; the
+# loaded snapshot is judged separately, and differently, further down.
+health = [json.loads((root / f"operator-{name}-health-quiet.json").read_text()) for name in "abc"]
 if {item["operator_id"] for item in health} != {"operator-a", "operator-b", "operator-c"}:
     raise SystemExit("health evidence does not contain the three signed operators")
 if len({item["topology_digest"] for item in health}) != 1:
