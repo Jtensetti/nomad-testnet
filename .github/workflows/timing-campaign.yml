@@ -29,6 +29,11 @@ on:
   # running it on every push would cost more than it tells anyone.
   push:
     paths:
+      # The cadence these measurements are about is produced by the vendored
+      # fabric scheduler and queue, so a change there is exactly a change this
+      # campaign should re-measure. Leaving components out meant the queue fix
+      # this campaign exists to evaluate would not have fired it.
+      - "components/**"
       - "live/node/**"
       - "live/airlock/**"
       - "live/capacity/**"
