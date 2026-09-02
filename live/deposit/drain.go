@@ -74,6 +74,13 @@ type Drain struct {
 	cover        uint64
 	deferred     uint64
 	lastSequence uint64
+	// Deposits this session has already spent in quotaEpoch. The airlock
+	// counts every in-window cell against MaxDepositsPerSession, cover
+	// included, because it cannot tell them apart -- so this counts every
+	// in-window cell too. Derived from the public bound and this drain's own
+	// clock; the operator answers nothing.
+	quotaEpoch uint64
+	quotaSpent int
 }
 
 // NewDrain starts draining queue into a one-slot buffer. Close stops it.
@@ -127,21 +134,51 @@ func (drain *Drain) clock() time.Time {
 	return drain.now()
 }
 
-// depositWindowOpen reports whether a deposit made now lands inside the open
-// part of its epoch.
+// windowState reports the release epoch containing now and whether a deposit
+// made now lands inside its open part.
 //
 // It fails closed: a schedule that cannot name an epoch for this instant costs
 // a deferred fragment, where failing open costs the fragment outright.
-func (drain *Drain) depositWindowOpen(now time.Time) bool {
+func (drain *Drain) windowState(now time.Time) (uint64, bool) {
 	epoch, err := drain.schedule.EpochAt(now)
 	if err != nil {
-		return false
+		return 0, false
 	}
 	opens, closes, err := drain.schedule.DepositWindow(epoch)
 	if err != nil {
-		return false
+		return 0, false
 	}
-	return !now.Before(opens) && now.Before(closes)
+	return epoch, !now.Before(opens) && now.Before(closes)
+}
+
+func (drain *Drain) depositWindowOpen(now time.Time) bool {
+	_, open := drain.windowState(now)
+	return open
+}
+
+func (drain *Drain) quotaRemaining(epoch uint64) bool {
+	drain.mutex.Lock()
+	defer drain.mutex.Unlock()
+	return drain.quotaRemainingLocked(epoch)
+}
+
+func (drain *Drain) quotaRemainingLocked(epoch uint64) bool {
+	if drain.quotaEpoch != epoch {
+		return true
+	}
+	return drain.quotaSpent < drain.schedule.MaxDepositsPerSession
+}
+
+// spendDepositSlot records that a cell was emitted inside epoch's deposit
+// window, whether it carried work or cover. The airlock charges both.
+func (drain *Drain) spendDepositSlot(epoch uint64) {
+	drain.mutex.Lock()
+	defer drain.mutex.Unlock()
+	if drain.quotaEpoch != epoch {
+		drain.quotaEpoch = epoch
+		drain.quotaSpent = 0
+	}
+	drain.quotaSpent++
 }
 
 // fill keeps the one-slot buffer occupied. Every cost of reading the queue --
@@ -185,18 +222,30 @@ func (drain *Drain) fill(queue *publish.Queue) {
 // A caller that skipped a tick because it had no work would announce the
 // absence of work, so there is no path here that declines to emit.
 //
-// Outside the open deposit window it emits cover and leaves any buffered
+// Outside the open deposit window, and inside it once this session has spent
+// its per-session deposit bound, it emits cover and leaves any buffered
 // fragment alone. That is what separates this from the retry DEC-020 asked
 // for: a cell held back was never on the wire, so nothing is sent twice and
 // the sequence -- eight cleartext bytes at the head of every cell -- never
 // repeats. Cover is never retransmitted, so a repeat would tell the entry
 // operator this publisher had work refused.
+//
+// Both gates are computed from public policy and this drain's own clock. The
+// operator answers nothing, so neither gate is a feedback channel.
 func (drain *Drain) Emit(sequence uint64) (fabric.Cell, error) {
 	if err := drain.reserve(sequence); err != nil {
 		return fabric.Cell{}, err
 	}
-	open := drain.depositWindowOpen(drain.clock())
-	if open {
+	epoch, open := drain.windowState(drain.clock())
+	// A slot is spent by a cell that actually leaves, so the error paths below
+	// must not charge one. The airlock charges work and cover alike, because
+	// it cannot tell them apart.
+	spend := func() {
+		if open {
+			drain.spendDepositSlot(epoch)
+		}
+	}
+	if open && drain.quotaRemaining(epoch) {
 		select {
 		case fragment := <-drain.ready:
 			var payload [uplink.PayloadSize]byte
@@ -217,6 +266,7 @@ func (drain *Drain) Emit(sequence uint64) (fabric.Cell, error) {
 				return fabric.Cell{}, err
 			}
 			drain.count(emissionWork)
+			spend()
 			return cell, nil
 		default:
 		}
@@ -226,12 +276,13 @@ func (drain *Drain) Emit(sequence uint64) (fabric.Cell, error) {
 		return fabric.Cell{}, err
 	}
 	kind := emissionCover
-	// Only the shut branch defers. In an open window an empty buffer refilled
-	// a microsecond later is an idle tick, not a held fragment.
-	if !open && len(drain.ready) > 0 {
+	// An empty buffer refilled a microsecond later is an idle tick, not a held
+	// fragment, so an open window with quota left never counts as deferred.
+	if (!open || !drain.quotaRemaining(epoch)) && len(drain.ready) > 0 {
 		kind = emissionDeferred
 	}
 	drain.count(kind)
+	spend()
 	return cell, nil
 }
 
@@ -281,9 +332,10 @@ func (drain *Drain) Counts() (work, cover uint64) {
 	return drain.work, drain.cover
 }
 
-// Deferred counts cover emitted while a fragment was buffered and the window
-// was shut -- work this drain declined to destroy. A subset of the cover
-// count, not a third category on the wire. Local assertions only.
+// Deferred counts cover emitted while a fragment was buffered and the drain
+// declined to spend it -- the window was shut, or this session's deposit bound
+// was spent. Work this drain declined to destroy. A subset of the cover count,
+// not a third category on the wire. Local assertions only.
 func (drain *Drain) Deferred() uint64 {
 	drain.mutex.Lock()
 	defer drain.mutex.Unlock()
