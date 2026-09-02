@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -43,7 +44,7 @@ func TestThePublisherEmitsCellsAnEntryOperatorCanOpen(t *testing.T) {
 	if err := os.WriteFile(objectPath, object, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	submit := exec.Command(binary, "--queue="+world.queue, "--submit="+objectPath,
+	submit := exec.Command(binary, "--queue="+world.queue, "--key-source=unprotected-file", "--submit="+objectPath,
 		"--publisher-key="+world.publisherPath)
 	if output, err := submit.CombinedOutput(); err != nil {
 		t.Fatalf("submitting an object failed: %v\n%s", err, output)
@@ -61,7 +62,7 @@ func TestThePublisherEmitsCellsAnEntryOperatorCanOpen(t *testing.T) {
 	publisher := exec.Command(binary,
 		"--topology="+world.topologyPath,
 		"--authority-key="+world.authorityPath,
-		"--queue="+world.queue,
+		"--queue="+world.queue, "--key-source=unprotected-file",
 		"--state="+filepath.Join(world.directory, "uplink-sequence"),
 		"--committee-key="+world.committeePath,
 		"--entry="+world.entryID)
@@ -168,7 +169,7 @@ func TestARestartedPublisherDoesNotReuseANonce(t *testing.T) {
 		publisher := exec.Command(binary,
 			"--topology="+world.topologyPath,
 			"--authority-key="+world.authorityPath,
-			"--queue="+world.queue,
+			"--queue="+world.queue, "--key-source=unprotected-file",
 			"--state="+filepath.Join(world.directory, "uplink-sequence"),
 			"--committee-key="+world.committeePath,
 			"--entry="+world.entryID)
@@ -252,5 +253,53 @@ func writeHex(t *testing.T, path string, value []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(hex.EncodeToString(value)), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The passphrase reaches the publisher on a file descriptor, never in argv or
+// the environment: argv is world-readable through ps, and the environment is
+// readable by the same user and inherited by every child.
+func TestThePublisherTakesAPassphraseOnAFileDescriptorAndRefusesAWrongOne(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the publisher")
+	}
+	binary := buildPublisher(t)
+	world := newPublisherWorld(t)
+	objectPath := filepath.Join(world.directory, "object.bin")
+	if err := os.WriteFile(objectPath, []byte("a publication"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	submit := func(passphrase string) ([]byte, error) {
+		command := exec.Command(binary, "--queue="+world.queue,
+			"--key-source=passphrase", "--passphrase-fd=3",
+			"--submit="+objectPath, "--publisher-key="+world.publisherPath)
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		command.ExtraFiles = []*os.File{reader}
+		go func() {
+			_, _ = writer.WriteString(passphrase + "\n")
+			_ = writer.Close()
+		}()
+		defer reader.Close()
+		return command.CombinedOutput()
+	}
+
+	output, err := submit("correct horse")
+	if err != nil {
+		t.Fatalf("submit under a passphrase: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(world.queue, "queue.key")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a passphrase queue left a key file on the disk")
+	}
+
+	output, err = submit("wrong horse")
+	if err == nil {
+		t.Fatalf("a wrong passphrase was accepted:\n%s", output)
+	}
+	if !strings.Contains(string(output), "passphrase") {
+		t.Fatalf("a wrong passphrase failed for a reason it did not name:\n%s", output)
 	}
 }

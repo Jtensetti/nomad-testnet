@@ -17,7 +17,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -72,23 +71,35 @@ type Queue struct {
 	key          [32]byte
 }
 
-// Options bound the queue. Both limits are public deployment policy and are
-// never derived from user behavior.
+// Options bound the queue and say where its key comes from. The limit is
+// public deployment policy and is never derived from user behavior.
 type Options struct {
 	MaximumFragments int
+	// Key is required and has no default. What a stolen disk yields differs
+	// between the two sources, and that is the whole question for material a
+	// user has written and not yet published, so it is stated rather than
+	// inherited. See KeySource.
+	Key KeySource
 }
 
-// Open prepares the queue directory and its local encryption key. The key
-// protects pending publication content at rest so that a stolen disk does
-// not reveal what a user was about to publish. Production clients must move
-// this key into OS-backed storage (see production workstream H-09); the
-// file mode is the interim control.
+// Open prepares the queue directory and derives its encryption key from
+// options.Key.
+//
+// What the key protects depends on which source supplied it, and the two are
+// not interchangeable: Passphrase keeps nothing on the disk that opens the
+// queue, while UnprotectedKeyFile writes the key beside the fragments and so
+// gives binding and tamper-evidence rather than secrecy against disk theft.
 func Open(root string, options Options) (*Queue, error) {
 	if root == "" {
 		return nil, errors.New("publication queue directory is required")
 	}
 	if options.MaximumFragments < 1 || options.MaximumFragments > 1<<20 {
 		return nil, errors.New("queue fragment limit is outside the supported range")
+	}
+	if options.Key == nil {
+		return nil, errors.New("publication queue requires a key source: " +
+			"Passphrase for a disk that must not open the queue, " +
+			"UnprotectedKeyFile to keep the key beside the fragments")
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, err
@@ -98,36 +109,12 @@ func Open(root string, options Options) (*Queue, error) {
 		return nil, errors.New("publication queue root is not a directory")
 	}
 	queue := &Queue{root: root, maxFragments: options.MaximumFragments}
-	if err := queue.loadOrCreateKey(); err != nil {
+	key, err := options.Key.openKey(root)
+	if err != nil {
 		return nil, err
 	}
+	queue.key = key
 	return queue, nil
-}
-
-func (queue *Queue) loadOrCreateKey() error {
-	path := filepath.Join(queue.root, keyFileName)
-	existing, err := os.ReadFile(path)
-	if err == nil {
-		if len(existing) != len(queue.key) {
-			return errors.New("publication queue key is malformed")
-		}
-		info, err := os.Lstat(path)
-		if err != nil {
-			return err
-		}
-		if info.Mode().Perm()&0o077 != 0 {
-			return errors.New("publication queue key permissions must be 0600 or stricter")
-		}
-		copy(queue.key[:], existing)
-		return nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if _, err := rand.Read(queue.key[:]); err != nil {
-		return err
-	}
-	return writeNewFile(path, queue.key[:], 0o600)
 }
 
 // Submit is the entire public publication API. It is a purely local
@@ -224,7 +211,11 @@ func fragmentID(root [32]byte, index uint32) [32]byte {
 	return id
 }
 
-// sealFragment encrypts a fragment at rest. The nonce is derived
+// sealFragment encrypts a fragment at rest, under the key options.Key
+// supplied -- so what this hides from whoever holds the disk is a property of
+// the key source, not of this function. The fragment's own identifier is the
+// additional data either way, so a fragment cannot be renamed, altered, or
+// moved between queues whichever source is in use. The nonce is derived
 // deterministically from the fragment identifier so that resubmitting the
 // same object produces byte-identical files, which is what makes the
 // idempotent write safe. A fragment identifier is never reused with a

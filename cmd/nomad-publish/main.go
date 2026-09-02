@@ -22,15 +22,22 @@
 // carrying its own ephemeral key in the first cell. It authenticates the
 // operator and proves nothing about itself, which is the direction this system
 // needs. See live/uplink/handshake.go and DEC-018.
+//
+// --key-source is required and has no default. It decides whether the queue's
+// key lives on the same disk as the fragments it encrypts, which is the whole
+// question for material a user has written and not yet published, so it is
+// stated rather than inherited. See live/publish/keysource.go.
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -80,12 +87,21 @@ func run() error {
 	cutoff := flag.Duration("deposit-cutoff", 15*time.Second,
 		"how long before a release boundary the deposit window closes")
 	perSession := flag.Int("per-session", 8, "maximum deposits one session may hold in an epoch")
+	keySource := flag.String("key-source", "",
+		"where the queue's encryption key comes from: passphrase, or unprotected-file")
+	passphraseFD := flag.Int("passphrase-fd", 0,
+		"file descriptor to read the queue passphrase from, for --key-source=passphrase")
 	flag.Parse()
 
 	if *queuePath == "" {
 		return errors.New("--queue is required")
 	}
-	queue, err := publish.Open(*queuePath, publish.Options{MaximumFragments: *maxFragments})
+	source, err := queueKeySource(*keySource, *passphraseFD)
+	if err != nil {
+		return err
+	}
+	queue, err := publish.Open(*queuePath,
+		publish.Options{MaximumFragments: *maxFragments, Key: source})
 	if err != nil {
 		return err
 	}
@@ -368,4 +384,53 @@ func loadCommitteeKey(path string) (mix.PublicKey, error) {
 	}
 	copy(key[:], decoded)
 	return key, nil
+}
+
+// queueKeySource turns the flags into a key source, with no default.
+//
+// The two differ in what a stolen disk yields, so choosing for the caller
+// would be choosing its threat model for it.
+//
+// The passphrase arrives on a file descriptor rather than a flag or an
+// environment variable: argv is world-readable through ps, and the
+// environment is readable by the same user through /proc and is inherited by
+// every child.
+func queueKeySource(name string, passphraseFD int) (publish.KeySource, error) {
+	switch name {
+	case "passphrase":
+		passphrase, err := readPassphrase(passphraseFD)
+		if err != nil {
+			return nil, err
+		}
+		return publish.Passphrase(passphrase), nil
+	case "unprotected-file":
+		return publish.UnprotectedKeyFile(), nil
+	case "":
+		return nil, errors.New("--key-source is required: passphrase keeps nothing on " +
+			"the disk that opens the queue; unprotected-file writes the key beside the " +
+			"fragments and protects against neither a stolen disk nor a copy of the directory")
+	default:
+		return nil, fmt.Errorf("unknown --key-source %q: want passphrase or unprotected-file", name)
+	}
+}
+
+func readPassphrase(descriptor int) ([]byte, error) {
+	if descriptor < 0 {
+		return nil, errors.New("--passphrase-fd must be a file descriptor")
+	}
+	file := os.NewFile(uintptr(descriptor), "passphrase")
+	if file == nil {
+		return nil, fmt.Errorf("file descriptor %d is not open", descriptor)
+	}
+	// Bounded, because this reads whatever the caller connected. A passphrase
+	// is a line; anything past this is a mistake, not a passphrase.
+	passphrase, err := io.ReadAll(io.LimitReader(file, 4096))
+	if err != nil {
+		return nil, fmt.Errorf("read passphrase: %w", err)
+	}
+	passphrase = bytes.TrimRight(passphrase, "\r\n")
+	if len(passphrase) == 0 {
+		return nil, errors.New("the passphrase source was empty")
+	}
+	return passphrase, nil
 }

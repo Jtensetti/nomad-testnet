@@ -117,7 +117,7 @@ func emitTicks(t *testing.T, label string, drain *Drain, ticks int) []uint64 {
 func newQueue(t *testing.T, objects ...string) *publish.Queue {
 	t.Helper()
 	queue, err := publish.Open(filepath.Join(t.TempDir(), "queue"),
-		publish.Options{MaximumFragments: 64})
+		publish.Options{MaximumFragments: 64, Key: publish.UnprotectedKeyFile()})
 	if err != nil {
 		t.Fatal(err)
 	}

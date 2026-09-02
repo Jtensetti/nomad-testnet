@@ -35,6 +35,9 @@ coordinated epoch change rather than a silent split.
 | `nomad-batch-descriptor-v3` | v3 only | signed batch descriptor | descriptor refused; v2 lacked source commitments |
 | `nomad-publication-entry-v1` | v1 only | publication queue entry | entry refused |
 | `nomad-publication-fragment-v1` | v1 only | publication fragment | fragment refused |
+| `nomad-publication-queue-key-v1` | v1 only | key-derivation domain, publisher-local | not on the wire; a change derives a different key and the queue refuses to open |
+| `nomad-publication-queue-salt-v1` | v1 only | publisher-local salt record, carrying the Argon2id parameters | refused with the parameters it was created under, rather than as a wrong passphrase |
+| `nomad-publication-queue-verifier-v1` | v1 only | publisher-local passphrase verifier | `ErrPassphraseRejected` at Open, so a queue that cannot be decrypted is never mistaken for an empty one |
 | `nomad-seed-bundle-v1` | v1 only | public seed bundle | bundle refused |
 | `nomad-conformance-v1` | v1 only | golden vector corpus | corpus check fails |
 

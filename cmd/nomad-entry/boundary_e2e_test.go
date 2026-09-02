@@ -85,7 +85,7 @@ func TestThePublicationPathAcrossRealProcesses(t *testing.T) {
 		t.Fatal(err)
 	}
 	submit := exec.Command(publishBinary,
-		"--queue", world.queuePath,
+		"--queue", world.queuePath, "--key-source=unprotected-file",
 		"--submit", objectPath,
 		"--publisher-key", world.publisherPath)
 	if output, err := submit.CombinedOutput(); err != nil {
@@ -156,7 +156,7 @@ func TestThePublicationPathAcrossRealProcesses(t *testing.T) {
 	publisher := exec.Command(publishBinary,
 		"--topology", world.topologyPath,
 		"--authority-key", world.authorityPath,
-		"--queue", world.queuePath,
+		"--queue", world.queuePath, "--key-source=unprotected-file",
 		"--state", filepath.Join(world.directory, "uplink-state.json"),
 		"--committee-key", world.committeePath,
 		"--entry", world.entryID,
