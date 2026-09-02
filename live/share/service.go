@@ -5,7 +5,6 @@ package share
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -229,12 +228,4 @@ func writeOrCompare(path string, encoded []byte) (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-func HealthJSON(operatorID string, complete bool) ([]byte, error) {
-	return json.Marshal(struct {
-		OperatorID string    `json:"operator_id"`
-		Complete   bool      `json:"partial_complete"`
-		UpdatedAt  time.Time `json:"updated_at"`
-	}{operatorID, complete, time.Now().UTC()})
 }

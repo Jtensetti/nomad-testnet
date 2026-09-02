@@ -3,6 +3,7 @@ package rlnc
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
@@ -115,10 +116,7 @@ func commitSymbol(index int, data []byte) [32]byte {
 	h := sha256.New()
 	_, _ = h.Write([]byte("nomad-rlnc-source-commitment-v1"))
 	var position [4]byte
-	position[0] = byte(index >> 24)
-	position[1] = byte(index >> 16)
-	position[2] = byte(index >> 8)
-	position[3] = byte(index)
+	binary.BigEndian.PutUint32(position[:], uint32(index))
 	_, _ = h.Write(position[:])
 	_, _ = h.Write(data)
 	var digest [32]byte

@@ -41,9 +41,7 @@ func parallel(count int, work func(l *lane, index int)) {
 	// function now guards five call sites: if the branch ever were reachable,
 	// degrading to one worker is slow, where skipping the work would hand
 	// Encrypt nil rows and recoverColumns all-zero cells, with no error.
-	if workers < 1 {
-		workers = 1
-	}
+	workers = max(workers, 1)
 	var next atomic.Int64
 	var group sync.WaitGroup
 	group.Add(workers)

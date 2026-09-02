@@ -18,9 +18,7 @@ import (
 // JSON is transport/storage only and is never hashed or signed directly.
 
 func appendUint64(out []byte, value uint64) []byte {
-	var buffer [8]byte
-	binary.BigEndian.PutUint64(buffer[:], value)
-	return append(out, buffer[:]...)
+	return binary.BigEndian.AppendUint64(out, value)
 }
 
 func appendBytes(out, value []byte) []byte {
