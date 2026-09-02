@@ -214,3 +214,65 @@ func TestInvalidConfig(t *testing.T) {
 		}
 	}
 }
+
+// Run is the production entry point: cmd/nomad-publish and the testnet node
+// both call it, while every test in this repository used RunCells. So the
+// finite form was covered and the infinite one -- the one that ships -- was
+// not, in a module that is vendored into two other repositories and analysed
+// there separately.
+//
+// What Run has to get right that RunCells does not is stopping: it emits until
+// the context ends, and it must end when the context does rather than run on
+// or return an error the caller has to special-case.
+func TestRunEmitsAtCadenceAndStopsWithTheContext(t *testing.T) {
+	cfg := Config{Epoch: 80 * time.Millisecond, CellsPerEpoch: 8, MaxLateness: 40 * time.Millisecond}
+	sink := &recordingSink{}
+	scheduler, err := NewScheduler(cfg, byteSource(0x5a), sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	started := time.Now()
+	go func() { done <- scheduler.Run(ctx) }()
+
+	// Three intervals' worth, then stop. The count is checked as a range: the
+	// claim is that Run emits on the cadence and halts, not that this host
+	// hits an exact tick count.
+	time.Sleep(3 * cfg.CellInterval())
+	stop()
+
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, ErrDeadlineMissed) {
+			t.Fatalf("Run returned %v", err)
+		}
+		if errors.Is(err, ErrDeadlineMissed) {
+			t.Skipf("the host missed a deadline inside %s, so this run measured "+
+				"the machine rather than the scheduler", cfg.MaxLateness)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+
+	elapsed := time.Since(started)
+	if len(sink.cells) == 0 {
+		t.Fatal("Run emitted nothing before it was cancelled")
+	}
+	// A burst would put every cell inside one interval. The bound is what the
+	// elapsed time allows plus one for the tick in flight when stop landed.
+	if ceiling := int(elapsed/cfg.CellInterval()) + 2; len(sink.cells) > ceiling {
+		t.Fatalf("Run emitted %d cells in %s, which is more than the %d its cadence allows",
+			len(sink.cells), elapsed, ceiling)
+	}
+
+	// And nothing after the context ended: a catch-up burst on shutdown is
+	// still a burst.
+	settled := len(sink.cells)
+	time.Sleep(3 * cfg.CellInterval())
+	if len(sink.cells) != settled {
+		t.Fatalf("Run emitted %d more cells after its context was cancelled",
+			len(sink.cells)-settled)
+	}
+}

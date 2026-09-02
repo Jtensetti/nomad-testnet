@@ -23,8 +23,16 @@ func RandomCellFrom(r io.Reader) (Cell, error) {
 		return Cell{}, errors.New("random source is required")
 	}
 	var c Cell
-	_, err := io.ReadFull(r, c[:])
-	return c, err
+	if _, err := io.ReadFull(r, c[:]); err != nil {
+		// The zero value, not the partially filled cell. A short read leaves
+		// entropy in the prefix and zeros in the tail, and a caller that
+		// ignored the error would emit a cover cell with a constant tail --
+		// which is the one thing cover must not have. Every caller here does
+		// check, so this is depth rather than a live defect, and it is one
+		// line either way.
+		return Cell{}, err
+	}
+	return c, nil
 }
 
 var ErrNoWork = errors.New("no protocol work available")
