@@ -2,7 +2,9 @@ package supplychain_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -133,26 +135,50 @@ func loadPolicy(t *testing.T) dependencyPolicy {
 	return policy
 }
 
+// The two lists are not interchangeable, and merging them was a hole rather
+// than a shortcut: allowed_older_in_components exists because a vendored
+// component's own go.mod may name a version older than the one this build
+// ships, which is harmless while it stays in a component. Accepting those
+// versions in the root go.mod too let the module that actually compiles be
+// downgraded to one nobody approved for production, with the policy file
+// untouched and this test green. So the root is held to `allowed` alone.
+func versionSets(t *testing.T, policy dependencyPolicy, root bool) map[string]map[string]struct{} {
+	t.Helper()
+	allowed := map[string]map[string]struct{}{}
+	add := func(module, version string) {
+		if allowed[module] == nil {
+			allowed[module] = map[string]struct{}{}
+		}
+		allowed[module][version] = struct{}{}
+	}
+	for _, entry := range policy.Allowed {
+		add(entry.Module, entry.Version)
+	}
+	if !root {
+		for _, entry := range policy.AllowedOlderInComponents {
+			add(entry.Module, entry.Version)
+		}
+	}
+	return allowed
+}
+
 func TestEveryExternalDependencyIsInThePolicy(t *testing.T) {
 	policy := loadPolicy(t)
-	allowed := map[string]map[string]struct{}{}
-	for _, entry := range policy.Allowed {
-		if allowed[entry.Module] == nil {
-			allowed[entry.Module] = map[string]struct{}{}
-		}
-		allowed[entry.Module][entry.Version] = struct{}{}
-	}
-	for _, entry := range policy.AllowedOlderInComponents {
-		if allowed[entry.Module] == nil {
-			allowed[entry.Module] = map[string]struct{}{}
-		}
-		allowed[entry.Module][entry.Version] = struct{}{}
-	}
+	files := moduleFiles(t)
+	rootFile := files[0]
 
 	seen := map[string]struct{}{}
-	for _, path := range moduleFiles(t) {
+	seenInComponents := map[string]map[string]struct{}{}
+	for _, path := range files {
+		allowed := versionSets(t, policy, path == rootFile)
 		for module, version := range requirements(t, path) {
 			seen[module] = struct{}{}
+			if path != rootFile {
+				if seenInComponents[module] == nil {
+					seenInComponents[module] = map[string]struct{}{}
+				}
+				seenInComponents[module][version] = struct{}{}
+			}
 			versions, listed := allowed[module]
 			if !listed {
 				t.Errorf("%s requires %s %s, which no reviewer has approved. Add it to "+
@@ -179,6 +205,12 @@ func TestEveryExternalDependencyIsInThePolicy(t *testing.T) {
 	for _, entry := range policy.Allowed {
 		if _, required := seen[entry.Module]; !required {
 			t.Errorf("the policy approves %s and nothing requires it", entry.Module)
+		}
+	}
+	for _, entry := range policy.AllowedOlderInComponents {
+		if _, required := seenInComponents[entry.Module][entry.Version]; !required {
+			t.Errorf("the policy makes an exception for %s %s in components and no "+
+				"component requires that version", entry.Module, entry.Version)
 		}
 	}
 }
@@ -272,5 +304,88 @@ func TestNothingDisablesTheChecksumDatabase(t *testing.T) {
 	if value := os.Getenv("GOSUMDB"); value == "off" {
 		t.Error("GOSUMDB is off, so a substituted module would be recorded as legitimate " +
 			"the first time it is fetched")
+	}
+}
+
+// Everything above reads go.mod as text. That is what a reviewer sees, but it
+// is not what compiles: minimal version selection picks a version across the
+// whole graph, and a `replace` anywhere can substitute a module wholesale. The
+// text and the build agree today; nothing made them agree.
+//
+// So ask the toolchain instead. This is the set of modules that actually
+// provide compiled code -- the build's packages and its tests -- and each must
+// be approved at exactly the version selected. allowed_older_in_components has
+// no standing here at all: a component's older requirement is acceptable
+// precisely while it is not what gets built.
+func resolvedCompiledModules(t *testing.T) map[string]string {
+	t.Helper()
+	command := exec.Command("go", "list", "-deps", "-test",
+		"-f", "{{if .Module}}{{.Module.Path}} {{.Module.Version}}{{end}}", "./...")
+	command.Dir = ".."
+	out, err := command.Output()
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			t.Fatalf("go list -deps: %v\n%s", err, exit.Stderr)
+		}
+		t.Fatalf("go list -deps: %v", err)
+	}
+	found := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		module, version, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok || module == "" || strings.HasPrefix(module, "github.com/Jtensetti/") {
+			continue
+		}
+		found[module] = version
+	}
+	return found
+}
+
+func TestTheModulesThatActuallyCompileAreTheApprovedVersions(t *testing.T) {
+	policy := loadPolicy(t)
+	approved := map[string]string{}
+	for _, entry := range policy.Allowed {
+		approved[entry.Module] = entry.Version
+	}
+	olderInComponents := map[string]map[string]struct{}{}
+	for _, entry := range policy.AllowedOlderInComponents {
+		if olderInComponents[entry.Module] == nil {
+			olderInComponents[entry.Module] = map[string]struct{}{}
+		}
+		olderInComponents[entry.Module][entry.Version] = struct{}{}
+	}
+
+	resolved := resolvedCompiledModules(t)
+	if len(resolved) == 0 {
+		t.Fatal("no external module was reported as compiled into this repository, which " +
+			"is not true of a build that links kyber; the scan did not run")
+	}
+	for module, version := range resolved {
+		want, listed := approved[module]
+		if !listed {
+			t.Errorf("%s %s compiles into this build and no reviewer approved it. Add "+
+				"it to DEPENDENCY_POLICY.json with a reason, or remove what imports it. "+
+				"Version selection can put a module in the build that no go.mod here "+
+				"names, so this can fire when the checks above are silent.",
+				module, version)
+			continue
+		}
+		if version != want {
+			if _, older := olderInComponents[module][version]; older {
+				t.Errorf("%s %s is what compiles, and the policy approves that version "+
+					"only inside a component. The exception is for requirements that are "+
+					"not built; this one is built. The approved version is %s.",
+					module, version, want)
+				continue
+			}
+			t.Errorf("%s %s compiles into this build; the policy approves %s",
+				module, version, want)
+		}
+	}
+	for module, version := range approved {
+		if _, compiled := resolved[module]; !compiled {
+			t.Errorf("the policy approves %s %s as a production dependency and nothing "+
+				"in this build compiles against it", module, version)
+		}
 	}
 }
