@@ -291,6 +291,27 @@ jobs:
           name: operator-ceremony-evidence
           path: runtime/evidence/operator-ceremony.json
           if-no-files-found: warn
+  windows-lock:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # windows/amd64 is in the build matrix above, so live/epoch's LockFileEx
+      # implementation has always compiled. Compiling is not running: until
+      # this job existed no Windows machine had executed it, and the chain lock
+      # is what stops a node and an operator CLI on one host from racing on a
+      # chain directory.
+      #
+      # Scoped deliberately to the package with platform-specific code. The
+      # rest of the suite assumes a POSIX host in places, and a job that ran it
+      # all and was allowed to fail would be worse than no job: this one must
+      # pass.
+      - name: Run the cross-process chain lock on Windows
+        run: go test -count=1 -v ./live/epoch/
+
   live-compose:
     needs: unit
     runs-on: ubuntu-latest
@@ -316,7 +337,7 @@ jobs:
           if-no-files-found: warn
 
   release:
-    needs: [unit, live-compose]
+    needs: [unit, windows-lock, live-compose]
     if: >-
       (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
