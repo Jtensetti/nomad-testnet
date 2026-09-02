@@ -17,6 +17,7 @@ module=sha to set one when you vendor a new snapshot.
 import argparse
 import hashlib
 import pathlib
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -70,6 +71,15 @@ def rewrite_lock(grouped: dict[str, list[str]], commits: dict[str, str]) -> None
     LOCK.write_text("\n".join(out) + "\n")
 
 
+def own_head() -> str:
+    try:
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                              capture_output=True, text=True,
+                              check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--commit", action="append", default=[],
@@ -77,10 +87,19 @@ def main() -> None:
                         help="set a component's upstream commit")
     arguments = parser.parse_args()
     commits = {}
+    own = own_head()
     for pair in arguments.commit:
         module, _, sha = pair.partition("=")
         if not module or not sha:
             sys.exit(f"--commit wants MODULE=SHA, got {pair!r}")
+        # The lock's whole job is to say which upstream commit a vendored tree
+        # came from. This repository's own HEAD is never that, and it is what a
+        # stale shell variable produces -- `git rev-parse HEAD` run in the wrong
+        # directory. Recorded, it would send an auditor looking for a commit
+        # that does not exist in the repository named beside it.
+        if own and sha.startswith(own[:len(sha)]):
+            sys.exit(f"--commit {pair} is this repository's own HEAD, "
+                     f"which cannot be {module}'s upstream commit")
         commits[module] = sha
     rewrite_lock(rewrite_manifest(), commits)
     print(f"repinned {MANIFEST.name} and the tree digests in {LOCK.name}")

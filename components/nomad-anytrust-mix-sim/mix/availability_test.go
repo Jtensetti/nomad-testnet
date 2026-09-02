@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -280,6 +281,31 @@ func TestAnOperatorCannotReportItselfUnavailable(t *testing.T) {
 	copy(self[:], f.observerPublics[0])
 	if _, err := SignNonReceipt(f.ctx, f.deadline, self, f.observerPrivates[0]); err == nil {
 		t.Fatal("an operator signed a non-receipt about itself")
+	}
+
+	// SignNonReceipt refusing covers the honest path only, and the honest path
+	// is not the one an attacker takes: the statement is a struct, and a
+	// malicious operator assembles and signs it directly. The verifier is what
+	// has to refuse it, and it is a different function.
+	statement := NonReceipt{Context: f.ctx, Deadline: f.deadline, Accused: self, Observer: self}
+	copy(statement.Signature[:],
+		ed25519.Sign(f.observerPrivates[0], nonReceiptSigningMessage(statement)))
+	if err := VerifyNonReceipt(statement); err == nil {
+		t.Fatal("a correctly signed self-accusation verified")
+	} else if !strings.Contains(err.Error(), "itself") {
+		t.Fatalf("refused for %q rather than for accusing itself", err)
+	}
+
+	// And through the report, since that is how one would actually arrive.
+	report := f.report(t, 3)
+	report.Accused = self
+	for index := range report.Observations {
+		report.Observations[index].Accused = self
+		copy(report.Observations[index].Signature[:], ed25519.Sign(
+			f.observerPrivates[index], nonReceiptSigningMessage(report.Observations[index])))
+	}
+	if err := VerifyAvailabilityReport(f.committee, f.mixers, report, 3); err == nil {
+		t.Fatal("a report in which an observer accuses itself was established")
 	}
 }
 
