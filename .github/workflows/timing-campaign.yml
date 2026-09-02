@@ -15,9 +15,32 @@ name: timing campaign
 # whatever this workflow does.
 
 on:
+  # Both of the triggers below fire only from the repository's default branch:
+  # GitHub reads `schedule` from there, and the dispatch API returns 404 for a
+  # workflow that is not on it. This file has only ever existed on a feature
+  # branch, so between being written and 2026-09-02 it ran zero times, by any
+  # means, while being cited as the gate for these measurements. The tests it
+  # runs skip unless NOMAD_TIMING_CAMPAIGN=1, so they had no automated runner
+  # at all.
+  #
+  # `push` is the trigger that works from the branch the code is on. It is
+  # filtered to the packages these measurements are about, because this job
+  # takes the better part of an hour and queues rather than cancelling, so
+  # running it on every push would cost more than it tells anyone.
+  push:
+    paths:
+      - "live/node/**"
+      - "live/airlock/**"
+      - "live/capacity/**"
+      - "live/deposit/**"
+      - "live/entry/**"
+      - "cmd/nomad-entry/**"
+      - "scripts/two-world-analysis.py"
+      - ".github/workflows/timing-campaign.yml"
   workflow_dispatch:
   schedule:
-    # Once a day, so a regression surfaces without waiting for someone to ask.
+    # Once a day once this is on the default branch, so a regression surfaces
+    # without waiting for someone to ask.
     - cron: '17 4 * * *'
 
 permissions:
