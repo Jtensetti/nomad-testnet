@@ -59,10 +59,7 @@ type crossOutput struct {
 }
 
 func TestCellsFromTheSecondImplementationVerifyHere(t *testing.T) {
-	python, err := exec.LookPath("python3")
-	if err != nil {
-		t.Skip("python3 is not available, so the second implementation cannot be run")
-	}
+	python := requireSecondImplementation(t)
 	root := filepath.Join("..", "..")
 	script := filepath.Join(root, "conformance", "reference", "crosscheck.py")
 	if _, err := os.Stat(script); err != nil {
@@ -166,9 +163,7 @@ func TestCellsFromTheSecondImplementationVerifyHere(t *testing.T) {
 // refused by the second one too, and for the same reason. Two implementations
 // that both accept everything also "interoperate".
 func TestBothImplementationsRefuseTheSameCells(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 is not available, so the second implementation cannot be run")
-	}
+	requireSecondImplementation(t)
 	root := filepath.Join("..", "..")
 	corpus := filepath.Join(root, "conformance", "wire-vectors.json")
 

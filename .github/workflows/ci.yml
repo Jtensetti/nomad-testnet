@@ -125,6 +125,11 @@ jobs:
           # That test is deliberately a failure rather than a skip -- a machine
           # where the property is untested should be visible, not green -- so
           # the fix is to give it a machine rather than to soften the verdict.
+          # NOMAD_REQUIRE_CAPABILITY_GATES declares what this environment can
+          # run. A skip is green, so without it the cross-implementation check
+          # would stop running the day the image dropped python3 and PROD-03
+          # would go on citing evidence nothing had produced.
+          export NOMAD_REQUIRE_CAPABILITY_GATES=1
           go test -race $(go list ./... | grep -v '/live/node$')
           go test -race ./live/node/
       - name: Test every vendored component module
