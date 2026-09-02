@@ -110,6 +110,7 @@ jobs:
           test -d "$directory" || { echo "no captures were produced"; exit 1; }
           compared=0
           findings=0
+          inconclusive=0
           # Per round: a series file spanning several rounds carries the pauses
           # during which the other worlds ran, so it is not the continuous
           # stream the rule compares windows of.
@@ -139,8 +140,15 @@ jobs:
               # a verdict, and must not be reported as either a pass or a
               # finding.
               if [ "$status" -eq 2 ]; then
-                echo "the rule could not run on $stressor $round"
-                exit 1
+                # Exiting here aborted before the remaining arms were compared,
+                # so one unmeasurable stressor hid every verdict after it. The
+                # first run of this workflow did exactly that: cpu-starvation
+                # produced too few cells to evaluate and the disk-pressure
+                # comparisons never ran. Counted and carried on instead; the
+                # run still fails, and now it fails saying everything it found.
+                echo "the rule could not run on $stressor$tail ($world)"
+                inconclusive=$((inconclusive + 1))
+                continue
               fi
               # 1 is a finding on emitted traffic, 3 on received traffic. Both
               # are findings. Accumulating them without failing the step, which
@@ -157,10 +165,18 @@ jobs:
             exit 1
           fi
           echo "compared $compared pair(s)"
+          status=0
+          if [ "$inconclusive" -gt 0 ]; then
+            echo "$inconclusive comparison(s) could not be evaluated: a stressor" \
+                 "that stops the node produces too few cells to compare, which is" \
+                 "neither a pass nor a finding"
+            status=1
+          fi
           if [ "$findings" -gt 0 ]; then
             echo "$findings preregistered comparison(s) were rejected"
-            exit 1
+            status=1
           fi
+          exit "$status"
 
       - name: Upload campaign captures
         if: always()
