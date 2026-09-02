@@ -151,6 +151,10 @@ func Verify(encoded []byte, authority ed25519.PublicKey, now time.Time) (Verifie
 	if err := decoder.Decode(&signed); err != nil {
 		return Verified{}, fmt.Errorf("decode topology: %w", err)
 	}
+	// Depth: the strict walk above already refuses trailing content, and
+	// disabling only this line leaves the corpus differential test green.
+	// Kept because the entailment lives in another package, and named so a
+	// reader does not take this for the check that provides the property.
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return Verified{}, errors.New("trailing topology data")
 	}

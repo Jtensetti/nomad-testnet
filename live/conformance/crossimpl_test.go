@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/Jtensetti/nomad-constant-rate-fabric/fabric"
@@ -92,6 +94,40 @@ func TestCellsFromTheSecondImplementationVerifyHere(t *testing.T) {
 	for _, direction := range []string{"A:", "C:", "E:", "F:", "G:"} {
 		if !bytes.Contains(output, []byte(direction)) {
 			t.Errorf("direction %s did not run:\n%s", direction, output)
+		}
+	}
+
+	// A direction that ran is not a direction that checked anything. Each of
+	// these reports how many documents it refused, and the floor is pinned
+	// here so a list that shrinks on the other side fails on this one.
+	//
+	// The floors are minimums rather than equalities: the two implementations
+	// enumerate their mutations differently -- the reference applies its
+	// topology list to every topology vector, this one applies its list once
+	// -- so requiring the numbers to match would be requiring them to be the
+	// same program.
+	for _, floor := range []struct {
+		pattern string
+		least   int
+	}{
+		{`C: refused (\d+) mutations`, 17},
+		{`E: verified \d+ signed topologies and refused (\d+)`, 12},
+		{`F: verified \d+ object manifest\(s\) and refused (\d+)`, 8},
+		{`G: reproduced \d+ uplink frame derivation\(s\) and refused (\d+)`, 14},
+	} {
+		match := regexp.MustCompile(floor.pattern).FindSubmatch(output)
+		if match == nil {
+			t.Errorf("could not read a refusal count for %q from:\n%s", floor.pattern, output)
+			continue
+		}
+		count, err := strconv.Atoi(string(match[1]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count < floor.least {
+			t.Errorf("the second implementation refused %d documents where it "+
+				"refused %d before; a refusal list that shrinks is a check that "+
+				"stopped checking", count, floor.least)
 		}
 	}
 
@@ -208,8 +244,12 @@ func TestBothImplementationsRefuseTheSameCells(t *testing.T) {
 	decodeInto(t, subject.fields["topology_digest"], context.TopologyDigest[:])
 
 	// The same mutations the second implementation refuses, refused here.
-	// Their list lives in crosscheck.py; this is the mirror, and the two
-	// counts are compared so neither can quietly shrink.
+	// Their list lives in crosscheck.py and this is the mirror.
+	//
+	// The counts are not compared element for element -- the two sides
+	// enumerate differently -- but neither list can quietly shrink: this one
+	// fails if a case is removed, and the reference's reported counts are
+	// floored in TestCellsFromTheSecondImplementationVerifyHere.
 	mutations := []struct {
 		name   string
 		offset int

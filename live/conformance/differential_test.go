@@ -189,6 +189,46 @@ func TestAmbiguousJSONRepresentationsAreRefusedOrCanonical(t *testing.T) {
 				"disagree about whether this document is valid", vector.Name)
 		}
 
+		// The rest of the reference's topology refusal list, mirrored. Its
+		// members live in crosscheck.py's direction_e; before this, four of
+		// them were refused there and unexamined here.
+		outerWith := func(key string, held any) []byte {
+			copied := map[string]any{}
+			for existing, value := range value {
+				copied[existing] = value
+			}
+			copied[key] = held
+			encoded, err := json.Marshal(copied)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return encoded
+		}
+		inner, ok := value["document"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: the vector carries no document object", vector.Name)
+		}
+		documentWith := func(key string, held any) []byte {
+			copied := map[string]any{}
+			for existing, held := range inner {
+				copied[existing] = held
+			}
+			copied[key] = held
+			return outerWith("document", copied)
+		}
+		for name, mutated := range map[string][]byte{
+			"an unknown outer member":    outerWith("surprise", 1),
+			"an unknown document member": documentWith("surprise", 1),
+			"an unrecognised version":    documentWith("version", "nomad-live-topology-v9"),
+			"trailing data":              append(append([]byte{}, payload...), []byte("{}")...),
+		} {
+			if accepts(vector.Message, mutated) {
+				t.Fatalf("%s: %s was accepted; the reference refuses it, so the two "+
+					"implementations disagree about whether this document is valid",
+					vector.Name, name)
+			}
+		}
+
 		duplicate := "{\n  \"document\": null,\n" + text[2:]
 		if duplicate == text {
 			t.Fatalf("%s: could not build a duplicate-key case", vector.Name)
