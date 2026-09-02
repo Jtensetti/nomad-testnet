@@ -141,10 +141,17 @@ func rotatingPeerPlan(index int) []uint16 {
 
 func nodeTestTopologyWithCadence(t *testing.T, intervalMillis, maxLatenessMillis uint32, peerPlan func(int) []uint16) (topology.Verified, map[string]ed25519.PrivateKey, []string) {
 	t.Helper()
+	return nodeTestTopologyOn(t, "127.0.0.1", intervalMillis, maxLatenessMillis, peerPlan)
+}
+
+// nodeTestTopologyOn builds the fixture against a given loopback address, so
+// the same wire exercises can run over IPv6 as well as IPv4.
+func nodeTestTopologyOn(t *testing.T, host string, intervalMillis, maxLatenessMillis uint32, peerPlan func(int) []uint16) (topology.Verified, map[string]ed25519.PrivateKey, []string) {
+	t.Helper()
 	endpoints := make([]string, 3)
 	listeners := make([]*net.UDPConn, 3)
 	for index := range endpoints {
-		listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+		listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(host)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -191,8 +198,8 @@ func nodeTestTopologyWithCadence(t *testing.T, intervalMillis, maxLatenessMillis
 		identities[id] = privateKey
 		document.Operators[index] = topology.Operator{
 			ID: id, Index: uint16(index), Endpoint: endpoints[index],
-			PartialEndpoint: "http://127.0.0.1:" + []string{"4311", "4312", "4313"}[index],
-			DKGEndpoint:     "http://127.0.0.1:" + []string{"4411", "4412", "4413"}[index],
+			PartialEndpoint: "http://" + net.JoinHostPort(host, []string{"4311", "4312", "4313"}[index]),
+			DKGEndpoint:     "http://" + net.JoinHostPort(host, []string{"4411", "4412", "4413"}[index]),
 			IdentityKey:     base64.StdEncoding.EncodeToString(publicKey),
 			KEXKey:          base64.StdEncoding.EncodeToString(kexKey.PublicKey().Bytes()),
 			DKGIdentityKey:  base64.StdEncoding.EncodeToString(dkgPublic[:]),
