@@ -68,37 +68,120 @@ func TestPayloadPreservingVerifiableCommitteeShuffle(t *testing.T) {
 	}
 }
 
-func TestWireRoundTripIsExactly1200BytesPerCell(t *testing.T) {
-	pub, priv, err := GenerateKey()
+// A wire cell is [WireCellSize]byte, so its length is a compile-time constant
+// and asserting it proves nothing. What the wire form has to get right is that
+// the ciphertext occupies exactly the first cipherSize bytes and the rest is
+// the caller's padding: a cell whose tail were zero, or ciphertext spilling
+// past cipherSize, would both still be 1200 bytes long.
+func TestTheWireTailIsThePaddingTheCallerSupplied(t *testing.T) {
+	public, private, err := GenerateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
 	plain := testCells(4)
-	batch, err := Encrypt(pub, plain)
+	batch, err := Encrypt(public, plain)
 	if err != nil {
 		t.Fatal(err)
 	}
-	paddingBytes := 4 * (WireCellSize - cipherSize)
-	wire, err := batch.MarshalWireWithPadding(bytes.NewReader(make([]byte, paddingBytes)))
+
+	// Distinguishable padding: zeros would be indistinguishable from a tail
+	// that was never written.
+	const tailSize = WireCellSize - cipherSize
+	padding := make([]byte, len(plain)*tailSize)
+	for index := range padding {
+		padding[index] = byte(index%251 + 1)
+	}
+	wire, err := batch.MarshalWireWithPadding(bytes.NewReader(padding))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := range wire {
-		if len(wire[i]) != WireCellSize {
-			t.Fatalf("cell %d has size %d", i, len(wire[i]))
+
+	if len(wire) != len(plain) {
+		t.Fatalf("marshalled %d cells for %d plaintext cells", len(wire), len(plain))
+	}
+	for index := range wire {
+		tail := wire[index][cipherSize:]
+		want := padding[index*tailSize : (index+1)*tailSize]
+		if !bytes.Equal(tail, want) {
+			t.Fatalf("cell %d carries %x in its tail, not the padding %x",
+				index, tail, want)
+		}
+		if bytes.Equal(tail, make([]byte, tailSize)) {
+			t.Fatalf("cell %d has a zero tail, so the padding was not written", index)
 		}
 	}
+
 	parsed, err := ParseWire(wire)
 	if err != nil {
 		t.Fatal(err)
 	}
-	decrypted, err := Decrypt(priv, parsed)
+	decrypted, err := Decrypt(private, parsed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := range plain {
-		if plain[i] != decrypted[i] {
-			t.Fatalf("cell %d changed", i)
+	for index := range plain {
+		if plain[index] != decrypted[index] {
+			t.Fatalf("cell %d changed across the wire", index)
+		}
+	}
+}
+
+// Padding that runs out must fail the marshal rather than leave a tail of
+// zeros, which is the one thing the cover traffic exists to avoid.
+func TestPaddingThatRunsShortFailsTheMarshal(t *testing.T) {
+	public, _, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := Encrypt(public, testCells(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const tailSize = WireCellSize - cipherSize
+	short := make([]byte, 4*tailSize-1)
+	if _, err := batch.MarshalWireWithPadding(bytes.NewReader(short)); err == nil {
+		t.Fatal("a padding source one byte short was accepted")
+	}
+	if _, err := batch.MarshalWireWithPadding(nil); err == nil {
+		t.Fatal("a nil padding source was accepted")
+	}
+}
+
+// The padding is not part of the ciphertext, and a reader has to be able to
+// tell: two cells differing only in their tails must parse to the same batch.
+// If this ever failed, padding would be carrying batch state.
+func TestTheTailDoesNotReachTheDecryptedBatch(t *testing.T) {
+	public, private, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := testCells(4)
+	batch, err := Encrypt(public, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const tailSize = WireCellSize - cipherSize
+	wire, err := batch.MarshalWireWithPadding(
+		bytes.NewReader(make([]byte, len(plain)*tailSize)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range wire {
+		for offset := cipherSize; offset < WireCellSize; offset++ {
+			wire[index][offset] ^= 0xff
+		}
+	}
+	parsed, err := ParseWire(wire)
+	if err != nil {
+		t.Fatalf("a cell with a different tail failed to parse: %v", err)
+	}
+	decrypted, err := Decrypt(private, parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range plain {
+		if plain[index] != decrypted[index] {
+			t.Fatalf("cell %d changed when only its padding did", index)
 		}
 	}
 }

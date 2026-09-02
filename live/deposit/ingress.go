@@ -54,11 +54,11 @@ func (ingress *Ingress) Accept(session *uplink.Session, sessionID [32]byte,
 	if err != nil {
 		return fmt.Errorf("uplink cell refused: %w", err)
 	}
-	var payload [airlock.DepositSize]byte
-	if len(inner) != len(payload) {
-		return errors.New("uplink inner layer is not one deposit")
-	}
-	copy(payload[:], inner[:])
+	// A deposit is exactly the uplink's inner layer. Both sizes are compile-time
+	// constants, so comparing them at runtime is a check that can never fail;
+	// the assignment is what enforces the equality, and stops the build if the
+	// two ever part rather than silently truncating a deposit.
+	var payload [airlock.DepositSize]byte = inner
 	if err := ingress.airlock.Deposit(sessionID, sequence, payload, now); err != nil {
 		if errors.Is(err, airlock.ErrWindowClosed) || errors.Is(err, airlock.ErrSealed) {
 			return ErrNotForThisEpoch
