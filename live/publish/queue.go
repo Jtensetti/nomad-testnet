@@ -22,11 +22,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
+
+	"github.com/Jtensetti/nomad-testnet/live/durable"
 )
 
 const (
@@ -163,7 +164,7 @@ func (queue *Queue) Submit(object []byte, publisher ed25519.PublicKey) error {
 			return err
 		}
 	}
-	return syncDir(queue.root)
+	return durable.Directory(queue.root)
 }
 
 func (queue *Queue) fragmentObject(root [32]byte, object []byte) ([]Fragment, error) {
@@ -307,7 +308,7 @@ func (queue *Queue) Next() (Fragment, error) {
 	if err := os.Remove(path); err != nil {
 		return Fragment{}, err
 	}
-	return fragment, syncDir(queue.root)
+	return fragment, durable.Directory(queue.root)
 }
 
 // Pending reports the queue depth. It exists for local bounds enforcement
@@ -400,17 +401,5 @@ func writeNewFile(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	ok = true
-	return nil
-}
-
-func syncDir(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = directory.Close() }()
-	if err := directory.Sync(); err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
 	return nil
 }

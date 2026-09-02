@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 
 	"golang.org/x/crypto/argon2"
+
+	"github.com/Jtensetti/nomad-testnet/live/durable"
 )
 
 // KeySource supplies the key the queue seals pending fragments under.
@@ -213,12 +215,7 @@ func createExclusive(path string, data []byte) error {
 	if err := os.Link(temporaryPath, path); err != nil {
 		return err
 	}
-	handle, err := os.Open(directory)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = handle.Close() }()
-	return handle.Sync()
+	return durable.Directory(directory)
 }
 
 func checkOrCreateVerifier(root string, key [32]byte) error {

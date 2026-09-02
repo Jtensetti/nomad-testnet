@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+
+	"github.com/Jtensetti/nomad-testnet/live/durable"
 )
 
 const (
@@ -249,7 +251,7 @@ func (store *RevocationStore) Accept(encoded []byte, observed Verified) error {
 		if err := writeNewFile(path, encoded, 0o600); err != nil {
 			return err
 		}
-		if err := syncDir(store.root); err != nil {
+		if err := durable.Directory(store.root); err != nil {
 			return err
 		}
 	} else if err != nil {

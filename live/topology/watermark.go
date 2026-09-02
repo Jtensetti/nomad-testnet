@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/Jtensetti/nomad-testnet/live/durable"
 )
 
 // ErrTopologyRollback reports a topology older than one this node has already
@@ -139,18 +141,5 @@ func writeWatermark(path string, contents watermarkFile) error {
 	if err := os.Rename(name, path); err != nil {
 		return err
 	}
-	return syncDir(directory)
-}
-
-func syncDir(path string) error {
-	handle, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	syncErr := handle.Sync()
-	closeErr := handle.Close()
-	if syncErr != nil {
-		return syncErr
-	}
-	return closeErr
+	return durable.Directory(directory)
 }

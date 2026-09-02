@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/Jtensetti/nomad-testnet/live/durable"
 )
 
 const sequenceReservation = uint32(1 << 20)
@@ -134,12 +136,7 @@ func atomicStateWrite(path string, data []byte) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return err
 	}
-	dir, err := os.Open(directory)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
+	return durable.Directory(directory)
 }
 
 // Return gives back a sequence number that was issued but never reached the

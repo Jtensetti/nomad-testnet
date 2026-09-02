@@ -15,6 +15,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/Jtensetti/nomad-testnet/live/durable"
 	"github.com/Jtensetti/nomad-testnet/live/hop"
 )
 
@@ -160,7 +161,7 @@ func (store *Store) Put(metadata hop.Metadata, payload [hop.CiphertextSize]byte)
 		return false, err
 	}
 	if created {
-		if err := syncDirectory(streamPath); err != nil {
+		if err := durable.Directory(streamPath); err != nil {
 			return false, err
 		}
 	}
@@ -365,13 +366,4 @@ func writeImmutable(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(temporaryPath, path)
-}
-
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
 }

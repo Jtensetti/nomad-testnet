@@ -24,6 +24,8 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/batch"
 	"github.com/Jtensetti/nomad-testnet/live/hop"
 	"github.com/Jtensetti/nomad-testnet/live/rawcache"
+
+	"github.com/Jtensetti/nomad-testnet/live/durable"
 )
 
 type Materializer struct {
@@ -298,12 +300,7 @@ func writeImmutable(path string, encoded []byte) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return err
 	}
-	dir, err := os.Open(directory)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
+	return durable.Directory(directory)
 }
 
 func OutputDigest(path string) ([32]byte, error) {

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/Jtensetti/nomad-testnet/live/durable"
 )
 
 // The uplink sequence is the AEAD nonce. That is the whole reason this file
@@ -157,14 +159,5 @@ func atomicStateWrite(path string, data []byte) error {
 	if err := os.Rename(name, path); err != nil {
 		return err
 	}
-	return syncDirectory(directory)
-}
-
-func syncDirectory(path string) error {
-	handle, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = handle.Close() }()
-	return handle.Sync()
+	return durable.Directory(directory)
 }
