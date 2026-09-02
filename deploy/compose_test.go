@@ -78,3 +78,64 @@ func serviceBlock(text, name string) string {
 	}
 	return rest
 }
+
+// A core file contains the complete process address space, so a telemetry
+// allowlist and GOTRACEBACK cannot make one safe: whatever the schema permits
+// to be logged, the keys are in the dump. The operator runbook asks for
+// LimitCORE=0 on the host, which this project cannot verify, so the shipping
+// Compose boundary has to enforce the equivalent where it can reach.
+//
+// This is the control PROD-27's remaining blocker names, and the second-party
+// review in nomad-protocol reached the same boundary independently.
+//
+// The check is on the block rather than on four strings found anywhere: an
+// earlier version looked for "ulimits:", "core:", "soft: 0" and "hard: 0"
+// separately, which a file with `soft: 0` under some other limit would satisfy
+// while leaving core dumps on.
+func TestEveryComposeServiceDisablesCoreDumps(t *testing.T) {
+	encoded, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	servicesAt := strings.Index(text, "\nservices:\n")
+	if servicesAt < 0 {
+		t.Fatal("compose file has no services section")
+	}
+	anchor := text[:servicesAt]
+
+	limits := strings.Index(anchor, "\n  ulimits:\n")
+	if limits < 0 {
+		t.Fatal("the locked-service anchor sets no ulimits, so core dumps are " +
+			"whatever the host allows")
+	}
+	// The core limit and both its bounds must be inside the ulimits block,
+	// which runs until the next line indented no further than "  ulimits:"
+	// itself. Cutting at the first "\n  " does not work: the block's own
+	// nested lines start with two spaces as well.
+	var block []string
+	for _, line := range strings.Split(anchor[limits+len("\n  ulimits:\n"):], "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "   ") {
+			break
+		}
+		block = append(block, line)
+	}
+	rest := strings.Join(block, "\n")
+	for _, required := range []string{"core:", "soft: 0", "hard: 0"} {
+		if !strings.Contains(rest, required) {
+			t.Fatalf("the anchor's ulimits block does not contain %q, so core dumps "+
+				"are not disabled:\n%s", required, rest)
+		}
+	}
+
+	for _, name := range serviceNames(t, text) {
+		service := serviceBlock(text, name)
+		if !strings.Contains(service, "<<: *locked-service") {
+			t.Fatalf("service %q bypasses the locked-service anchor, so it does not "+
+				"inherit the core-dump limit", name)
+		}
+	}
+}

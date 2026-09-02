@@ -39,6 +39,18 @@ for service in operator-a operator-b operator-c share-a share-b share-c partial-
     docker inspect -f '{{json .HostConfig.CapDrop}}' "$container_id" | grep -Fq '"ALL"'
     docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$container_id" | grep -Fq 'no-new-privileges:true'
     test "$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$container_id")" = 128
+    # The core-dump limit, read from the running container rather than from the
+    # compose file. A core file is the whole address space, so no telemetry
+    # allowlist makes one safe; deploy/compose_test.go checks that the file
+    # asks for this, and this checks that the container got it.
+    core_limit=$(docker inspect \
+        -f '{{range .HostConfig.Ulimits}}{{if eq .Name "core"}}{{.Soft}}/{{.Hard}}{{end}}{{end}}' \
+        "$container_id")
+    if [ "$core_limit" != "0/0" ]; then
+        echo "$service has core ulimit '${core_limit:-unset}', not 0/0: a crash there" >&2
+        echo "would write the process address space to disk" >&2
+        exit 1
+    fi
 done
 for service in operator-a operator-b operator-c; do
     docker compose -p "$project_name" -f "$compose_file" exec -T "$service" \
