@@ -341,7 +341,7 @@ def direction_d(path: pathlib.Path) -> int:
     return len(cells)
 
 
-def direction_e(vectors: list[dict]) -> int:
+def direction_e(vectors: list[dict]) -> tuple[int, int]:
     """Verify the signed topology, which is the root of trust for everything.
 
     The digest is the check that matters. It is a SHA-256 over the canonical
@@ -351,6 +351,9 @@ def direction_e(vectors: list[dict]) -> int:
     verify signatures it computed itself and disagree with everyone.
     """
     checked = 0
+    # Counted and reported for the same reason the cell mutations are: a list
+    # that quietly shrinks is a check that quietly stops checking.
+    structurally_refused = 0
     for vector in vectors:
         if vector["message"] != "topology-document-v3":
             continue
@@ -397,11 +400,21 @@ def direction_e(vectors: list[dict]) -> int:
             "trailing data": encoded.decode() + "{}",
             "a duplicate member": encoded.decode().replace(
                 '"network_id"', '"network_id": "elsewhere",\n    "network_id"', 1),
+            # A base64 field with a newline in it. Go's decoder ignores CR and
+            # LF wherever they appear and Strict() does not change that, so
+            # this verified in Go while validate=True refused it here: one
+            # signed topology, two answers. The signature cannot object,
+            # because the signature field is not covered by the signature.
+            # The Go mirror is TestAmbiguousJSONRepresentationsAreRefusedOrCanonical.
+            "a newline inside a base64 field": json.dumps(
+                {**outer, "signature": outer["signature"][:8] + "\n"
+                 + outer["signature"][8:]}),
         }
         for name, mutated in refused.items():
             try:
                 nomadtopology.verify(mutated.encode(), authority)
             except (nomadtopology.TopologyError, ValueError):
+                structurally_refused += 1
                 continue
             raise Failure(f"{vector['name']}: accepted {name}")
 
@@ -434,7 +447,7 @@ def direction_e(vectors: list[dict]) -> int:
         checked += 1
     if checked == 0:
         raise Failure("the corpus contained no topology vectors; nothing was checked")
-    return checked
+    return checked, structurally_refused
 
 
 def direction_f(vectors: list[dict]) -> int:
@@ -693,10 +706,11 @@ def main() -> int:
         print(f"A: verified and reproduced {verified} authenticated cells from the corpus")
         refused = direction_c(vectors)
         print(f"C: refused {refused} mutations and cross-context replays")
-        topologies = direction_e(vectors)
+        topologies, topology_refusals = direction_e(vectors)
         signatures = "with signatures" if nomadtopology.SIGNATURES_CHECKABLE \
             else "canonical encoding and digest only; no ed25519 library here"
-        print(f"E: verified {topologies} signed topologies ({signatures})")
+        print(f"E: verified {topologies} signed topologies and refused "
+              f"{topology_refusals} ambiguous or malformed ones ({signatures})")
         manifests = direction_f(vectors)
         manifest_signatures = "with signatures" if nomadobject.SIGNATURES_CHECKABLE \
             else "layout and signing messages only; no ed25519 library here"

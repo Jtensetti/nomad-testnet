@@ -160,6 +160,35 @@ func TestAmbiguousJSONRepresentationsAreRefusedOrCanonical(t *testing.T) {
 			}
 		}
 
+		// A base64 field with a newline in it. Go's decoder ignores CR and LF
+		// wherever they appear and Strict() does not change that, so this
+		// verified here while the reference -- which decodes with
+		// validate=True -- refused it: one signed topology, two answers. The
+		// signature cannot object, because the signature field is not covered
+		// by the signature. See EVIDENCE_INDEX F-18.
+		//
+		// Built by re-serialising the parsed document rather than by editing
+		// the text: the vector is pretty-printed, and a replace aimed at
+		// compact JSON matches nothing and reports success for it.
+		signature, ok := value["signature"].(string)
+		if !ok || signature == "" {
+			t.Fatalf("%s: the vector carries no signature to mutate", vector.Name)
+		}
+		withNewline := map[string]any{}
+		for key, held := range value {
+			withNewline[key] = held
+		}
+		withNewline["signature"] = signature[:8] + "\n" + signature[8:]
+		spaced, err := json.Marshal(withNewline)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if accepts(vector.Message, spaced) {
+			t.Fatalf("%s: a topology whose signature field carries a newline was "+
+				"accepted; the reference refuses it, so the two implementations "+
+				"disagree about whether this document is valid", vector.Name)
+		}
+
 		duplicate := "{\n  \"document\": null,\n" + text[2:]
 		if duplicate == text {
 			t.Fatalf("%s: could not build a duplicate-key case", vector.Name)
