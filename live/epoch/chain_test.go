@@ -582,3 +582,88 @@ func TestServesEpochRefusesEverythingButActive(t *testing.T) {
 		t.Fatal("an epoch past its retirement must not be served")
 	}
 }
+
+// The approval half of the same split-brain defense. ApproveWithJournal
+// documents itself as having "the same fail-closed journal semantics" as
+// ActivateWithJournal, and nothing checked it: the function was at zero
+// coverage across the repository while the activation path had this test.
+//
+// Approvals carry a transition rather than an activation, so an operator that
+// signed two conflicting ones would authorize two successors for one epoch --
+// the same outage, through the other role.
+func TestJournalRefusesSecondApproval(t *testing.T) {
+	f := newFixture(t, 3)
+	session := sha256.Sum256([]byte("journal-approval-session"))
+	topologyBytes, network := f.buildSignedTopology(t, 1, 2, genesisTimes(), session, 10)
+	certificateBytes, _ := f.buildCertificate(t, network)
+
+	first, err := New(nil, TransitionGenesis, canonicalTime(genesisTimes().Activate),
+		canonicalTime(genesisTimes().Retire), topologyBytes, certificateBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := genesisTimes()
+	other.Retire = other.Retire.Add(time.Hour)
+	second, err := New(nil, TransitionGenesis, canonicalTime(other.Activate),
+		canonicalTime(other.Retire), topologyBytes, certificateBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	journal, err := OpenJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator := network.Document.Operators[0]
+	identity := f.Operators[0].Identity
+	if _, err := journal.ApproveWithJournal(first, Verified{}, operator, identity); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.ApproveWithJournal(first, Verified{}, operator, identity); err != nil {
+		t.Fatalf("re-approving the identical descriptor must be idempotent: %v", err)
+	}
+	if _, err := journal.ApproveWithJournal(second, Verified{}, operator, identity); !errors.Is(err, ErrConflictingSignature) {
+		t.Fatalf("expected a refusal to approve a second descriptor for epoch 1, got %v", err)
+	}
+
+	fresh, err := OpenJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fresh.ApproveWithJournal(second, Verified{}, operator, identity); err != nil {
+		t.Fatalf("an independent operator journal must be unaffected: %v", err)
+	}
+}
+
+// An operator that activated an epoch's descriptor can still approve it.
+//
+// This does not prove the role belongs in the journal key. Both roles record
+// the same Digest(descriptor), so dropping the role leaves this idempotent
+// rather than conflicting, and the mutation survives -- which is worth stating
+// rather than dressing up, because the mutation surviving is the finding: see
+// DEC-025 on whether the role separation should exist at all.
+func TestActivationAndApprovalAreSeparateJournalEntries(t *testing.T) {
+	f := newFixture(t, 3)
+	session := sha256.Sum256([]byte("journal-role-session"))
+	topologyBytes, network := f.buildSignedTopology(t, 1, 2, genesisTimes(), session, 10)
+	certificateBytes, _ := f.buildCertificate(t, network)
+
+	descriptor, err := New(nil, TransitionGenesis, canonicalTime(genesisTimes().Activate),
+		canonicalTime(genesisTimes().Retire), topologyBytes, certificateBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := OpenJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator := network.Document.Operators[0]
+	identity := f.Operators[0].Identity
+
+	if _, err := journal.ActivateWithJournal(descriptor, operator, identity); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.ApproveWithJournal(descriptor, Verified{}, operator, identity); err != nil {
+		t.Fatalf("approving an epoch this operator activated was refused: %v", err)
+	}
+}
