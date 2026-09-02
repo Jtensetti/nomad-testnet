@@ -12,6 +12,8 @@ import (
 	"go.dedis.ch/kyber/v4"
 	"go.dedis.ch/kyber/v4/group/edwards25519"
 	dkg "go.dedis.ch/kyber/v4/share/dkg/pedersen"
+
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 )
 
 const (
@@ -266,7 +268,7 @@ func strictJSON(encoded []byte, destination any) error {
 }
 
 func decodeBase64(encoded string, size int) ([]byte, error) {
-	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	decoded, err := strictjson.DecodeBase64(encoded)
 	if err != nil || len(decoded) != size {
 		return nil, errors.New("invalid base64 or length")
 	}
@@ -274,7 +276,7 @@ func decodeBase64(encoded string, size int) ([]byte, error) {
 }
 
 func decodeVariable(encoded string, minimum, maximum int) ([]byte, error) {
-	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	decoded, err := strictjson.DecodeBase64(encoded)
 	if err != nil || len(decoded) < minimum || len(decoded) > maximum {
 		return nil, errors.New("invalid base64 or length")
 	}

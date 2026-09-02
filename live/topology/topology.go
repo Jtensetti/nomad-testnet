@@ -564,7 +564,7 @@ func signingMessage(domain string, payload []byte) []byte {
 }
 
 func decodeFixed(encoded string, size int) ([]byte, error) {
-	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	decoded, err := strictjson.DecodeBase64(encoded)
 	if err != nil || len(decoded) != size {
 		return nil, errors.New("invalid base64 or length")
 	}

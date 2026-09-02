@@ -2,7 +2,6 @@ package dkgnet
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"github.com/Jtensetti/nomad-testnet/live/committee"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 	dkg "go.dedis.ch/kyber/v4/share/dkg/pedersen"
 )
@@ -87,13 +87,13 @@ func Run(ctx context.Context, network topology.Verified, secrets topology.Verifi
 		board.Wait()
 	}()
 
-	nonce, err := base64.StdEncoding.Strict().DecodeString(network.Document.DKG.SessionID)
+	nonce, err := strictjson.DecodeBase64(network.Document.DKG.SessionID)
 	if err != nil || len(nonce) != 32 {
 		return RunResult{}, errors.New("invalid signed DKG nonce")
 	}
 	identities := make([]mix.DKGPublicIdentity, len(network.Document.Operators))
 	for index, operator := range network.Document.Operators {
-		encoded, err := base64.StdEncoding.Strict().DecodeString(operator.DKGIdentityKey)
+		encoded, err := strictjson.DecodeBase64(operator.DKGIdentityKey)
 		if err != nil || len(encoded) != len(mix.DKGPublicIdentity{}) {
 			return RunResult{}, fmt.Errorf("invalid DKG identity for %s", operator.ID)
 		}

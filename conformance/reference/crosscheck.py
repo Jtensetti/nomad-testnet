@@ -355,7 +355,7 @@ def direction_e(vectors: list[dict]) -> int:
         if vector["message"] != "topology-document-v3":
             continue
         encoded = bytes.fromhex(vector["bytes_hex"])
-        authority = base64.b64decode(vector["fields"]["conformance_authority_key"])
+        authority = base64.b64decode(vector["fields"]["conformance_authority_key"], validate=True)
         document = nomadtopology.verify(encoded, authority)
 
         computed = nomadtopology.topology_digest(document).hex()

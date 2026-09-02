@@ -18,6 +18,7 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/bundle"
 	"github.com/Jtensetti/nomad-testnet/live/committee"
 	"github.com/Jtensetti/nomad-testnet/live/hop"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -117,7 +118,7 @@ func runFixtureCommittee(
 	if err != nil {
 		return committee.Certificate{}, committee.Verified{}, nil, err
 	}
-	nonce, err := base64.StdEncoding.Strict().DecodeString(network.Document.DKG.SessionID)
+	nonce, err := strictjson.DecodeBase64(network.Document.DKG.SessionID)
 	if err != nil || len(nonce) != 32 {
 		return committee.Certificate{}, committee.Verified{}, nil, errors.New("invalid topology DKG session")
 	}

@@ -266,7 +266,7 @@ func verifyMixRounds(rounds []MixRoundFile, committee mix.ThresholdCommittee, ne
 		if err != nil {
 			return nil, err
 		}
-		proof, err := base64.StdEncoding.Strict().DecodeString(roundFile.Proof)
+		proof, err := strictjson.DecodeBase64(roundFile.Proof)
 		if err != nil || len(proof) == 0 {
 			return nil, errors.New("invalid mix proof encoding")
 		}
@@ -356,7 +356,7 @@ func signingMessage(domain string, payload []byte) []byte {
 }
 
 func decodeBase64(encoded string, size int) ([]byte, error) {
-	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	decoded, err := strictjson.DecodeBase64(encoded)
 	if err != nil || (size >= 0 && len(decoded) != size) {
 		return nil, errors.New("invalid base64 or length")
 	}

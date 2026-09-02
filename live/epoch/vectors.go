@@ -2,10 +2,11 @@ package epoch
 
 import (
 	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 )
 
 // CanonicalBytes returns the exact canonical binary preimage that the
@@ -189,7 +190,7 @@ func CheckVector(vector Vector) error {
 			return fmt.Errorf("vector %s: %s signature does not verify", vector.Name, label)
 		}
 	}
-	if _, err := base64.StdEncoding.Strict().DecodeString(vector.TopologyBase64); err != nil {
+	if _, err := strictjson.DecodeBase64(vector.TopologyBase64); err != nil {
 		return fmt.Errorf("vector %s: invalid embedded topology encoding", vector.Name)
 	}
 	return nil
