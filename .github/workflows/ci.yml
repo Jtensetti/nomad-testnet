@@ -220,6 +220,15 @@ jobs:
           ./scripts/scan-vulnerabilities.sh . components/*/
       - name: Verify the traffic-analysis harness still detects differences
         run: python3 scripts/test-two-world-analysis.py
+      # The second instrument. The rule above compares marginal distributions;
+      # this asks whether a classifier can label a trace, which is the question
+      # a traffic-analysis adversary actually asks. Its self-test carries the
+      # regression for a defect that made it separate two worlds of jitter-free
+      # cadence at accuracy 1.0 on floating-point residue alone, so it is not
+      # optional: without it the lab can go back to reporting leaks in honest
+      # traffic, or to missing real ones, and nothing would say so.
+      - name: Verify the traffic-analysis classifier still detects and still passes
+        run: python3 scripts/test-traffic-lab.py
       - name: Verify the campaign verdict still separates noise from a finding
         run: python3 scripts/wan/test-wan-verdict.py
       - name: Verify the load verdict refuses a flood that never arrived
