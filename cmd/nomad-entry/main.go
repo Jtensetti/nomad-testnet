@@ -45,7 +45,8 @@ func run(arguments []string) error {
 	listen := flags.String("listen", "", "local UDP listen address for publisher uplinks")
 	batches := flags.String("batches", "", "directory sealed batches are written to")
 	healthPath := flags.String("health", "", "local health JSON path")
-	sessions := flags.Int("sessions", 256, "maximum concurrent uplink sessions")
+	sessions := flags.Int("sessions", 256,
+		"uplink sessions this service will establish before refusing further handshakes")
 	batchSize := flags.Int("batch-size", 64, "fixed slots per release epoch, real and cover")
 	period := flags.Duration("period", time.Minute, "length of one release epoch")
 	cutoff := flags.Duration("deposit-cutoff", 15*time.Second,

@@ -146,30 +146,17 @@ func TestACellDoesNotOpenUnderADifferentSequence(t *testing.T) {
 
 // Padding is checked, so a forger cannot use it as a channel to carry bytes
 // past a caller that only reads the inner layer.
-func TestNonZeroPaddingIsRefused(t *testing.T) {
-	public, _, err := mix.GenerateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, err := NewSession([]byte("padding-test-secret"), public, Context{
-		NetworkID: "nomad-test", Epoch: 1,
-		TopologyDigest: [32]byte{9}, EntryOperator: 0,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cell := sealedCell(t, session, 3)
-	if _, _, err := session.Open(cell); err != nil {
-		t.Fatalf("the untampered cell was refused: %v", err)
-	}
-	// The padding lives inside the sealed plaintext, so it cannot be altered
-	// from outside without breaking the tag. What this pins is that the check
-	// exists and runs on the opened plaintext: it is the reason a future change
-	// to the inner layout cannot quietly start carrying data there.
-	if paddingSize <= 0 {
-		t.Fatal("there is no padding, so the zero check guards nothing")
-	}
-}
+// The padding check has its own file: see
+// TestAPublisherCannotSmuggleBytesInTheReservedPadding in padding_test.go.
+//
+// A test called TestNonZeroPaddingIsRefused used to stand here and did not
+// refuse any padding. It sealed an ordinary cell, opened it, and asserted that
+// paddingSize was positive -- reasoning, in a comment, that the padding is
+// inside the sealed plaintext and so cannot be altered from outside without
+// breaking the tag. That is true and it is the wrong party: the one who can
+// put bytes there is the publisher holding the session key, which is exactly
+// the party the check exists to stop. Neutralising the guard left the whole
+// suite green, which is how the gap was found.
 
 // A zero sequence is refused on both sides, so the nonce derivation is never
 // asked for one.

@@ -124,20 +124,16 @@ func (session *Session) SealWork(sequence uint64, payload [PayloadSize]byte) (fa
 // inner layer is a real committee encryption of the reserved empty
 // fragment, which the committee discards after threshold decryption. The
 // entry operator therefore cannot tell cover from work either.
+//
+// Recognising the fragment again is airlock.IsCover, and it is there rather
+// than here because the only party that can evaluate it is one that has
+// completed threshold decryption. This package had its own copy of that
+// predicate with no callers: a second definition of what counts as cover,
+// which could have drifted from the one the committee actually applies
+// without anything failing.
 func (session *Session) SealCover(sequence uint64) (fabric.Cell, error) {
 	var empty [PayloadSize]byte
 	return session.seal(sequence, empty)
-}
-
-// IsCoverPayload reports the reserved empty fragment. Only a party that has
-// completed threshold decryption of the inner layer can evaluate this.
-func IsCoverPayload(payload [PayloadSize]byte) bool {
-	for _, value := range payload {
-		if value != 0 {
-			return false
-		}
-	}
-	return true
 }
 
 func (session *Session) seal(sequence uint64, payload [PayloadSize]byte) (fabric.Cell, error) {

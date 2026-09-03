@@ -68,9 +68,20 @@ type Config struct {
 	BatchDirectory string
 	HealthPath     string
 	Schedule       airlock.Schedule
-	// SessionLimit bounds how many uplink sessions are held at once.
-	// Accepting handshakes without a bound turns a cheap cell into unbounded
-	// state, which is the whole reason the responder takes a limit.
+	// SessionLimit bounds how many uplink sessions this service will
+	// establish, for as long as it runs. Accepting handshakes without a bound
+	// turns a cheap cell into unbounded state, which is the whole reason the
+	// responder takes a limit.
+	//
+	// It is a budget spent, not an occupancy: the responder must remember every
+	// ephemeral key it has accepted or a replayed handshake would establish a
+	// second session on the same key and the same AEAD nonces, so nothing can
+	// give a slot back. Once the budget is gone this operator establishes no
+	// further sessions until it is restarted, and a service is restarted at
+	// each topology epoch because the uplink context it was built with names
+	// one. Size it for the publishers an epoch is expected to carry, with
+	// headroom: an adversary can spend the budget with that many cheap cells,
+	// and the refusal that follows is silent and fail-closed by design.
 	SessionLimit int
 }
 
@@ -151,10 +162,32 @@ type Service struct {
 	// That is a denial-of-service amplifier bought to hide something the
 	// operator can see anyway.
 	//
+	// An address maps to a short list rather than to one session, because one
+	// session per address made the first binder of an address its owner for the
+	// life of the process. A publisher that restarted behind a NAT that kept
+	// its mapping came back on the same address with a new ephemeral key, its
+	// handshake was tried as a data cell against the session it no longer held,
+	// failed to open, and was counted as a refusal -- with no way back, since a
+	// bound address never reached the responder again. Anyone who could put a
+	// datagram on the wire with a victim's source address could do the same on
+	// purpose.
+	//
+	// The list is capped at maxSessionsPerAddress and full is refused rather
+	// than evicted: evicting the oldest would hand that lockout back to an
+	// attacker in a different shape. The cap is what keeps the trial-open cost
+	// bounded -- a forged cell costs at most that many AEAD opens, not the
+	// whole table.
+	//
+	// Falling through to the responder also means a cell that opens under none
+	// of an address's sessions now costs a key agreement rather than an AEAD
+	// open. That does not raise the ceiling: source addresses are free, so a
+	// flood from unbound addresses already cost one key agreement per datagram
+	// and still does. What it removes is the attacker's need to vary them.
+	//
 	// The cost is that a publisher whose NAT rebinds loses its session and has
 	// to handshake again. That is a real limitation and it is recorded rather
 	// than hidden.
-	sessions map[string]*boundSession
+	sessions map[string][]*boundSession
 
 	stats     statsCounters
 	startedAt time.Time
@@ -165,6 +198,12 @@ type boundSession struct {
 	session   *uplink.Session
 	sessionID [32]byte
 }
+
+// maxSessionsPerAddress bounds how many uplink sessions one source address may
+// hold at once. It is small on purpose: it exists so a restart or a spoofed
+// datagram cannot take an address away from its publisher, not so an address
+// can accumulate sessions.
+const maxSessionsPerAddress = 4
 
 type statsCounters struct {
 	received, wrongSize, handshakes, refusedHandshakes atomic.Uint64
@@ -215,7 +254,7 @@ func New(config Config) (*Service, error) {
 	// mid-epoch joins the window in progress rather than inventing one.
 	return &Service{
 		config: config, responder: responder,
-		sessions: map[string]*boundSession{},
+		sessions: map[string][]*boundSession{},
 	}, nil
 }
 
@@ -310,23 +349,27 @@ func (service *Service) receive(ctx context.Context, socket *net.UDPConn) error 
 	}
 }
 
-// handle routes one cell. A cell from an address with no session is offered to
-// the responder as a handshake; a cell from an address with one is opened under
-// it.
+// handle routes one cell. It is tried against the sessions already bound to its
+// source address, and offered to the responder as a handshake if none of them
+// open it.
 //
-// Trying the session first matters: a handshake is 1200 bytes with an 8-byte
+// Trying the sessions first matters: a handshake is 1200 bytes with an 8-byte
 // counter like every other cell, so the two are indistinguishable on the wire
 // and the order of attempts is the only thing that decides which a cell is
-// treated as.
+// treated as. A cell that opened under a session is never offered to the
+// responder, so an opened cell is deposited once and only once.
 func (service *Service) handle(cell fabric.Cell, from *net.UDPAddr, now time.Time) {
 	key := from.String()
 	service.mu.Lock()
-	bound, established := service.sessions[key]
+	bound := service.sessions[key]
 	mailbox := service.ingress
 	service.mu.Unlock()
 
-	if established {
-		err := mailbox.Accept(bound.session, bound.sessionID, cell, now)
+	for _, held := range bound {
+		err := mailbox.Accept(held.session, held.sessionID, cell, now)
+		if errors.Is(err, deposit.ErrCellRefused) {
+			continue
+		}
 		switch {
 		case err == nil:
 			service.stats.accepted.Add(1)
@@ -340,13 +383,35 @@ func (service *Service) handle(cell fabric.Cell, from *net.UDPAddr, now time.Tim
 		return
 	}
 
-	session, sessionID, err := service.responder.Accept(cell)
-	if err != nil {
+	// The per-address cap is checked before the responder is asked, so an
+	// address that is full cannot spend the operator's session budget on a
+	// handshake it would then have nowhere to put.
+	if len(bound) >= maxSessionsPerAddress {
 		service.stats.refusedHandshakes.Add(1)
 		return
 	}
+	session, sessionID, err := service.responder.Accept(cell)
+	if err != nil {
+		// A cell from an address that holds sessions and opened under none of
+		// them is a refused cell, not a refused handshake: it is the counter an
+		// operator watches, and an attacker sending garbage at an established
+		// publisher's address must not be able to move it somewhere quieter.
+		if len(bound) > 0 {
+			service.stats.refusedCell.Add(1)
+		} else {
+			service.stats.refusedHandshakes.Add(1)
+		}
+		return
+	}
 	service.mu.Lock()
-	service.sessions[key] = &boundSession{session: session, sessionID: sessionID}
+	// Newest first: a publisher that just handshaked is the one sending, so the
+	// common case still costs one open. The lock is held against the epoch roll
+	// in maintain, which swaps the mailbox under the same mutex; handle itself
+	// runs only on the receive goroutine, so the cap checked above cannot have
+	// moved. Appending onto a fresh slice rather than in place is what lets the
+	// trial-open loop above read its copy without the lock.
+	service.sessions[key] = append([]*boundSession{
+		{session: session, sessionID: sessionID}}, service.sessions[key]...)
 	service.mu.Unlock()
 	service.stats.handshakes.Add(1)
 }

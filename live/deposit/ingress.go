@@ -27,6 +27,16 @@ type Ingress struct {
 // airlock epoch that is not open.
 var ErrNotForThisEpoch = errors.New("deposit does not belong to the open epoch")
 
+// ErrCellRefused reports a cell that did not open under the session it was
+// offered to.
+//
+// It is a sentinel rather than a bare error because a caller holding more than
+// one session for a source needs to tell "not this session" from "this session,
+// and the airlock refused it": the first means try the next session, the second
+// means stop. Without the distinction a caller must either try only one session
+// or risk depositing the same cell twice.
+var ErrCellRefused = errors.New("uplink cell refused")
+
 func NewIngress(target *airlock.Airlock) (*Ingress, error) {
 	if target == nil {
 		return nil, errors.New("airlock is required")
@@ -52,7 +62,7 @@ func (ingress *Ingress) Accept(session *uplink.Session, sessionID [32]byte,
 	}
 	sequence, inner, err := session.Open(cell)
 	if err != nil {
-		return fmt.Errorf("uplink cell refused: %w", err)
+		return fmt.Errorf("%w: %w", ErrCellRefused, err)
 	}
 	// A deposit is exactly the uplink's inner layer. Both sizes are compile-time
 	// constants, so comparing them at runtime is a check that can never fail;
