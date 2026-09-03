@@ -282,10 +282,48 @@ func verifyDKGPackets(config *dkg.Config, deals []*dkg.DealBundle, responses []*
 				return fmt.Errorf("duplicate %s packet from member %d", group.phase, packet.Index())
 			}
 			seen[key] = struct{}{}
+			// The session binding, which VerifyPacketSignature does not check.
+			//
+			// A bundle's SessionID is inside its hash, so the signature covers
+			// it -- but it covers whatever value the bundle itself carries, and
+			// a bundle from another ceremony is perfectly self-consistent.
+			// Kyber enforces the binding in the live protocol (ProcessDeals,
+			// ProcessResponses and ProcessJustifications each compare the
+			// bundle's SessionID against the config nonce) and not in the
+			// standalone signature check this uses.
+			//
+			// Reverifying without it makes two ceremonies among the same
+			// membership interchangeable, which is exactly what an interrupted
+			// ceremony and its retry are. It is not reachable through the
+			// runner, whose packets have already passed the live protocol, but
+			// this function is what a third party checks a stored transcript
+			// with, and there it is the whole question.
+			if err := checkSessionBinding(config.Nonce, packet); err != nil {
+				return fmt.Errorf("%s packet %d: %w", group.phase, packet.Index(), err)
+			}
 			if err := dkg.VerifyPacketSignature(config, packet); err != nil {
 				return fmt.Errorf("%s packet %d: %w", group.phase, packet.Index(), err)
 			}
 		}
+	}
+	return nil
+}
+
+// checkSessionBinding refuses a packet that names a different ceremony.
+func checkSessionBinding(nonce []byte, packet dkg.Packet) error {
+	var session []byte
+	switch bundle := packet.(type) {
+	case *dkg.DealBundle:
+		session = bundle.SessionID
+	case *dkg.ResponseBundle:
+		session = bundle.SessionID
+	case *dkg.JustificationBundle:
+		session = bundle.SessionID
+	default:
+		return errors.New("unknown DKG packet type")
+	}
+	if !bytes.Equal(session, nonce) {
+		return errors.New("packet belongs to a different DKG session")
 	}
 	return nil
 }
