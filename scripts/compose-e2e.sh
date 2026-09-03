@@ -292,6 +292,78 @@ for item in health:
         raise SystemExit(f"{item['operator_id']} never recorded an emission")
 PY
 
+# Public cache replication, on the live stack.
+#
+# PROD-18 names replication and recorded that the campaign did not reach it.
+# The stack has always run it -- every operator has --cache-sweep=10s and
+# operator-a alone has --seed -- and nothing ever asserted the result, so a
+# sweep that had stopped working would have left this gate green.
+#
+# Only operator-a is given the seed bundle. If the stream in that bundle turns
+# up complete in operator-b's and operator-c's own caches, it got there by
+# being relayed and re-offered, which is what replication is. The check is
+# against each operator's private cache volume rather than against the wire,
+# because the wire is sealed per link by design and says nothing about which
+# stream a cell carries.
+seeded_stream=$(docker compose -p "$project_name" -f "$compose_file" exec -T operator-a \
+    cat /published/seed.json | python3 -c 'import json,sys; print(json.load(sys.stdin)["stream_id"])')
+case "$seeded_stream" in
+    [0-9a-f][0-9a-f]*) ;;
+    *) echo "the seed bundle carries no usable stream id: $seeded_stream" >&2; exit 1 ;;
+esac
+
+# The condition this gate rests on -- exactly one operator seeded, all of them
+# sweeping -- is checked by TestExactlyOneOperatorIsSeededAndAllOfThemSweep in
+# deploy/compose_test.go, which runs in the unit job this one depends on. It
+# lives there because it is a fact about compose.yaml, and because checking it
+# here would mean parsing YAML in a runner with no YAML library.
+
+# How many cells of that stream an operator holds. Counting the cell files is
+# the same completeness rule the node applies -- the sweep offers a stream only
+# once every one of them is present -- and counting them the same way on all
+# three operators keeps the comparison symmetric.
+#
+# The first version of this read the stream's batch-size record with
+# `od -An -tu2`, which decodes in host byte order: on x86 a four-cell stream
+# reads as 1024, so the gate would have failed CI for a reason that had nothing
+# to do with replication. Measuring operator-a with the identical command
+# removes the parsing entirely.
+held_cells() {
+    docker compose -p "$project_name" -f "$compose_file" exec -T "operator-$1" \
+        sh -c "ls /cache/$seeded_stream 2>/dev/null | grep -c '[.]cell\$' || true" |
+        tr -dc '0-9'
+}
+
+expected=$(held_cells a)
+# Vacuity: the seeded operator must hold a real stream. Without this the loop
+# below compares zero against zero and passes on a stack where nothing was
+# published at all.
+if [ -z "$expected" ] || [ "$expected" -lt 2 ]; then
+    echo "operator-a holds ${expected:-0} cells of the stream it was seeded with;" >&2
+    echo "there is no replication to measure" >&2
+    exit 1
+fi
+
+for name in b c; do
+    replicated=$(held_cells "$name")
+    if [ "${replicated:-0}" != "$expected" ]; then
+        echo "operator-$name holds ${replicated:-0} of $expected cells of the seeded stream;" >&2
+        echo "the stream was seeded only to operator-a, so replication did not reach it" >&2
+        exit 1
+    fi
+done
+python3 - "$evidence_root" "$seeded_stream" <<'REPPY'
+import json
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1], "replication.json").write_text(json.dumps({
+    "seeded_stream": sys.argv[2],
+    "seeded_operators": ["operator-a"],
+    "replicated_to": ["operator-b", "operator-c"],
+}, indent=2, sort_keys=True) + "\n")
+REPPY
+
 (cd "$verified_root" && sha256sum "$object_name") | tee "$evidence_root/object.sha256"
 test "$(cut -d ' ' -f 1 "$evidence_root/object.sha256")" = e3d49edcf2c3840e1be80db008116367f2e35c2ff5d582d63ee7ddd68fe8b965
 (cd "$evidence_root" && sha256sum fabric.pcap) > "$evidence_root/pcap.sha256"

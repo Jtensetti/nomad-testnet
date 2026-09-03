@@ -139,3 +139,53 @@ func TestEveryComposeServiceDisablesCoreDumps(t *testing.T) {
 		}
 	}
 }
+
+// Public cache replication is measured on the live stack by the Compose gate:
+// only one operator is given a seed bundle, and the stream in it has to turn up
+// complete in the other two operators' caches, which it can only do by being
+// relayed and re-offered.
+//
+// That measurement means nothing if the seed is handed to everybody. Then every
+// cache holds the stream without a single cell having been relayed, and the
+// gate passes on a stack where replication is dead. The condition it rests on
+// is checked here rather than in the shell script, because it is a fact about
+// this file and because the alternative was parsing YAML in a runner that has
+// no YAML library installed.
+//
+// Every operator must still sweep. A sweep interval only on the seeded operator
+// would leave the others unable to re-offer what they receive, which is the
+// same gap one step further along.
+func TestExactlyOneOperatorIsSeededAndAllOfThemSweep(t *testing.T) {
+	encoded, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	var operators, seeded, sweeping []string
+	for _, name := range serviceNames(t, text) {
+		if !strings.HasPrefix(name, "operator-") {
+			continue
+		}
+		operators = append(operators, name)
+		block := serviceBlock(text, name)
+		if strings.Contains(block, "--seed=") {
+			seeded = append(seeded, name)
+		}
+		if strings.Contains(block, "--cache-sweep=") {
+			sweeping = append(sweeping, name)
+		}
+	}
+	if len(operators) < 3 {
+		t.Fatalf("found %d operators, so this file was not parsed as expected: %v",
+			len(operators), operators)
+	}
+	if len(seeded) != 1 {
+		t.Fatalf("%d of %d operators are given a seed bundle (%v); the replication gate "+
+			"can only measure relaying if exactly one starts with the stream",
+			len(seeded), len(operators), seeded)
+	}
+	if len(sweeping) != len(operators) {
+		t.Fatalf("%d of %d operators have a cache sweep (%v); an operator that never "+
+			"sweeps cannot re-offer what it receives", len(sweeping), len(operators), sweeping)
+	}
+}
