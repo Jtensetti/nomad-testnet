@@ -191,6 +191,48 @@ func TestPublicationCampaignUnderFailureAndRetry(t *testing.T) {
 	worlds["restart"] = restartWorld("restart", newQueue(t, objects...))
 	worlds["restart-idle"] = restartWorld("restart-idle", nil)
 
+	// Suspend and resume, which PROD-11 names alongside restart and which this
+	// campaign did not have.
+	//
+	// A laptop that sleeps stops emitting and starts again, and the gap is
+	// externally observable by construction -- exactly like a restart, so
+	// comparing a suspended publisher against a steady one measures the
+	// suspension rather than the publication. The pair that answers the
+	// criterion is suspend-with-work against suspend-without-work: identical
+	// interruption, identical position, and the private variable is the only
+	// difference.
+	//
+	// The property under test is what happens on resume. A publisher that
+	// caught up -- emitted the cells it owed while asleep -- would announce
+	// both that it had been asleep and that it had work, and the invariant
+	// names catch-up traffic specifically. Nothing here schedules catch-up:
+	// the loop emits one cell per tick whatever it missed, so the count check
+	// below is the same for every world and the timing comparison sees a gap
+	// of the same shape in both suspend worlds.
+	//
+	// The drain is not replaced, unlike restart: a suspended process keeps its
+	// session and its sequence, and resuming under a *new* session would be a
+	// restart wearing a different name.
+	suspendAt := ticksThisBuild() / 2
+	suspendFor := 4 * campaignInterval
+	suspendWorld := func(label string, queue *publish.Queue) *wire.Capture {
+		suspended := 0
+		capture := publicationWorld(t, label, queue,
+			func(tick int, drain *Drain) *Drain {
+				if tick == suspendAt && suspended == 0 {
+					suspended++
+					time.Sleep(suspendFor)
+				}
+				return nil
+			})
+		if suspended != 1 {
+			t.Fatalf("%s suspended %d times", label, suspended)
+		}
+		return capture
+	}
+	worlds["suspend"] = suspendWorld("suspend", newQueue(t, objects...))
+	worlds["suspend-idle"] = suspendWorld("suspend-idle", nil)
+
 	// Adversarial loss: every emission is produced and then discarded, which
 	// is what a publisher whose cells never arrive experiences. There is no
 	// retry path to trigger, and that absence is the property: a lost cell

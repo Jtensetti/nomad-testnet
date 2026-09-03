@@ -284,6 +284,17 @@ jobs:
             "$directory/restart.txt" 1200 150 || status=$?
           if [ "$status" -eq 2 ]; then echo "the rule could not run"; exit 1; fi
           if [ "$status" -ne 0 ]; then findings=$((findings + 1)); fi
+          # Suspend and resume, paired for the same reason restart is: the gap
+          # is externally observable by construction, so the private variable
+          # has to be the only difference between the two worlds. What this
+          # asks is whether a publisher that slept with work in its queue
+          # catches up on waking, which the invariant forbids by name.
+          echo "== suspend-idle vs suspend =="
+          status=0
+          python3 scripts/two-world-analysis.py "$directory/suspend-idle.txt" \
+            "$directory/suspend.txt" 1200 150 || status=$?
+          if [ "$status" -eq 2 ]; then echo "the rule could not run"; exit 1; fi
+          if [ "$status" -ne 0 ]; then findings=$((findings + 1)); fi
           if [ "$findings" -gt 0 ]; then
             echo "$findings publication comparison(s) were rejected"
             exit 1
