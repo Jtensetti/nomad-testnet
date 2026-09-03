@@ -584,7 +584,18 @@ func (node *Node) enqueueCached() error {
 			continue
 		}
 		for ordinal, payload := range payloads {
-			metadata, _ := hop.WorkMetadata(stream, uint16(ordinal), uint16(len(payloads)))
+			// The error was discarded here while seed, twenty lines up, checks
+			// the same call. Nothing reaches it today -- rawcache refuses a
+			// stored batch size outside the range hop accepts, so Load cannot
+			// return a count that fails here. That is a bound in another
+			// package holding this one up, and the cost of it moving is
+			// silent: a failed WorkMetadata leaves the zero Metadata, which is
+			// a valid *cover* header, so this would relay a work payload
+			// labelled as cover and every receiver would drop it.
+			metadata, err := hop.WorkMetadata(stream, uint16(ordinal), uint16(len(payloads)))
+			if err != nil {
+				return err
+			}
 			cell, err := hop.FromCiphertext(payload, metadata)
 			if err != nil {
 				return err
