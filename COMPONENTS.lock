@@ -9,7 +9,7 @@
 # one: anyone auditing which fabric this integration carries would have
 # checked out the wrong code. supplychain/snapshot_test.go checks it now.
 github.com/Jtensetti/nomad-anytrust-mix-sim 37f41ee claude/nomad-production-ready-dxv4ql 9c9893632927c3ed4661fe117dfd5a8309a81e6ed1b73604c17a45a3dceb0885
-github.com/Jtensetti/nomad-constant-rate-fabric af4ba45 claude/nomad-production-ready-dxv4ql 9f349b4a7b157be1e7af0927f3a2ff46dbfe8f271c81c1a37c06bf10941ced6c
+github.com/Jtensetti/nomad-constant-rate-fabric af4ba45 claude/nomad-production-ready-dxv4ql 7d9bf40d082061bd703c2fdd937369235c9a85c00b1334a8974773cc6b8f939a
 github.com/Jtensetti/nomad-local-reconstruction 71549da claude/nomad-production-ready-dxv4ql 89d07dd05e4a1fb6f36e98d6222af87f6fe7eea7a73de2b5675fbf5da505e4c7
 github.com/Jtensetti/nomad-rlnc af0865e claude/nomad-production-ready-dxv4ql 55160540de509cbd035050ddf0cb63eeeab01c476e341604fe73911edf5784c1
 github.com/Jtensetti/nomad-selection-firewall f45a5f9 claude/nomad-production-ready-dxv4ql 042f7ebd075fa1f6684598af3e23e739898bfc750c697d7744489e1753fc6d35

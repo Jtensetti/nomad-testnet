@@ -410,6 +410,7 @@ func captureWorld(
 		Epoch:         epochDuration,
 		CellsPerEpoch: len(cells),
 		MaxLateness:   2 * cfg.CellInterval,
+		DeadlineSpin:  fabric.DeadlineSpinFor(cfg.CellInterval),
 	}, source, sink)
 	if err != nil {
 		return worldCapture{}, err

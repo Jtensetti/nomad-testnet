@@ -268,7 +268,8 @@ func (node *Node) Run(ctx context.Context) error {
 	interval := time.Duration(node.config.Topology.Document.Traffic.CellIntervalMillis) * time.Millisecond
 	scheduler, err := fabric.NewScheduler(fabric.Config{
 		Epoch: interval, CellsPerEpoch: 1,
-		MaxLateness: time.Duration(node.config.Topology.Document.Traffic.MaxLatenessMillis) * time.Millisecond,
+		MaxLateness:  time.Duration(node.config.Topology.Document.Traffic.MaxLatenessMillis) * time.Millisecond,
+		DeadlineSpin: fabric.DeadlineSpinFor(interval),
 	}, node.cover, node.sink)
 	if err != nil {
 		return err

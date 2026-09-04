@@ -193,7 +193,8 @@ func run() error {
 	interval := time.Duration(network.Document.Traffic.CellIntervalMillis) * time.Millisecond
 	scheduler, err := fabric.NewScheduler(fabric.Config{
 		Epoch: interval, CellsPerEpoch: 1,
-		MaxLateness: time.Duration(network.Document.Traffic.MaxLatenessMillis) * time.Millisecond,
+		MaxLateness:  time.Duration(network.Document.Traffic.MaxLatenessMillis) * time.Millisecond,
+		DeadlineSpin: fabric.DeadlineSpinFor(interval),
 	}, &drainSource{drain: drain, sequence: sequence, handshake: &handshakeCell},
 		&uplinkSink{conn: conn, target: target})
 	if err != nil {
