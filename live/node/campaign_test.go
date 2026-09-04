@@ -47,9 +47,33 @@ import (
 // party that wrote the system. E-01, E-02, E-06 and E-09 stay open.
 
 const (
-	campaignIntervalMillis = 20
-	campaignLateness       = 200
-	campaignDuration       = 1000 * time.Millisecond
+	// The deployed cadence, not a shorter one chosen to make the campaign
+	// quick.
+	//
+	// This ran at 20 ms with a 200 ms lateness budget, and under the
+	// cpu-starvation stressor the node did not survive a round: it missed its
+	// lateness budget and stopped, correctly and by design, after anywhere
+	// between 2 and 50 cells. The preregistered rule needs 20 cells in a flow
+	// to say anything, so that arm reported "too few cells to evaluate" on
+	// every run since the campaign first executed -- seven comparisons that
+	// were neither a pass nor a finding, and a gate that could not go green.
+	//
+	// A shorter interval has less slack per tick to absorb a stall, and the
+	// topology's own bound caps lateness at ten intervals, so 20 ms could not
+	// be given a larger budget without changing a normative limit. At the 50 ms
+	// cadence a deployment actually runs, with the same ten-interval ceiling,
+	// the node survives the identical stressor: measured at 39, 39, 40 and 39
+	// cells across four rounds where 20 ms gave 49, 50, 2 and 8.
+	//
+	// Nothing about the stressor was weakened to get there -- burnCPU still
+	// saturates every processor with unyielding work -- and no tolerance moved.
+	// The experiment was being run at a cadence the system does not ship, in a
+	// configuration with too little slack to survive its own stressor.
+	campaignIntervalMillis = 50
+	campaignLateness       = 500
+	// Long enough that a round yields comfortably more than the rule's
+	// twenty-cell minimum at the interval above: about 39 emissions.
+	campaignDuration = 2000 * time.Millisecond
 	// Four rounds for four series, so the rotation below is a complete
 	// Latin square: every series occupies every position exactly once.
 	campaignRounds = 4
@@ -57,6 +81,15 @@ const (
 	// Decision tolerances, mirroring PREREGISTRATION.md. A difference must
 	// also exceed the run's own idle-versus-idle control to be a finding.
 	cadenceTolerance = 0.02
+	// countTolerance bounds the relative difference in how many cells a world
+	// emitted. It is the survival statistic: under a stressor severe enough to
+	// stop the node, how much it emitted before stopping is the observable an
+	// onlooker has, and it must not depend on whether there was private work
+	// to do. Same figure as the cadence tolerance, for the same reason -- a
+	// fixed cadence over a fixed round should give the same count in both
+	// worlds, and the phase of the first emission is the only honest source of
+	// a difference.
+	countTolerance = 0.02
 	// ksTolerance is expressed as one minus the p-value, so 0.99 is the
 	// preregistered alpha of 0.01.
 	ksTolerance = 0.99
@@ -234,6 +267,7 @@ func TestWireTimingIsIndependentOfPrivateActivityUnderStress(t *testing.T) {
 			// rather than counted as a pass.
 			decided := decide(t, "median cadence", signal.cadence, noise.cadence, cadenceTolerance)
 			decided += decide(t, "inter-arrival KS", signal.ks, noise.ks, ksTolerance)
+			decided += decide(t, "emitted cell count", signal.count, noise.count, countTolerance)
 			if decided == 0 {
 				t.Skipf("no statistic was decidable on this host (control spread: cadence "+
 					"%.4f, KS %.6f). Captures were still written to %s.",
@@ -319,6 +353,14 @@ func measureStressor(t *testing.T, network topology.Verified,
 		attempt, noise.cadence, noise.ks, noise.count)
 	t.Logf("attempt %d idle vs active: cadence %.4f, KS %.6f (packet count %.3f)",
 		attempt, signal.cadence, signal.ks, signal.count)
+	// Whether a round ended early stays reported rather than gated: it is a
+	// coarse Bernoulli event and campaignRounds rounds cannot separate a
+	// private-dependent effect from an unlucky host. How much a world emitted
+	// is a different matter and is decided below -- that statistic was
+	// computed here from the beginning and only ever printed, so a world that
+	// emitted materially fewer cells than another would have been logged and
+	// passed. It is what survives when a stressor leaves no cadence to compare.
+	//
 	// Early termination is reported, never gated. It is a rare, coarse event:
 	// campaignRounds rounds give that many Bernoulli samples per world, which
 	// cannot separate a private-dependent effect from an unlucky host.

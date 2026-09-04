@@ -113,6 +113,21 @@ jobs:
           # Passing the gate because no capture exists is how an empty result
           # becomes evidence of indistinguishability.
           test -d "$directory" || { echo "no captures were produced"; exit 1; }
+          # The cell interval the rule judges against is the one the campaign
+          # emitted at, read from the campaign itself rather than repeated
+          # here. It was a literal 20 until the campaign moved to the deployed
+          # 50 ms cadence, and a stale copy would have had the rule measuring
+          # windows against an interval nothing used -- a duplicated constant
+          # that fails silently, which is the shape of half the findings in
+          # this project's own evidence index.
+          interval=$(sed -n 's/^\tcampaignIntervalMillis = \([0-9]*\)$/\1/p' \
+            live/node/campaign_test.go)
+          if [ -z "$interval" ]; then
+            echo "could not read campaignIntervalMillis from the campaign;" \
+                 "the rule would judge against a guess" >&2
+            exit 1
+          fi
+          echo "judging against the campaign's own cell interval: ${interval}ms"
           compared=0
           findings=0
           inconclusive=0
@@ -138,7 +153,7 @@ jobs:
               # the remaining comparisons never run.
               status=0
               python3 scripts/two-world-analysis.py "$control" \
-                "$treatment" 1200 20 || status=$?
+                "$treatment" 1200 "$interval" || status=$?
               compared=$((compared + 1))
               # Exit 2 means the rule could not run -- unreadable captures, or
               # a round too short to evaluate. That is a broken run rather than
