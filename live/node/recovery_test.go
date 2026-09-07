@@ -15,7 +15,7 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
-// PROD-28 asks that backup and incident response are exercised, not described.
+// The requirement is that backup and incident response are exercised, not described.
 // A runbook nobody has run is a document about what someone hopes would
 // happen, so these destroy each piece of a node's durable state in turn and
 // check what the code actually does.

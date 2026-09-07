@@ -51,7 +51,7 @@ func verifyDocument(t *testing.T, document Document, identities map[string]ed255
 }
 
 // IPv6 must be a first-class operator address, not something the document
-// format happens to tolerate. B-12 names it, and a validator that silently
+// format happens to tolerate, and a validator that silently
 // only accepted dotted quads would make the network IPv4-only by construction
 // without anyone deciding that.
 func TestOperatorEndpointsMayBeIPv6OrMixed(t *testing.T) {

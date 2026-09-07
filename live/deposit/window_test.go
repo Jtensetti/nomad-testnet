@@ -86,7 +86,7 @@ func TestAnUnusableScheduleReportsTheWindowShut(t *testing.T) {
 	}
 }
 
-// The defect DEC-020 recorded, at the boundary that decides it: past the
+// At the boundary that decides it: past the
 // cutoff, a queued fragment must still be on disk after the drain has had
 // every chance to take it.
 func TestWorkIsNotTakenFromTheQueueAfterTheCutoff(t *testing.T) {
@@ -255,7 +255,7 @@ func TestTheWindowGateIsInvisibleOnTheWire(t *testing.T) {
 	}
 }
 
-// The retransmission DEC-020 proposed, refused where it would be written.
+// Retransmission under a fresh sequence, refused where it would be written.
 //
 // Re-emitting under a sequence already used is an AEAD nonce reuse before it
 // is anything else, and the drain is the only party holding the state to see
@@ -289,7 +289,7 @@ func TestASequenceIsNeverSealedTwice(t *testing.T) {
 // Emit takes the fragment off the buffer before it can seal it, and Queue.Next
 // unlinked it from disk before that, so an early return on a seal error
 // destroys publication work for a reason that has nothing to do with the
-// deposit window. That is the loss DEC-022 exists to prevent, reached down a
+// deposit window. That is the loss this path exists to prevent, reached down a
 // different path.
 func TestASealFailureDoesNotCostTheFragment(t *testing.T) {
 	queue := newQueue(t, `{"title":"kept","body":"ffff"}`)

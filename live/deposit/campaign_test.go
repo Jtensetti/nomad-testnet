@@ -105,7 +105,7 @@ func publicationWorld(t *testing.T, label string, queue *publish.Queue,
 	return capture
 }
 
-// A multi-publisher campaign under the four conditions PROD-18 names.
+// A multi-publisher campaign under the four conditions the criterion names.
 //
 // Success is not the interesting case. Timeout, restart and loss are: each is
 // a private failure, and a publisher whose emissions change when publication
@@ -191,7 +191,7 @@ func TestPublicationCampaignUnderFailureAndRetry(t *testing.T) {
 	worlds["restart"] = restartWorld("restart", newQueue(t, objects...))
 	worlds["restart-idle"] = restartWorld("restart-idle", nil)
 
-	// Suspend and resume, which PROD-11 names alongside restart and which this
+	// Suspend and resume, which the criterion names alongside restart and which this
 	// campaign did not have.
 	//
 	// A laptop that sleeps stops emitting and starts again, and the gap is

@@ -21,7 +21,7 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/wire"
 )
 
-// PROD-14 asks what a node emits when it hits a resource limit. The honest
+// What a node emits when it hits a resource limit. The honest
 // answer used to be "nothing, ever again": every local failure in the
 // emission path returned from the scheduler, which closed the socket and
 // ended the node. A node going permanently silent is the most visible event a

@@ -17,7 +17,7 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/hop"
 )
 
-// PROD-03 asks that two implementations interoperate for the public wire
+// The requirement is that two implementations interoperate for the public wire
 // protocol "without sharing protocol code". conformance/reference/nomadwire.py
 // is the second one: a different language, no shared build, no dependency
 // beyond its standard library, written from docs/PROTOCOL.md rather than from
@@ -434,7 +434,7 @@ func decodeCell(t *testing.T, name, encoded string) fabric.Cell {
 	return cell
 }
 
-// PROD-19 asks for interoperability evidence, and a corpus checked only by the
+// What is needed is interoperability evidence, and a corpus checked only by the
 // encoder that produced it is not that. This is the structural half: every
 // message type the corpus publishes must be named in the second
 // implementation's driver, so adding a vector type without a consumer fails

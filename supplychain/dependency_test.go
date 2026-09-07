@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// PROD-25 asks about malicious dependencies as well as vulnerable ones.
+// Malicious dependencies, as distinct from merely vulnerable ones.
 // govulncheck answers a different question: whether a *known advisory* is
 // reachable. It says nothing about a module that is exactly what its author
 // intended and hostile, or about one that arrived without anybody deciding it

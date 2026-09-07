@@ -35,7 +35,7 @@ import (
 // What it does not cover: separate hosts. Loopback is a real interface and
 // these are real processes, but a WAN adversary and a real network's loss and
 // reordering are not here, and that needs infrastructure this project does not
-// have (EB-3).
+// have.
 
 func buildBinary(t *testing.T, packagePath, name string) string {
 	t.Helper()
@@ -150,7 +150,7 @@ func TestThePublicationPathAcrossRealProcesses(t *testing.T) {
 	// The publisher decides what to carry from the deposit window, so a
 	// publisher configured with a different period or cutoff would hand work
 	// to its emission path while the operator's window was shut, which is the
-	// loss DEC-020 measured. These parameters are flags on both sides and
+	// loss previously measured. These parameters are flags on both sides and
 	// belong in the signed topology; until they are, matching them is the
 	// deployment's job and this test is where that shows.
 	publisher := exec.Command(publishBinary,
@@ -235,7 +235,7 @@ func TestThePublicationPathAcrossRealProcesses(t *testing.T) {
 		"unchanged and every one of them was cover",
 		stats.OutsideWindow, total, 100*float64(stats.OutsideWindow)/float64(total))
 
-	// The fix DEC-022 records, at the boundary that decides it. Queue.Next
+	// At the boundary that decides it. Queue.Next
 	// unlinks a fragment as it hands it out, so a fragment that leaves the
 	// queue while the deposit window is shut is a fragment nothing holds any
 	// more. Before the window gate that was 25-43% of a publisher's work.

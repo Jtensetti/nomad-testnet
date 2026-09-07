@@ -145,17 +145,11 @@ func (session *Session) seal(sequence uint64, payload [PayloadSize]byte) (fabric
 	}
 	var plain mix.PlainCell
 	copy(plain[:], payload[:])
-	// A publisher encrypts one fragment, so it encrypts one cell.
-	//
-	// This used to build a two-column mix batch and discard the second column,
-	// because mix.Encrypt refuses fewer than two cells -- correctly, since a
-	// shuffle of one element is the identity and a batch of one would mix
-	// nothing. But that minimum is a property of a mix input, not of a
-	// ciphertext, and paying it here meant half of every publisher's per-cell
-	// cost was work thrown away. Measured by BenchmarkSealCover on this host:
-	// 86.8 ms per seal before, 42.4 ms after. The cells are identical on the wire, and
-	// mix.ParseWire assembles individually encrypted cells into the batch the
-	// committee shuffles, which is already how the share service rebuilds one.
+	// A publisher encrypts one fragment, so it encrypts one cell. mix.Encrypt
+	// refuses fewer than two cells because a shuffle of one element is the
+	// identity, but that minimum is a property of a mix input rather than of a
+	// ciphertext: mix.ParseWire assembles individually encrypted cells into
+	// the batch the committee shuffles.
 	wire, err := mix.EncryptCell(session.committee, plain)
 	if err != nil {
 		return fabric.Cell{}, err

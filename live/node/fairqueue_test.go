@@ -23,7 +23,7 @@ func markedCell(source uint16, ordinal int) fabric.Cell {
 
 func sourceOf(cell fabric.Cell) uint16 { return uint16(cell[0]) }
 
-// The claim PROD-20 asks for, measured rather than argued: one operator
+// The claim, measured rather than argued: one operator
 // sending far faster than the rest takes its own share and nothing more.
 //
 // Before this queue, the relay line was a single bounded FIFO that every peer

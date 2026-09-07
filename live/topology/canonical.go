@@ -12,26 +12,20 @@ import (
 )
 
 // The topology is what every other check in the system is relative to, and a
-// signature over it is a signature over specific bytes. Those bytes used to be
-// whatever Go's encoding/json produced for these structs, which is not a
-// specification:
+// signature over it is a signature over specific bytes. A language library's
+// default JSON output cannot serve as that definition: Go's encoding/json
+// emits members in struct-declaration order, so adding a field in the middle
+// of a struct changes the signed bytes of documents that did not otherwise
+// change; it escapes `<`, `>` and `&`, which no JSON specification requires,
+// so a second implementation computes a different digest for any document
+// containing an ampersand; and it emits an absent array as null rather than
+// [].
 //
-//   - members came out in struct-declaration order, so adding a field in the
-//     middle of a struct would have changed the signed bytes of documents that
-//     did not otherwise change;
-//   - `<`, `>` and `&` came out as <, > and &, which no JSON
-//     specification requires and which only Go does by default. It is
-//     invisible until a network identifier or an endpoint contains an
-//     ampersand, at which point a second implementation computes a different
-//     digest for the same document and nobody can tell why;
-//   - an absent array came out as null rather than [].
-//
-// A canonical encoding defined by one language's library defaults cannot be
-// frozen. This is the encoding written down instead, close to RFC 8785 (JCS)
-// and deliberately stricter in one place: every number in a Nomad signed
-// document is an integer, so a fractional or exponential literal is refused
-// rather than given a canonical form. That removes the whole floating-point
-// half of JCS, which is where its subtleties live.
+// This is the encoding written down instead, close to RFC 8785 (JCS) and
+// deliberately stricter in one place: every number in a Nomad signed document
+// is an integer, so a fractional or exponential literal is refused rather than
+// given a canonical form. That removes the floating-point half of JCS, which
+// is where its subtleties live.
 
 // canonicalJSON re-emits one JSON value in Nomad's canonical form:
 //

@@ -13,7 +13,7 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/hop"
 )
 
-// PROD-20 asks that Sybil, eclipse, amplification, resource-exhaustion and
+// The requirement is that Sybil, eclipse, amplification, resource-exhaustion and
 // abusive-peer risks are bounded by a documented admission model.
 //
 // Nomad's answer to eclipse is structural rather than statistical: there is no

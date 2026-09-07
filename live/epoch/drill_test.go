@@ -17,7 +17,7 @@ import (
 // retired material, and refusal to serve the retired epoch.
 //
 // It is protocol-level. It does not establish that independent
-// administrators performed these steps on separate hosts (EB-2).
+// administrators performed these steps on separate hosts.
 func TestRecoveryDrill(t *testing.T) {
 	const compromised = 4
 	outgoing := newNamedFixture(t, "drill-outgoing", 5)

@@ -107,7 +107,7 @@ func TestLoadRejectsCacheContentThatIsNotTheCommittedStream(t *testing.T) {
 
 // A cache that refuses every new stream once it is full is bounded and unfair:
 // the operator that fills it stops every other operator's work from being
-// admitted at all. That is the state PROD-20 names, one layer above the relay
+// admitted at all. That is the state the criterion names, one layer above the relay
 // queue, and it is the more binding of the two -- work refused here never
 // reaches the queue to be scheduled fairly.
 func TestAFloodingSenderCannotTakeAnotherSendersStreamShare(t *testing.T) {

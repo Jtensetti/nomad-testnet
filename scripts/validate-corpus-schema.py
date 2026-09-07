@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate the conformance corpus against its published JSON Schema.
 
-PROD-01 recorded that the corpus was "a JSON file with a fixed shape enforced by
+It was recorded that the corpus was "a JSON file with a fixed shape enforced by
 its own encoder, not a published schema a second implementation could validate
 against". conformance/wire-vectors.schema.json is that schema. This validates
 our corpus against it, so the schema cannot drift away from the file it

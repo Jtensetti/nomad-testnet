@@ -1,10 +1,6 @@
 // Package capacity derives what a Nomad operator's configuration implies about
 // throughput, and provides the shape a measurement of it is reported in.
 //
-// PROD-28 asked for three numbers -- cells per second per operator, objects per
-// epoch, and concurrent publishers -- and the registry recorded that none of
-// them existed. Two of the three turn out not to be measurements at all.
-//
 // A fixed-cadence fabric does not have a throughput in the usual sense. An
 // operator emits exactly one cell per interval per link whether it has work or
 // not, so "cells per second per operator" is a fact about the signed topology,

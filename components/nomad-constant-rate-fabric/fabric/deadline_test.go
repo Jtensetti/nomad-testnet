@@ -10,19 +10,8 @@ import (
 // The send instant must be a property of the deadline, not of the timer that
 // woke the scheduler.
 //
-// A sleep does not end when it is asked to: a timer set for one interval fires
-// somewhere inside the millisecond after it, and where inside depends on what
-// else the process is doing. That made the emission instant carry ambient
-// state, and a world with private work to do is not ambiently identical to one
-// without -- which is how the two-world campaign could tell them apart from
-// the inter-arrival distribution alone.
-//
-// This is the mechanism on its own, so it runs everywhere rather than only in
-// the gated campaign. The numbers are deliberately loose: what must hold is
-// that the spin binds the return to the deadline far more tightly than the
-// timer alone does, on whatever host this runs on, and the assertion is a
-// ratio between the two rather than an absolute figure that would make this a
-// measurement of the runner.
+// The assertion is a ratio between spinning and sleeping rather than an
+// absolute figure, so a loaded runner cannot fail it for being loaded.
 func TestWaitingIsBoundToTheDeadlineAndNotToTheTimer(t *testing.T) {
 	if testing.Short() {
 		t.Skip("measures wall-clock wake behaviour")
@@ -49,10 +38,8 @@ func TestWaitingIsBoundToTheDeadlineAndNotToTheTimer(t *testing.T) {
 	spinning := median(gather(DeadlineSpinFor(interval)))
 	t.Logf("median wake error: sleeping %s, spinning %s", sleeping, spinning)
 
-	// A tenth is far short of what was measured -- 585us against 1.6us, some
-	// two orders of magnitude -- and is chosen so a loaded shared runner
-	// cannot fail this for being loaded. Anything near parity means the spin
-	// is not happening.
+	// A tenth is far short of the observed difference. Anything near parity
+	// means the spin is not happening.
 	if spinning*10 > sleeping {
 		t.Fatalf("spinning to the deadline gave a median error of %s against %s "+
 			"for sleeping alone; the emission instant is still the timer's, not "+
@@ -61,8 +48,8 @@ func TestWaitingIsBoundToTheDeadlineAndNotToTheTimer(t *testing.T) {
 }
 
 // The spin window is a function of the public cell interval and nothing else.
-// A sender that derived it from load or from queue depth would put private
-// state back into the wake instant.
+// A sender deriving it from load or queue depth would put private state back
+// into the wake instant.
 func TestTheSpinWindowIsAFunctionOfThePublicIntervalAlone(t *testing.T) {
 	for _, testCase := range []struct {
 		interval time.Duration
@@ -80,8 +67,7 @@ func TestTheSpinWindowIsAFunctionOfThePublicIntervalAlone(t *testing.T) {
 			t.Errorf("DeadlineSpinFor(%s) = %s, want %s", testCase.interval, got, testCase.want)
 		}
 	}
-	// The cap is what stops a short cadence spending the whole interval in the
-	// spin, so it must actually bind below the nominal window.
+	// The cap must actually bind below the nominal window.
 	if spin := DeadlineSpinFor(4 * time.Millisecond); spin >= 4*time.Millisecond {
 		t.Fatalf("the spin window is not shorter than the interval it serves: %s", spin)
 	}

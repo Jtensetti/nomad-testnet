@@ -127,7 +127,7 @@ jobs:
           # the fix is to give it a machine rather than to soften the verdict.
           # NOMAD_REQUIRE_CAPABILITY_GATES declares what this environment can
           # run. A skip is green, so without it the cross-implementation check
-          # would stop running the day the image dropped python3 and PROD-03
+          # would stop running the day the image dropped python3 and the corpus check
           # would go on citing evidence nothing had produced.
           export NOMAD_REQUIRE_CAPABILITY_GATES=1
           go test -race $(go list ./... | grep -v '/live/node$')
@@ -146,7 +146,7 @@ jobs:
           done
       - name: Validate the corpus against its published schema
         run: |
-          # PROD-01 recorded that the corpus was a JSON file whose shape was
+          # It was recorded that the corpus was a JSON file whose shape was
           # enforced only by its own encoder, so a second implementation had
           # nothing to validate against. The schema is now published and this
           # keeps it from drifting away from the file it describes.
@@ -155,7 +155,7 @@ jobs:
         run: go run ./cmd/nomad-conformance -check conformance/wire-vectors.json
       - name: Run the incident drill
         run: |
-          # PROD-28 asks that incident response is exercised. The drill starts
+          # The requirement is that incident response is exercised. The drill starts
           # three real nodes on loopback and works the two scenarios in
           # deploy/RECOVERY.md: a node that is present and not working, and a
           # hop sequence file restored from backup. A runbook whose drill has
@@ -164,7 +164,7 @@ jobs:
           ./scripts/incident-drill.sh
       - name: Interoperate with the second implementation
         run: |
-          # PROD-03 asks that two implementations interoperate for the public
+          # The requirement is that two implementations interoperate for the public
           # wire protocol without sharing protocol code.
           # conformance/reference/ holds the second one: another language, no
           # shared build, no dependency past its standard library, written
@@ -183,7 +183,7 @@ jobs:
           # A golden vector that depends on the host's int width is not a
           # golden vector. 386 has 32-bit int against amd64's 64-bit, so an
           # encoder that leaked word size would produce a different digest
-          # here. This is the cross-platform half of PROD-16 that a single
+          # here. This is the cross-platform half that a single
           # architecture cannot supply.
           GOARCH=386 go run ./cmd/nomad-conformance -check conformance/wire-vectors.json
           GOARCH=386 go test -count=1 ./live/conformance/ ./live/topology/ ./live/batch/

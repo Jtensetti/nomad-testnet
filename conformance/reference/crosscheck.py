@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the published corpus against the second implementation, both ways.
 
-PROD-03 asks that two implementations interoperate for the public wire
+The requirement is that two implementations interoperate for the public wire
 protocol without sharing protocol code. One direction is not enough: an
 implementation that only *reads* the other's output can be wrong in any way
 that happens to be permissive, and one that only writes can be wrong in any way
@@ -21,7 +21,7 @@ refused, and refused for the stated reason.
 Direction E covers the signed topology, F the object manifest, and G the
 publisher uplink frame and its derivations. Between them every message the
 corpus publishes now has a consumer that is not the encoder that produced it,
-which is what PROD-19 asks for and what a corpus checked only by its own
+which is what The requirement asks for and what a corpus checked only by its own
 encoder cannot give.
 
 Usage:

@@ -11,17 +11,14 @@ import (
 // FairQueue holds relay work with a per-source share instead of one shared
 // line.
 //
-// The relay queue used to be a single bounded FIFO that every peer filled.
-// That bounds memory, which is what it was built for, and it does not bound
-// *access*: an operator sending faster than the rest takes the whole queue, and
-// every other operator's work is dropped at the door until it stops. Admission
-// is signed, so this is not a stranger flooding the network -- but a signed
-// operator can misbehave, an operator's host can be compromised, and PROD-20
-// asks for fair access under exactly that, not only for a memory bound.
+// A single bounded FIFO shared by every peer bounds memory but not access: an
+// operator sending faster than the rest takes the whole queue and everyone
+// else's work is dropped at the door. Admission is signed, but a signed
+// operator can misbehave and its host can be compromised.
 //
-// So each source gets its own line and its own share of the capacity, and the
-// scheduler takes from the lines in turn. A source that floods fills its own
-// share, drops its own cells, and takes nothing from anyone else.
+// Each source therefore gets its own line and its own share of the capacity,
+// and the scheduler takes from the lines in turn. A source that floods fills
+// its own share, drops its own cells, and takes nothing from anyone else.
 //
 // What this deliberately does not do is change when anything is emitted. The
 // scheduler asks for one cell per tick on a fixed cadence whether the queue is

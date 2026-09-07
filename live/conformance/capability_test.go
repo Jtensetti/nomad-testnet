@@ -11,7 +11,7 @@ import (
 //
 // A skip is green. A gate that quietly stopped running -- an image that no
 // longer ships python3, a runner image change -- is indistinguishable from a
-// gate that passed, and PROD-03's evidence would go on citing a
+// gate that passed, and the corpus would go on citing a
 // cross-implementation check that had not executed in months. Where the
 // environment has declared the capability, its absence is a failure.
 func requireSecondImplementation(t *testing.T) string {

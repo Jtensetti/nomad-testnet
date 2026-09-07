@@ -85,7 +85,7 @@ func serviceBlock(text, name string) string {
 // LimitCORE=0 on the host, which this project cannot verify, so the shipping
 // Compose boundary has to enforce the equivalent where it can reach.
 //
-// This is the control PROD-27's remaining blocker names, and the second-party
+// This is the control for that blocker, and the second-party
 // review in nomad-protocol reached the same boundary independently.
 //
 // The check is on the block rather than on four strings found anywhere: an

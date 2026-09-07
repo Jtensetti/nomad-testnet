@@ -14,7 +14,7 @@ import (
 )
 
 // The production goal asks for an exact external operator onboarding package,
-// on the grounds that this project cannot supply independent operators (EB-2)
+// on the grounds that this project cannot supply independent operators
 // and the least it can do is hand a real one instructions that work.
 //
 // Instructions that work are a testable property, and nothing tested it. Every

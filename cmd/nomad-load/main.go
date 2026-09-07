@@ -1,11 +1,6 @@
 // Command nomad-load floods one UDP endpoint at a fixed rate, for this
 // project's own load gate and nothing else.
 //
-// PROD-14 claims a resource limit does not change what a node emits, and every
-// measurement behind that claim was in-process. The claim needs the real stack
-// under real load with a capture of a real interface, and nothing here
-// generated load.
-//
 // It is deliberately NOT in the container image -- a release has no business
 // carrying a flood generator -- so the gate runs it from the host against the
 // compose bridge. cmd/nomad-load/image_test.go enforces that.

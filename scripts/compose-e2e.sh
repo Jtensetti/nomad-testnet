@@ -164,7 +164,7 @@ for service in operator-a operator-b operator-c; do
         cat /state/health.json > "$evidence_root/$service-health-quiet.json"
 done
 
-# The load gate. PROD-14 claims a resource limit does not change what a node
+# The load gate. The claim is a resource limit does not change what a node
 # emits, and every measurement behind that claim was in-process: a goroutine
 # writing to a channel is not an interface, and a test binary holding both
 # ends is not a deployment. This is the composed stack, on the fabric bridge,
@@ -294,7 +294,7 @@ PY
 
 # Public cache replication, on the live stack.
 #
-# PROD-18 names replication and recorded that the campaign did not reach it.
+# Replication, which the campaign did not previously reach.
 # The stack has always run it -- every operator has --cache-sweep=10s and
 # operator-a alone has --seed -- and nothing ever asserted the result, so a
 # sweep that had stopped working would have left this gate green.

@@ -15,7 +15,7 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
-// PROD-21 asks for dual-stack behaviour and there was no IPv6 run anywhere:
+// What is needed is dual-stack behaviour and there was no IPv6 run anywhere:
 // live/topology has thorough IPv6 tests, but they are all about the document,
 // and a document that admits [::1]:4200 says nothing about a datagram
 // arriving. Everything on the wire ran on 127.0.0.1.
@@ -24,7 +24,7 @@ import (
 // registry: it establishes that the transport, the peer table and the hop
 // authentication work over IPv6 at all, which is what "untested" meant. NAT,
 // path MTU, dual-stack address selection and IPv6 across a real network remain
-// external (EB-2).
+// external.
 
 // requireIPv6Loopback returns the address to run on, or ends the test.
 //
@@ -32,7 +32,7 @@ import (
 // address family is unsupported -- so a skip is the honest answer there. A
 // skip is green, though, so where the environment declares it can do this, its
 // absence is a failure instead. Otherwise this test would stop running the day
-// a runner image changed and PROD-21 would go on citing it.
+// a runner image changed and the dual-stack claim would go on citing it.
 func requireIPv6Loopback(t *testing.T) string {
 	t.Helper()
 	probe, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback})

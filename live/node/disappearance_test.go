@@ -23,9 +23,9 @@ import (
 // The surviving peer is therefore the right observer for this experiment: it is
 // precisely the party who would learn something. These worlds ask what it sees.
 //
-// This is workstream B-08, at the loopback boundary. It is not WAN evidence and
+// This is measured at the loopback boundary. It is not WAN evidence and
 // it is not a regional outage: one host, userspace timestamps, and the same
-// party that wrote the sender. E-01 and B-09 stay open.
+// party that wrote the sender. The external-evidence gaps stay open.
 
 // TestAVanishedPeerChangesNothingTheSurvivorSees runs three worlds against a
 // two-peer rotation and compares what the one peer that stays up receives.

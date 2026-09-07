@@ -165,7 +165,7 @@ func TestAmbiguousJSONRepresentationsAreRefusedOrCanonical(t *testing.T) {
 		// verified here while the reference -- which decodes with
 		// validate=True -- refused it: one signed topology, two answers. The
 		// signature cannot object, because the signature field is not covered
-		// by the signature. See EVIDENCE_INDEX F-18.
+		// by the signature.
 		//
 		// Built by re-serialising the parsed document rather than by editing
 		// the text: the vector is pretty-printed, and a replace aimed at

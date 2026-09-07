@@ -120,7 +120,7 @@ func publisherSession(tb testing.TB) *uplink.Session {
 }
 
 // TestCapacityReport measures every per-cell and per-session cost on the
-// operator's path, derives the three figures PROD-28 names, and writes the
+// operator's path, derives the three figures the criterion names, and writes the
 // report deploy/SLO.md cites.
 //
 // It is a test rather than a benchmark because the numbers have to be published
@@ -296,7 +296,7 @@ func TestCapacityReport(t *testing.T) {
 	}
 
 	// The artifact is only rewritten on request. These numbers move by tens of
-	// percent between runs on a shared container -- which is the point the
+	// percent between runs on a shared container -- which is why the
 	// report makes about itself -- so writing on every run would leave the
 	// committed artifact and the table in SLO.md disagreeing after any test
 	// invocation, and a dirty tree that everyone learns to ignore.

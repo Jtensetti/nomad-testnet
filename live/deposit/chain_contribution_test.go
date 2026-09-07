@@ -27,7 +27,7 @@ import (
 // the chain must recover the mapping completely; and exactly one honest, its
 // position drawn per trial, where the adversary is left with one uniform
 // permutation. The distance between them is the chain's contribution, which
-// PROD-17 records as unmeasured.
+// was previously unmeasured.
 
 // chainPublishers fills the batch exactly, with no cover: every cover column
 // decrypts to the same reserved empty fragment, so two of them are

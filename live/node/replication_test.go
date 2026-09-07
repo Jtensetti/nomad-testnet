@@ -17,7 +17,7 @@ import (
 
 // Public cache replication is the sweep that re-offers complete streams held in
 // this node's cache to its relay queue. It is how an object reaches operators
-// that were not on the path when it was published, and PROD-18 names it.
+// that were not on the path when it was published.
 //
 // Nothing exercised it. Every node test in this package sets CacheSweep to an
 // hour so the sweep never fires, and enqueueCached measured at 0.0% coverage --
@@ -106,8 +106,7 @@ func drainQueue(t *testing.T, worker *Node) []hop.Metadata {
 	return seen
 }
 
-// The property the criterion asks for: a complete stream this node holds is
-// offered for relay, in full, as work.
+// A complete stream this node holds is offered for relay, in full, as work.
 func TestTheSweepReplicatesACompleteStream(t *testing.T) {
 	worker, cache := replicationNode(t, 64)
 	const payloads = 4

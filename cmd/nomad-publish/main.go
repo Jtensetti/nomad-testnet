@@ -2,31 +2,19 @@
 // puts an object into a local queue, and emits that queue to an entry operator
 // at a fixed cadence.
 //
-// It exists because the airlock had no production caller. The uplink session,
-// the deposit drain and the bounded queue were all implemented and tested, and
-// the only non-test code that constructed any of them was the conformance
-// vector generator -- so PROD-17 and PROD-18 both carried "the publication
-// uplink is not on a production path" as a blocker, and both were right.
-//
-// Building it found what that costs. The uplink sequence is the AEAD nonce,
-// nothing persisted it, and every caller was an in-process test that counted
-// from one and never restarted. A publisher built without noticing would have
-// re-sealed fragments under nonces it had already used on every restart. See
+// The uplink sequence is the AEAD nonce and is persisted, so a restart never
+// re-seals a fragment under a nonce it has already used. See
 // live/uplink/sequence.go.
 //
-// The session is established in band. Earlier versions read a shared secret
-// from a file both parties already had, which needed a channel to distribute a
-// per-publisher secret to a specific operator before anything could be
-// published -- a channel that knows who publishes what. The publisher now
-// agrees with the entry operator's static key from the signed topology,
-// carrying its own ephemeral key in the first cell. It authenticates the
-// operator and proves nothing about itself, which is the direction this system
-// needs. See live/uplink/handshake.go and DEC-018.
+// The session is established in band: the publisher agrees with the entry
+// operator's static key from the signed topology and carries its own ephemeral
+// key in the first cell. It authenticates the operator and proves nothing
+// about itself. See live/uplink/handshake.go.
 //
 // --key-source is required and has no default. It decides whether the queue's
 // key lives on the same disk as the fragments it encrypts, which is the whole
-// question for material a user has written and not yet published, so it is
-// stated rather than inherited. See live/publish/keysource.go.
+// question for material a user has written and not yet published, so it must
+// be stated rather than inherited. See live/publish/keysource.go.
 package main
 
 import (

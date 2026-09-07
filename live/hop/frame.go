@@ -1,31 +1,25 @@
 // Package hop authenticates and encrypts one fixed-size UDP hop without
 // changing Nomad's 1200-byte cell size. The mix ciphertext occupies bytes
-// 0..1151; its existing 48-byte padding is replaced by a versioned routing
-// header. Mix parsing intentionally ignores that padding region.
+// 0..1151; its 48-byte padding region carries a versioned routing header,
+// which mix parsing ignores.
 //
-// # Why the header is encrypted
+// # Why the whole cell is encrypted
 //
-// Version 1 authenticated the header and sent it in the clear. That put the
-// work flag and a 16-byte stream ID on the wire, and the stream ID is a hash
-// of the batch payloads, so it was the same value at every hop the batch took.
-// A passive observer did not need a correlation attack to follow a batch
-// across the relay fabric, or to tell a work cell from a cover cell: both were
-// written on the outside of the envelope. live/node/linkability_test.go
-// measured the first and live/uplink/distinguisher_test.go measured the
-// second.
+// A cleartext routing header puts the work flag and the stream ID on the wire.
+// The stream ID is a hash of the batch payloads, so it is the same value at
+// every hop the batch takes: a passive observer can follow a batch across the
+// relay fabric and tell a work cell from a cover cell without any correlation
+// attack. Constant-rate cover traffic is what this system spends its whole
+// bandwidth budget on, and a readable work flag answers the question cover
+// traffic exists to make unanswerable.
 //
-// Constant-rate cover traffic is the mechanism this system spends its entire
-// bandwidth budget on, and a readable work flag is a direct answer to the
-// question that cover traffic exists to make unanswerable.
-//
-// Encrypting the header alone would not have been enough. A work cell carries
-// mix ciphertext and a cover cell carries uniform random bytes, and mix
-// ciphertext parses as compressed group elements while random bytes almost
-// never do -- a second distinguisher, independent of the header, that
-// separated the two perfectly. So version 2 encrypts the whole cell under the
-// pairwise link key: payload and routing metadata alike. What goes on the wire
-// is a uniform pseudorandom string, the same length every time, whatever it
-// carries.
+// Encrypting the header alone is not enough. A work cell carries mix
+// ciphertext and a cover cell carries uniform random bytes; mix ciphertext
+// parses as compressed group elements and random bytes almost never do, which
+// separates the two perfectly without reading the header at all. So the whole
+// cell is encrypted under the pairwise link key, payload and routing metadata
+// alike, and what goes on the wire is a uniform pseudorandom string of the
+// same length every time.
 //
 // # What is still visible, and why
 //
@@ -37,12 +31,11 @@
 // gets a fresh number from the sending link's own sequence, so it cannot be
 // followed across a hop.
 //
-// The sender's identity is not in the header at all any more. The receiver
-// already knows which peer a datagram came from, and the peer's address is in
-// the IP header regardless; putting the slot index in the payload as well only
-// gave an observer a second copy. It is carried encrypted and checked against
-// the expected peer after decryption, so a peer still cannot claim to be
-// another.
+// The sender's identity is not in the cleartext header. The receiver already
+// knows which peer a datagram came from and the address is in the IP header
+// regardless, so a slot index there would only be a second copy for an
+// observer. It is carried encrypted and checked against the expected peer
+// after decryption, so a peer cannot claim to be another.
 package hop
 
 import (

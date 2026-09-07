@@ -639,9 +639,8 @@ func TestJournalRefusesSecondApproval(t *testing.T) {
 //
 // This does not prove the role belongs in the journal key. Both roles record
 // the same Digest(descriptor), so dropping the role leaves this idempotent
-// rather than conflicting, and the mutation survives -- which is worth stating
-// rather than dressing up, because the mutation surviving is the finding: see
-// DEC-025 on whether the role separation should exist at all.
+// rather than conflicting, and the mutation survives. Whether the role
+// separation should exist at all is therefore an open question.
 func TestActivationAndApprovalAreSeparateJournalEntries(t *testing.T) {
 	f := newFixture(t, 3)
 	session := sha256.Sum256([]byte("journal-role-session"))

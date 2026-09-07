@@ -18,26 +18,19 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
-// An uplink session used to begin with a secret both parties already had. The
-// publisher read 32 bytes from a file, the entry operator read the same 32
-// bytes from its own file, and how they came to be the same bytes was outside
-// the protocol. That is a real deployment: it needs a channel to distribute a
-// per-publisher secret to a specific operator before anything can be
-// published, which is a channel that knows who publishes what.
-//
-// This establishes the session in band instead, from material already in the
-// signed topology. Every operator publishes a static X25519 key there, and it
-// is already the basis of the pairwise hop keys, so a publisher that can verify
-// a topology can already reach an entry operator without being introduced.
+// A session is established in band, from material already in the signed
+// topology: every operator publishes a static X25519 key there, and it is
+// already the basis of the pairwise hop keys, so a publisher that can verify a
+// topology can reach an entry operator without being introduced. The
+// alternative -- a pre-shared per-publisher secret -- needs a distribution
+// channel that knows who publishes what.
 //
 // The construction is one-sided: the publisher authenticates the operator and
-// stays anonymous. That is the correct direction here and worth stating
-// plainly, because the usual instinct is to make a handshake mutual. The entry
-// operator must not learn who is publishing -- that is the property the whole
-// airlock exists for -- so the publisher proves nothing about itself, and the
-// operator's only guarantee is that somebody who verified the topology is
-// speaking to it. Everything that bounds abuse afterwards is per session, never
-// per identity.
+// stays anonymous. The entry operator must not learn who is publishing, which
+// is the property the airlock exists for, so the publisher proves nothing
+// about itself and the operator's only guarantee is that somebody who verified
+// the topology is speaking to it. Everything bounding abuse afterwards is per
+// session, never per identity.
 
 const (
 	// EphemeralSize is the publisher's X25519 public key, carried in the
@@ -257,11 +250,9 @@ func handshakeDerive(agreed, public []byte, context Context, domain string) ([32
 	return out, nil
 }
 
-// sessionFromAgreement turns the agreement into exactly what the pre-shared
-// file used to supply: a 32-byte session secret, which then goes through the
-// unchanged SessionKey derivation. Keeping that step intact is deliberate --
-// the data path, its published test vectors and its second implementation do
-// not move because the way the secret is obtained changed.
+// sessionFromAgreement turns the agreement into a 32-byte session secret and
+// feeds it to the unchanged SessionKey derivation, so the data path and its
+// published test vectors do not depend on how the secret was obtained.
 func sessionFromAgreement(agreed, public []byte, committee mix.PublicKey,
 	context Context) (*Session, [32]byte, error) {
 	secret, err := handshakeDerive(agreed, public, context, handshakeSecretDomain)

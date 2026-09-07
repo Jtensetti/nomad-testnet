@@ -71,7 +71,7 @@ func Open(root string, maxStreams int) (*Store, error) {
 // peer traffic, and there the total bound alone is not enough: the cache
 // refuses a new stream once it is full, with no eviction, so one operator
 // filling it stops every other operator's work from being admitted at all.
-// That is bounded memory and unbounded unfairness, which is the state PROD-20
+// That is bounded memory and unbounded unfairness, which is the state
 // names.
 //
 // The sender set comes from the signed topology and nothing at runtime adds to

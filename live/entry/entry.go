@@ -68,20 +68,18 @@ type Config struct {
 	BatchDirectory string
 	HealthPath     string
 	Schedule       airlock.Schedule
-	// SessionLimit bounds how many uplink sessions this service will
-	// establish, for as long as it runs. Accepting handshakes without a bound
-	// turns a cheap cell into unbounded state, which is the whole reason the
-	// responder takes a limit.
+	// SessionLimit bounds how many uplink sessions this service establishes for
+	// as long as it runs. Without a bound a cheap cell buys unbounded state.
 	//
-	// It is a budget spent, not an occupancy: the responder must remember every
-	// ephemeral key it has accepted or a replayed handshake would establish a
-	// second session on the same key and the same AEAD nonces, so nothing can
-	// give a slot back. Once the budget is gone this operator establishes no
-	// further sessions until it is restarted, and a service is restarted at
-	// each topology epoch because the uplink context it was built with names
-	// one. Size it for the publishers an epoch is expected to carry, with
-	// headroom: an adversary can spend the budget with that many cheap cells,
-	// and the refusal that follows is silent and fail-closed by design.
+	// It is a budget spent, not an occupancy: the responder must remember
+	// every ephemeral key it has accepted, or a replayed handshake would
+	// establish a second session on the same key and reuse that key's AEAD
+	// nonces, so nothing frees a slot. Once the budget is gone the operator
+	// establishes no further sessions until restarted, which happens at each
+	// topology epoch because the uplink context names one. Size it for the
+	// publishers an epoch is expected to carry, with headroom: an adversary
+	// can spend the budget with that many cheap cells, and the refusal that
+	// follows is silent and fail-closed.
 	SessionLimit int
 }
 
@@ -123,8 +121,6 @@ type Stats struct {
 	// lumping it in with authentication failures would bury the signal that
 	// matters under routine traffic.
 	//
-	// It is also the counter that measures how much publication work the
-	// current implementation destroys: see DEC-020.
 	OutsideWindow uint64 `json:"outside_window"`
 	// Conflicted counts cells that opened and were refused because their
 	// deposit slot already holds a different payload. A publisher that
@@ -148,45 +144,29 @@ type Service struct {
 	airlock   *airlock.Airlock
 
 	mu sync.Mutex
-	// sessions maps a peer address to the session established from it.
+	// sessions maps a peer address to the sessions established from it.
 	//
-	// A data cell carries no session identifier -- putting one on the wire
-	// would be a linkable tag on every cell a publisher sends -- so the
-	// association has to come from somewhere the operator already knows, and
-	// the source address is the only such thing. It reveals nothing new: UDP
-	// hands the operator the address whether it uses it or not.
+	// A data cell carries no session identifier -- one would be a linkable tag
+	// on every cell a publisher sends -- so a cell is attributed to a session
+	// by its source address, which is unauthenticated. UDP hands the operator
+	// that address whether it uses it or not, so depending on it reveals
+	// nothing new.
 	//
-	// The alternative, trial-decrypting each cell against every held session,
-	// avoids depending on the address but costs one AEAD open per session per
-	// cell, and makes a forged cell cost the operator its whole session table.
-	// That is a denial-of-service amplifier bought to hide something the
-	// operator can see anyway.
+	// An address holds a short list rather than one session: a publisher that
+	// restarts behind a NAT that kept its mapping returns on the same address
+	// with a new ephemeral key, and with one session per address its handshake
+	// would be tried as a data cell against a session it no longer holds and
+	// refused, with no way back. A cell is tried against each session bound to
+	// its address and offered to the responder only if none of them open it.
 	//
-	// An address maps to a short list rather than to one session, because one
-	// session per address made the first binder of an address its owner for the
-	// life of the process. A publisher that restarted behind a NAT that kept
-	// its mapping came back on the same address with a new ephemeral key, its
-	// handshake was tried as a data cell against the session it no longer held,
-	// failed to open, and was counted as a refusal -- with no way back, since a
-	// bound address never reached the responder again. Anyone who could put a
-	// datagram on the wire with a victim's source address could do the same on
-	// purpose.
+	// The list is capped and a full one refuses rather than evicting: evicting
+	// the oldest would let anyone able to spoof a source address take that
+	// address away from its publisher. The cap also bounds the trial-open
+	// cost, so a forged cell costs a fixed small number of AEAD opens rather
+	// than the whole table.
 	//
-	// The list is capped at maxSessionsPerAddress and full is refused rather
-	// than evicted: evicting the oldest would hand that lockout back to an
-	// attacker in a different shape. The cap is what keeps the trial-open cost
-	// bounded -- a forged cell costs at most that many AEAD opens, not the
-	// whole table.
-	//
-	// Falling through to the responder also means a cell that opens under none
-	// of an address's sessions now costs a key agreement rather than an AEAD
-	// open. That does not raise the ceiling: source addresses are free, so a
-	// flood from unbound addresses already cost one key agreement per datagram
-	// and still does. What it removes is the attacker's need to vary them.
-	//
-	// The cost is that a publisher whose NAT rebinds loses its session and has
-	// to handshake again. That is a real limitation and it is recorded rather
-	// than hidden.
+	// A publisher whose NAT rebinds loses its session and must handshake
+	// again.
 	sessions map[string][]*boundSession
 
 	stats     statsCounters
@@ -383,9 +363,8 @@ func (service *Service) handle(cell fabric.Cell, from *net.UDPAddr, now time.Tim
 		return
 	}
 
-	// The per-address cap is checked before the responder is asked, so an
-	// address that is full cannot spend the operator's session budget on a
-	// handshake it would then have nowhere to put.
+	// Checked before the responder is asked, so a full address cannot spend
+	// the operator's session budget on a handshake it has nowhere to put.
 	if len(bound) >= maxSessionsPerAddress {
 		service.stats.refusedHandshakes.Add(1)
 		return
@@ -393,9 +372,9 @@ func (service *Service) handle(cell fabric.Cell, from *net.UDPAddr, now time.Tim
 	session, sessionID, err := service.responder.Accept(cell)
 	if err != nil {
 		// A cell from an address that holds sessions and opened under none of
-		// them is a refused cell, not a refused handshake: it is the counter an
-		// operator watches, and an attacker sending garbage at an established
-		// publisher's address must not be able to move it somewhere quieter.
+		// them counts as a refused cell: an attacker sending garbage at an
+		// established publisher's address must not move the count an operator
+		// watches to a quieter counter.
 		if len(bound) > 0 {
 			service.stats.refusedCell.Add(1)
 		} else {
@@ -404,12 +383,9 @@ func (service *Service) handle(cell fabric.Cell, from *net.UDPAddr, now time.Tim
 		return
 	}
 	service.mu.Lock()
-	// Newest first: a publisher that just handshaked is the one sending, so the
-	// common case still costs one open. The lock is held against the epoch roll
-	// in maintain, which swaps the mailbox under the same mutex; handle itself
-	// runs only on the receive goroutine, so the cap checked above cannot have
-	// moved. Appending onto a fresh slice rather than in place is what lets the
-	// trial-open loop above read its copy without the lock.
+	// Newest first: a publisher that just handshaked is the one sending, so
+	// the common case still costs one open. Appending onto a fresh slice
+	// rather than in place lets the loop above read its copy without the lock.
 	service.sessions[key] = append([]*boundSession{
 		{session: session, sessionID: sessionID}}, service.sessions[key]...)
 	service.mu.Unlock()

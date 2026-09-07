@@ -15,7 +15,7 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
-// The other half of PROD-14's resource question is memory. A node reads from
+// The other half of the resource question is memory. A node reads from
 // a socket an adversary can saturate, and every buffer, map and cache entry it
 // allocates in response is allocated at that adversary's request. If any of
 // them grows with the volume received rather than with public policy, a flood

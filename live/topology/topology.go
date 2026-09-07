@@ -600,41 +600,28 @@ func (v Verified) StableOperatorIDs() []string {
 
 // canonicalEndpoint reduces an operator's UDP endpoint to one form per socket
 // address, so the distinctness check compares what endpoints mean rather than
-// how they are spelled.
+// how they are spelled: [::1] and [0:0:0:0:0:0:0:1], 2001:db8::1 with and
+// without zero padding, 127.0.0.1 and [::ffff:127.0.0.1], a trailing root
+// label, and differences of case are all one address.
 //
-// What this enforces, precisely: **one canonical form per socket address**, and
-// loopback folded to a single host. It does not establish that two operators
-// are two machines, and still less two trust domains -- 198.51.100.7:4200 and
-// 198.51.100.7:4201 are two socket addresses on one host and are admitted as
-// two operators, as this package's own fixtures rely on. An independence claim
-// needs more than this function can supply from a document.
+// It establishes distinctness of socket addresses only. Two ports on one host
+// are two operators here, and nothing in a document can show that two
+// operators are two machines, still less two trust domains.
 //
-// What it does close is spelling. One address has many: [::1] and
-// [0:0:0:0:0:0:0:1], 2001:db8::1 with and without zero padding, 127.0.0.1 and
-// its IPv4-mapped form [::ffff:127.0.0.1], operator-a and operator-a. (the
-// trailing dot is the root label, so they are one name), OPERATOR-A and
-// operator-a, and localhost against a loopback literal. Every one of those was
-// admitted as two distinct operators before this function existed.
+// It parses rather than resolves: netip.ParseAddr never touches DNS, so a
+// signed document's validity does not depend on what a resolver says at the
+// moment someone checks it, and admission performs no network lookup.
 //
-// It parses rather than resolves. netip.ParseAddr never touches DNS, which
-// matters twice over: a signed document's validity must not depend on what a
-// resolver says at the moment someone checks it, and admission must not perform
-// a network lookup.
+// The host grammar is strict. An unparseable address is refused rather than
+// falling through to "treat it as a hostname", which would admit
+// operator-a\x00, a trailing space, [foo:bar], 2130706433 and 0177.0.0.1 --
+// each of which some implementation reads as a different host than Go does. A
+// document one implementation admits as N operators and another as N-1 has not
+// been agreed on, which is the same divergence strictjson.RejectDuplicateKeys
+// refuses for JSON.
 //
-// The host grammar is strict on purpose. An unparseable address used to fall
-// through to "treat it as a hostname", which admitted operator-a\x00,
-// "operator-a " with a space, [foo:bar], 2130706433 and 0177.0.0.1 -- each of
-// which some other implementation reads as a different host than Go does. That
-// is the same cross-parser divergence strictjson.RejectDuplicateKeys exists to
-// refuse for JSON, and the reasoning is identical: a document one implementation
-// admits as N operators and another as N-1 is a document that has not been
-// agreed on. There is no silent fallback: a bracketed host that is not an
-// address is refused rather than reinterpreted.
-//
-// The residual gaps, stated rather than left to be discovered: two different
-// hostnames pointing at one machine are indistinguishable here, because that is
-// a fact about DNS and not about the document; and nothing here knows whether
-// two addresses belong to one operator.
+// Two hostnames pointing at one machine are indistinguishable here, and
+// nothing here knows whether two addresses belong to one operator.
 func canonicalEndpoint(endpoint string) (string, error) {
 	host, port, err := net.SplitHostPort(endpoint)
 	if err != nil {

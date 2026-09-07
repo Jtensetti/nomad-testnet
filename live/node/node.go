@@ -283,14 +283,12 @@ func (node *Node) Run(ctx context.Context) error {
 	err = <-errorsOut
 	cancel()
 	_ = node.conn.Close()
-	// Wait for the other two before returning. Run used to return as soon as
-	// any one of the three finished, so "the node has stopped" was not true
-	// when it said so: a caller that rotated the epoch, removed the cache
-	// directory or exited raced goroutines still writing to the cache, the
-	// health file and the durable sequence state. The sequence file is the
-	// sharp one -- its whole purpose is that a crash never reissues a
-	// number, and a write still in flight past shutdown is the case that
-	// undermines it.
+	// Wait for the other two before returning, so that "the node has stopped"
+	// is true when it says so. A caller that rotates the epoch, removes the
+	// cache directory or exits must not race goroutines still writing to the
+	// cache, the health file or the durable sequence state -- the sequence
+	// file especially, whose whole purpose is that a crash never reissues a
+	// number.
 	//
 	// All three stop promptly: receive on the closed socket, maintain and the
 	// scheduler on the cancelled context.

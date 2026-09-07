@@ -19,7 +19,7 @@ import (
 // fails when a version constant it does not document appears in the source --
 // so a rename is caught, in the other repository, by name. Nothing anywhere
 // pinned what a separator *produces*, and nothing in the repository that
-// defines them could fail on them at all. That is the same shape as F-39: the
+// defines them could fail on them at all. That is the same shape: the
 // module that owns the code has to be able to fail on it.
 //
 // These vectors pin the bindings step 7 of the plan names -- transcript and

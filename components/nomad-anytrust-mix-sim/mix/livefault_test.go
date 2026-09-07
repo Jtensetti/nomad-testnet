@@ -9,7 +9,7 @@ import (
 	"go.dedis.ch/kyber/v4"
 )
 
-// PROD-07 asks for active-adversary fault injection at a live boundary. The
+// What is needed is active-adversary fault injection at a live boundary. The
 // existing blame tests build an honest chain and then corrupt the finished
 // transcript, which establishes that attribution reads a transcript correctly
 // and nothing about what happens when a mixer decides to cheat while the

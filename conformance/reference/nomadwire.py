@@ -1,7 +1,7 @@
 """A second implementation of Nomad's public wire protocol.
 
 Written from docs/PROTOCOL.md in the nomad-protocol repository, not from the Go
-source. That restriction is the point: PROD-03 asks for two implementations
+source. That restriction is the point: The requirement asks for two implementations
 that interoperate "without sharing protocol code", and an implementation that
 consults the first one tests nothing about whether the specification is
 sufficient to build from.

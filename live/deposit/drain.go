@@ -49,8 +49,8 @@ const DefaultPollInterval = time.Millisecond
 // The sequence is the AEAD nonce (live/uplink/sequence.go), so sealing twice
 // under one key and sequence hands an observer the XOR of two plaintexts and,
 // through GHASH, the authentication key. A session holds no sequence state by
-// design, so the caller that has it does the check. DEC-020's retry -- seal
-// the fragment again -- is exactly this call.
+// design, so the caller that has it does the check. Re-sealing a fragment
+// after a refusal is exactly this call.
 var ErrSequenceReused = errors.New("uplink sequence reused")
 
 type Drain struct {
@@ -195,9 +195,9 @@ func (drain *Drain) fill(queue *publish.Queue) {
 		}
 		// Queue.Next unlinks as it hands out, so a fragment taken while the
 		// window is shut is one the airlock refuses and nothing holds any
-		// more -- 25% of every period at the default schedule, 38-43%
-		// measured at three seconds (DEC-020). Leaving it on disk costs
-		// nothing, and this goroutine is not the one that emits.
+		// more -- a quarter of every period at the default schedule. Leaving
+		// it on disk costs nothing, and this goroutine is not the one that
+		// emits.
 		if !drain.depositWindowOpen(drain.clock()) {
 			continue
 		}
@@ -224,9 +224,8 @@ func (drain *Drain) fill(queue *publish.Queue) {
 //
 // Outside the open deposit window, and inside it once this session has spent
 // its per-session deposit bound, it emits cover and leaves any buffered
-// fragment alone. That is what separates this from the retry DEC-020 asked
-// for: a cell held back was never on the wire, so nothing is sent twice and
-// the sequence -- eight cleartext bytes at the head of every cell -- never
+// fragment alone. A cell held back was never on the wire, so nothing is sent
+// twice and the sequence -- eight cleartext bytes at the head of every cell -- never
 // repeats. Cover is never retransmitted, so a repeat would tell the entry
 // operator this publisher had work refused.
 //
@@ -255,10 +254,9 @@ func (drain *Drain) Emit(sequence uint64) (fabric.Cell, error) {
 				// The receive already took it off the buffer, and Queue.Next
 				// unlinked it before that, so returning early here would
 				// destroy the fragment for a reason that has nothing to do
-				// with the deposit window -- the same loss DEC-022 exists to
-				// prevent, arriving down a different path. The buffer holds
-				// one slot and this emptied it, so the send only fails if
-				// fill refilled it first, and then nothing was idle anyway.
+				// with the deposit window. The buffer holds one slot and this
+				// emptied it, so the put only fails if fill refilled it
+				// first, and then nothing was idle anyway.
 				select {
 				case drain.ready <- fragment:
 				default:

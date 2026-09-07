@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail closed unless a loaded capture shows the same cadence as a quiet one.
 
-PROD-14 claims a resource limit does not change what a node emits. Every
+The claim is a resource limit does not change what a node emits. Every
 measurement behind that claim was in-process. This rule judges the composed
 Compose stack on a real bridge interface, across two capture windows that
 differ by one thing: whether an unrecognised sender is flooding an operator's

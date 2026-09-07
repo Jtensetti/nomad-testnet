@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # An incident drill that runs, against real binaries and real sockets.
 #
-# PROD-28 asks that incident response is exercised. Two scenarios, both taken
+# The requirement is that incident response is exercised. Two scenarios, both taken
 # from deploy/RECOVERY.md, both with a verifiable outcome rather than a
 # narrative:
 #

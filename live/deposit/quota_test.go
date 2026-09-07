@@ -73,7 +73,7 @@ func newQuotaDrain(t *testing.T, session *uplink.Session, queue *publish.Queue,
 // signed epoch descriptor, the same bytes the operator reads it from. Emitting
 // past it does not get the work in -- the airlock refuses every deposit over
 // the bound -- and Queue.Next has already unlinked the fragment, so the work
-// is destroyed rather than deferred. That is the same loss DEC-022 closed for
+// is destroyed rather than deferred. That is the same loss closed for
 // the window, arriving through the quota instead.
 func TestWorkIsNotDrainedPastThisSessionsOwnQuota(t *testing.T) {
 	queue := newQueue(t, "alpha", "beta", "gamma", "delta", "epsilon", "zeta")
@@ -152,7 +152,7 @@ func TestOverQuotaFragmentsAreNeitherDepositedNorDestroyed(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The bound's worth of fragments were deposited. One more may sit in the
-	// drain's one-slot buffer, which is the shutdown exposure DEC-022 records
+	// drain's one-slot buffer, which is the shutdown exposure recorded
 	// and accepts; anything beyond that was unlinked and refused.
 	if taken := before - after; taken > bound+1 {
 		t.Fatalf("%d fragments left the queue but only %d could be deposited; "+

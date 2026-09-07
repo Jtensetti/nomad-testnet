@@ -31,8 +31,7 @@ import (
 //
 // So a publisher that wants to retry must keep the sealed cell. Keeping the
 // fragment is not enough, and keeping nothing -- which is what live/publish's
-// queue and live/deposit's drain do today -- makes retry impossible. See
-// DEC-020.
+// queue and live/deposit's drain do today -- makes retry impossible.
 func TestOnlyAByteIdenticalRetransmissionIsIdempotent(t *testing.T) {
 	committee, _, err := mix.GenerateDealerCommittee(mix.CommitteeID{9}, 1, 3, 2)
 	if err != nil {

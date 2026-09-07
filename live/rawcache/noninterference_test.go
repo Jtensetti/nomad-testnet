@@ -14,7 +14,7 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/hop"
 )
 
-// PROD-13 asks that replication, eviction, repair and cache warming stay
+// The requirement is that replication, eviction, repair and cache warming stay
 // independent of private reads. Three of those four are architectural here:
 // there is no eviction (a full cache refuses a new stream rather than choosing
 // a victim), replication is driven by what signed peers send, and warming comes

@@ -16,7 +16,7 @@ import (
 // adversarial input through the public API before writing a line of this; what
 // was missing is the test that fails when one is deleted.
 //
-// That distinction matters for PROD-12, which is MET. Nothing here changes the
+// That distinction matters here. Nothing here changes the
 // implementation's behaviour, and nothing here should be read as having found
 // it wrong. What it changes is whether a future edit can quietly remove a
 // Byzantine defence.

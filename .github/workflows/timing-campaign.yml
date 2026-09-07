@@ -8,25 +8,14 @@ name: timing campaign
 # property of the host, so a busy shared runner makes them noisy in a way that
 # says nothing about the code. Running them on their own gives them a machine
 # to themselves and keeps the per-push job to checks that are deterministic.
-#
-# This is not a way of hiding a failing test. The campaign is currently
-# reporting a real finding -- private activity perturbs the inter-arrival
-# distribution -- and that finding is recorded in the protocol evidence index
-# whatever this workflow does.
 
 on:
-  # Both of the triggers below fire only from the repository's default branch:
-  # GitHub reads `schedule` from there, and the dispatch API returns 404 for a
-  # workflow that is not on it. This file has only ever existed on a feature
-  # branch, so between being written and 2026-09-02 it ran zero times, by any
-  # means, while being cited as the gate for these measurements. The tests it
-  # runs skip unless NOMAD_TIMING_CAMPAIGN=1, so they had no automated runner
-  # at all.
-  #
-  # `push` is the trigger that works from the branch the code is on. It is
-  # filtered to the packages these measurements are about, because this job
-  # takes the better part of an hour and queues rather than cancelling, so
-  # running it on every push would cost more than it tells anyone.
+  # `schedule` and `workflow_dispatch` both fire only from the repository's
+  # default branch, so on a feature branch neither runs. `push` is the trigger
+  # that works from the branch the code is on, filtered to the packages these
+  # measurements are about: the job takes the better part of an hour and queues
+  # rather than cancelling, so running it on every push would cost more than it
+  # tells anyone.
   push:
     paths:
       # The cadence these measurements are about is produced by the vendored
@@ -113,13 +102,9 @@ jobs:
           # Passing the gate because no capture exists is how an empty result
           # becomes evidence of indistinguishability.
           test -d "$directory" || { echo "no captures were produced"; exit 1; }
-          # The cell interval the rule judges against is the one the campaign
-          # emitted at, read from the campaign itself rather than repeated
-          # here. It was a literal 20 until the campaign moved to the deployed
-          # 50 ms cadence, and a stale copy would have had the rule measuring
-          # windows against an interval nothing used -- a duplicated constant
-          # that fails silently, which is the shape of half the findings in
-          # this project's own evidence index.
+          # The cell interval the rule judges against is read from the campaign
+          # itself rather than repeated here, so it cannot go stale and leave
+          # the rule measuring windows against an interval nothing emitted at.
           interval=$(sed -n 's/^\tcampaignIntervalMillis = \([0-9]*\)$/\1/p' \
             live/node/campaign_test.go)
           if [ -z "$interval" ]; then

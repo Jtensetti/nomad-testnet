@@ -14,7 +14,7 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/telemetry"
 )
 
-// PROD-27 asks that operational output cannot contain queries, basins, object
+// The requirement is that operational output cannot contain queries, basins, object
 // choices, plaintext, stable cross-epoch identifiers or secret keys.
 //
 // A schema assertion alone would not establish that. This runs the production
@@ -201,7 +201,7 @@ func toHexForTest(data []byte) string {
 	return string(out)
 }
 
-// PROD-27 also asks for retention controls. The node's operational output is
+// Retention controls. The node's operational output is
 // bounded by construction rather than by a policy someone has to remember: the
 // health file is rewritten in place each tick and the sequence file is four
 // bytes. An append-only operational log would accumulate a history of a node's
