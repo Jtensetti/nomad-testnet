@@ -1,16 +1,29 @@
 # Rights and source provenance
 
 The top-level `LICENSE` is the Nomad Restricted Source License 1.0 already
-adopted on this repository's `main` on 2026-08-27. It does not replace licences
-or permissions attached to imported or previously published code.
+adopted on this repository's `main` on 2026-08-27. The owner states that the MIT
+texts were introduced while the repositories were private and that the intended
+public offering was protected by the restricted licence.
 
-The integration code was also published under MIT at the development commit
-in `PACKAGING.lock.json`. Its exact notice is retained in
-`LICENSES/nomad-testnet-MIT-before-consolidation.txt`. This packaging does not
-claim to withdraw those permissions. Newly added packaging material follows
-the top-level licence, subject to pre-existing and third-party rights.
+That history matters: a MIT text in git history does not by itself establish
+when a copy was furnished to an external recipient, on what terms, or whether
+a particular recipient acquired permissions. An earlier version of this
+packaging incorrectly stated prior public MIT distribution as an established
+fact. That statement is withdrawn.
 
-| Scope | Licence in the pinned source |
+The development snapshot named in `PACKAGING.lock.json` still contains a MIT
+text. Its exact notice is retained in
+`LICENSES/nomad-testnet-MIT-before-consolidation.txt`. Other imported copies also
+retain their original texts, listed below. GitHub currently marks the source
+repositories public, but no historical visibility log or third-party receipt
+has been verified here. This inventory records file contents and the owner's
+account; it does not decide their legal effect or issue a new MIT grant.
+
+New packaging material follows the top-level licence. Any valid pre-existing
+permissions and third-party licences remain unaffected. Reconcile the retained
+texts and the exact rights before commercial reuse or an exclusive transfer.
+
+| Scope | Licence text retained in the pinned source |
 | --- | --- |
 | `browser/` | NOMAD RESTRICTED SOURCE LICENSE 1.0; nested components retain their licences |
 | `protocol/` | MIT License; embedded skills retain recorded upstream attribution |
@@ -37,13 +50,14 @@ licences. This package does not claim ownership of them.
 - Newly commissioned adaptation, if a delivery team and funding are agreed.
 - Transfer of owner-controlled rights, subject to contributor/provenance review.
 
-The MIT verification library can already be used under MIT. Payment is not
-required merely to exercise those rights. An offer involving it must identify
-the additional handover, future work or other assets being purchased.
+Do not infer from this table alone either that the complete project was offered
+to the public under MIT or that every included asset can be transferred
+exclusively. A proposal must specify the rights the owner controls and account
+for any permissions actually granted to recipients.
 
-No exclusive ownership of all included software is represented. Before a rights
-transfer, identify the exact files and rights, check contributor ownership and
-distinguish current branch licences from earlier versions. The historical
+Before a rights transfer, identify the exact files and rights, check contributor
+ownership and distinguish current branch texts, historical access and any
+actual distribution terms. The historical
 licensing blocker in `protocol/production/EXTERNAL_BLOCKERS.md` is retained as
 evidence, not silently marked resolved by this inventory.
 

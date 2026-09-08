@@ -47,8 +47,10 @@ assets and stewardship. A buyer may fund an integration delivered and reviewed
 by its own engineers or a named technical partner.
 
 There is no assumed ongoing founder consulting, hosting obligation or SLA.
-Scope, rights, acceptance and payment must be agreed in writing. The MIT library
-is already available under MIT; existing rights are not sold as exclusive.
+Scope, rights, acceptance and payment must be agreed in writing. The owner's
+commercial intent is a restricted-source licence or agreed transfer. The
+retained source/licence inventory is available for review; it does not establish
+that historical MIT texts resulted in prior public grants.
 
 ## Evidence and limitations
 

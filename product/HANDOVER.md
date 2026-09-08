@@ -17,8 +17,9 @@ payment event; any limited handover question period; acceptance criteria; and
 who owns implementation, review and operation. No adaptation, response time,
 exclusivity or perpetual support is implied by the source package.
 
-Transferring owner-controlled rights does not extinguish existing MIT permissions.
-Third-party code, trademarks and upstream project rights are excluded unless
+Any valid permissions previously granted to recipients must be respected;
+their existence is not assumed solely from a historical MIT file. Third-party
+code, trademarks and upstream project rights are excluded unless
 their owners separately agree. Contributor/provenance review must settle the
 precise rights before a binding assignment.
 

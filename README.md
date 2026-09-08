@@ -77,11 +77,13 @@ browser are offered by this evaluation package.
 
 ## Rights and contact
 
-This is a mixed-licence source package: some code is MIT and some is under the
-Nomad Restricted Source License. Existing MIT permissions and attribution
-remain intact. Read [COMPONENT_LICENSES.md](COMPONENT_LICENSES.md) before reuse.
-A commercial agreement can cover owner-controlled rights and a defined handover;
-it cannot make previously MIT-published code exclusive.
+The owner selected the Nomad Restricted Source License for commercial protection
+and reports that MIT texts were introduced while the repositories were private.
+The pinned source copies retain differing licence texts as provenance. Their
+presence alone does not establish the history of permissions granted to others.
+Read [COMPONENT_LICENSES.md](COMPONENT_LICENSES.md) before reuse. A commercial
+agreement must identify the assets and rights, with any valid pre-existing and
+third-party permissions respected.
 
 Owner: **Jonatan Tensetti**, [Jtensetti on GitHub](https://github.com/Jtensetti).
 For enquiries, [open an issue](https://github.com/Jtensetti/nomad-testnet/issues/new).
