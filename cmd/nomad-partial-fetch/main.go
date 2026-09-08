@@ -12,10 +12,16 @@ import (
 
 	"github.com/Jtensetti/nomad-testnet/live/fetchplan"
 	"github.com/Jtensetti/nomad-testnet/live/partialfetch"
+	"github.com/Jtensetti/nomad-testnet/live/telemetry"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
 func main() {
+	// This process holds key material, so a panic must not print goroutine
+	// stacks: Go renders frame arguments as raw machine words and an init
+	// system retains whatever a crashing service wrote. Only GOTRACEBACK can
+	// turn that off, and only from outside, so the process checks and says so.
+	telemetry.WarnIfCrashDumpsEnabled(os.Stderr)
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "nomad-partial-fetch:", err)
 		os.Exit(1)

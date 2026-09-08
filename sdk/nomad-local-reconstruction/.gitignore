@@ -1,0 +1,8 @@
+*.out
+*.test
+coverage.txt
+.DS_Store
+.idea/
+.vscode/
+__pycache__/
+*.pyc

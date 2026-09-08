@@ -410,6 +410,7 @@ func captureWorld(
 		Epoch:         epochDuration,
 		CellsPerEpoch: len(cells),
 		MaxLateness:   2 * cfg.CellInterval,
+		DeadlineSpin:  fabric.DeadlineSpinFor(cfg.CellInterval),
 	}, source, sink)
 	if err != nil {
 		return worldCapture{}, err
@@ -478,9 +479,7 @@ func normalizeCapture(
 	minimumSpacing := time.Duration(1<<63 - 1)
 	for i := 1; i < len(observed); i++ {
 		spacing := observed[i].item.ReceivedAt.Sub(observed[i-1].item.ReceivedAt)
-		if spacing < minimumSpacing {
-			minimumSpacing = spacing
-		}
+		minimumSpacing = min(minimumSpacing, spacing)
 	}
 	if len(observed) < 2 {
 		minimumSpacing = 0

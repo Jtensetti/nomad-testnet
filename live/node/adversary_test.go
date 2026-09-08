@@ -72,9 +72,7 @@ func (session *hostileSession) workCell(t *testing.T, fresh bool) fabric.Cell {
 }
 
 func TestFloodFromAnAcceptedPeerNeitherAmplifiesNorInducesCatchUp(t *testing.T) {
-	if testing.Short() {
-		t.Skip("flood campaign needs wall-clock time")
-	}
+	campaignEnabled(t)
 	network, identities, endpoints := nodeTestTopologyWithCadence(
 		t, campaignIntervalMillis, campaignLateness, singlePeerPlan)
 
@@ -373,9 +371,7 @@ func TestHostileDatagramsAreRejectedForTheRightReason(t *testing.T) {
 // node and read private activity off the cadence -- turning a denial-of-
 // service lever into a privacy oracle, which is far worse.
 func TestFloodIsNotAPrivateStateOracle(t *testing.T) {
-	if testing.Short() {
-		t.Skip("flood campaign needs wall-clock time")
-	}
+	campaignEnabled(t)
 	network, identities, endpoints := nodeTestTopologyWithCadence(
 		t, campaignIntervalMillis, campaignLateness, singlePeerPlan)
 

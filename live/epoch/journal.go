@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"github.com/Jtensetti/nomad-testnet/live/topology"
+
+	"github.com/Jtensetti/nomad-testnet/live/durable"
 )
 
 // ErrConflictingSignature is returned when an operator is asked to sign a
@@ -79,7 +81,7 @@ func (journal *Journal) record(networkID string, epochNumber uint64, role string
 	if err := writeNewFile(path, encoded, 0o600); err != nil {
 		return err
 	}
-	return syncDir(journal.root)
+	return durable.Directory(journal.root)
 }
 
 // ActivateWithJournal is the only supported way to produce an activation

@@ -1,0 +1,119 @@
+=== nomad-testnet additional gates
+=== commit: eece3e576adf442c0596f44e9f2fe43d0b08de2e
+--- vendored component modules (build, vet, race test, govulncheck) ---
+== components/nomad-anytrust-mix-sim/
+ok  	github.com/Jtensetti/nomad-anytrust-mix-sim/mix	103.407s
+govulncheck exit=0
+exit=0
+== components/nomad-constant-rate-fabric/
+ok  	github.com/Jtensetti/nomad-constant-rate-fabric/fabric	1.179s
+govulncheck exit=0
+exit=0
+== components/nomad-local-reconstruction/
+ok  	github.com/Jtensetti/nomad-local-reconstruction/reconstruct	1.029s
+govulncheck exit=0
+exit=0
+== components/nomad-rlnc/
+ok  	github.com/Jtensetti/nomad-rlnc/rlnc	1.229s
+govulncheck exit=0
+exit=0
+== components/nomad-selection-firewall/
+ok  	github.com/Jtensetti/nomad-selection-firewall/firewall	1.033s
+govulncheck exit=0
+exit=0
+== components/nomad-semantic-basins/
+ok  	github.com/Jtensetti/nomad-semantic-basins/basin	1.094s
+govulncheck exit=0
+exit=0
+--- deposit experiments, no race (the dedicated CI step) ---
+ok  	github.com/Jtensetti/nomad-testnet/live/deposit	156.146s
+exit=0
+--- conformance corpus ---
+corpus matches: 7 vectors, digest 44f69ea7544f156feb773f9da9041de6c4c2b049292de9e371151cc09a1f0c45
+exit=0
+--- conformance corpus on 386 ---
+corpus matches: 7 vectors, digest 44f69ea7544f156feb773f9da9041de6c4c2b049292de9e371151cc09a1f0c45
+exit=0
+--- 386 packages ---
+ok  	github.com/Jtensetti/nomad-testnet/live/conformance	4.154s
+ok  	github.com/Jtensetti/nomad-testnet/live/topology	0.720s
+?   	github.com/Jtensetti/nomad-testnet/live/batch	[no test files]
+exit=0
+--- supported build targets ---
+linux/amd64 ok
+linux/386 ok
+linux/arm64 ok
+linux/arm ok
+darwin/amd64 ok
+darwin/arm64 ok
+--- python gates ---
+ok   parser reads every packet line
+ok   parser reads the IPv6 form
+ok   parser reads the VLAN-tagged form
+ok   parser reads sizes
+ok   a rendered text capture is not mistaken for a pcap
+ok   a rendered text capture is read without tcpdump
+ok   a libpcap file is recognised as binary
+ok   parser rejects an unparsed line
+ok   parser tolerates tcpdump preamble and trailer lines
+ok   parser reads the Go campaign's rendered captures
+ok   Go-rendered captures carry a usable cadence
+ok   KS accepts identical inter-arrivals
+ok   KS rejects a doubled interval
+ok   KS rejects a subtle periodic shift
+ok   KS statistic is zero for a tied sample against itself
+ok   KS accepts a tied sample against itself
+ok   KS rejects a shift within a tied support
+ok   Kolmogorov survival at zero is one
+ok   Kolmogorov survival near zero is one
+ok   Kolmogorov survival decays
+ok   chi-square accepts identical peer usage
+ok   chi-square rejects skewed peer usage
+ok   flows are keyed by direction and peer
+ok   each flow keeps only its own packets
+ok   pooling both directions would raise a false alarm on a phase shift
+ok   per-flow analysis is unmoved by the peer's phase
+ok   equal windows are an integer number of cell intervals
+ok   equal windows equalise an honest sender's cell count
+ok   an honest sender emits one cell per period in the window
+ok   per-flow path still catches an extra cell
+ok   per-flow path still catches a catch-up burst
+ok   per-flow path passes a sender against itself
+ok   burst detection sees a catch-up burst
+ok   inter-arrivals are order independent
+ok   gamma survival at zero is one
+ok   gamma survival decays
+ok   end to end: matching worlds exit 0
+ok   end to end: a jittered world exits non-zero
+ok   end to end: an off-size cell exits non-zero
+ok   end to end: a difference on a received flow exits 3, not 1
+ok   end to end: an observation-point capture judges every flow
+ok   end to end: an observation-point capture still catches a leak
+ok   end to end: an ambiguous vantage fails closed
+ok   end to end: an explicit host resolves an ambiguous vantage
+ok   end to end: too few cells is inconclusive, not a finding
+ok   end to end: an unreadable capture exits 2, not 1
+
+all analysis self-tests passed
+exit=0
+ok   three identical worlds pass
+ok   a passing campaign says so
+ok   a pass is not reported as proof
+ok   a leak against a clean control is a finding
+ok   a finding says so
+ok   a finding is not averaged away
+ok   a rejected control is inconclusive, not a finding
+ok   an inconclusive campaign says so
+ok   an inconclusive host names its control as the reason
+ok   a missing capture is not a pass
+ok   a missing capture is inconclusive
+ok   too few cells is inconclusive
+
+all campaign verdict self-tests passed
+exit=0
+--- preregistered rule over the publication campaign ---
+control-a vs control-b exit=0
+control-a vs success exit=0
+control-a vs timeout exit=0
+control-a vs loss exit=0
+restart-idle vs restart exit=0

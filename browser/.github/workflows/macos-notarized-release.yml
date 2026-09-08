@@ -1,0 +1,84 @@
+name: macOS notarized release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semver without a leading v
+        required: true
+        default: 0.1.0-alpha.3
+        type: string
+      prerelease:
+        description: Publish as a GitHub prerelease
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-notarized-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 60
+    environment: apple-release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate release input
+        env:
+          NOMAD_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$NOMAD_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "version must be a semver without a leading v" >&2
+            exit 1
+          fi
+
+      - name: Build, Developer ID sign, notarize and verify
+        env:
+          NOMAD_VERSION: ${{ inputs.version }}
+          NOMAD_BUILD_NUMBER: ${{ github.run_number }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash macos/scripts/build_notarized_dmg.sh
+
+      - name: Upload immutable notarization evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Nomad-Browser-notarized-${{ github.sha }}-${{ inputs.version }}
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+            dist/effective-entitlements.plist
+            dist/notarization-result.json
+            dist/notarization-log.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish notarized GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOMAD_VERSION: ${{ inputs.version }}
+          NOMAD_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          args=(
+            "dist/Nomad-Browser-${NOMAD_VERSION}-macOS-universal.dmg"
+            "dist/Nomad-Browser-${NOMAD_VERSION}-macOS-universal.dmg.sha256"
+            "dist/notarization-result.json"
+            "dist/notarization-log.json"
+            --target "$GITHUB_SHA"
+            --title "Nomad Browser macOS ${NOMAD_VERSION}"
+            --notes-file macos/RELEASE_NOTES.md
+          )
+          if [[ "$NOMAD_PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "nomad-browser-macos-v${NOMAD_VERSION}" "${args[@]}"

@@ -130,6 +130,54 @@ proxy, retry layer or load balancer that bursts, coalesces, duplicates or
 selects traffic in response to cache demand. Pin each signed endpoint to one
 operator instance for the epoch.
 
+## Supervising a node
+
+A Nomad node does not stop when a local condition breaks its emission path.
+A full disk, an exhausted socket buffer or a route that went away costs the
+cell it interrupted and the schedule carries on, because a node that stops is
+the loudest event a passive observer can see and those causes are local. The
+consequence for you is that **"the process is running" no longer means the
+node is emitting**. It can be up, on cadence, and dropping every cell.
+
+So supervise what it emitted, not whether it is alive:
+
+```bash
+nomad-node --check-health=/run/nomad/health.json --max-silence=30s
+```
+
+It exits non-zero when the health file is stale (the node stopped reporting),
+when the node has emitted nothing since it started, or when it last emitted
+longer ago than `--max-silence`. It fails closed on a missing, empty or
+unparseable file. Set `--max-silence` from your cell interval; anything from
+a few hundred intervals upward distinguishes a stall from jitter.
+
+As a systemd unit, that is a watchdog rather than a readiness probe:
+
+```ini
+# nomad-node-health.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nomad-node --check-health=/run/nomad/health.json --max-silence=30s
+ExecStopPost=/bin/sh -c '[ "$EXIT_STATUS" = 0 ] || systemctl restart nomad-node'
+
+# nomad-node-health.timer
+[Timer]
+OnUnitActiveSec=30s
+```
+
+**Put the health file and the state directories on different filesystems, and
+watch both.** The runbook below writes `--cache` and `--state` under
+`/var/lib/nomad` and `--health` under `/run`, which is deliberate: a full
+`/var/lib/nomad` then drops every cell while the health file keeps updating,
+so the staleness check alone would not fire. `--check-health` catches it
+through `last_sent_at`, which is why the check reads what was emitted rather
+than only when the file was written.
+
+**Alert on `send_dropped` in the health file.** On a healthy node it is zero.
+A rising count is a local condition -- disk, socket buffers, a firewall rule
+-- that is costing cells. A node that reaches a few thousand consecutive drops
+stops on its own and says why, but that is the backstop, not the alarm.
+
 ## Per-operator processes
 
 Operator A starts its node with only operator A's files:

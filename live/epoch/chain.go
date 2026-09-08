@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Jtensetti/nomad-testnet/live/durable"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -284,7 +285,7 @@ func (chain *Chain) Append(encoded []byte) (Verified, error) {
 	if err := writeNewFile(path, encoded, 0o644); err != nil {
 		return Verified{}, err
 	}
-	if err := syncDir(chain.root); err != nil {
+	if err := durable.Directory(chain.root); err != nil {
 		return Verified{}, err
 	}
 	chain.epochs = append(chain.epochs, verified)
@@ -428,7 +429,7 @@ func (chain *Chain) raiseWatermark(epochNumber uint64) error {
 		return err
 	}
 	ok = true
-	return syncDir(chain.root)
+	return durable.Directory(chain.root)
 }
 
 func (chain *Chain) encodedFor(epochNumber uint64) []byte {
@@ -562,13 +563,4 @@ func writeNewFile(path string, data []byte, mode os.FileMode) error {
 	}
 	ok = true
 	return nil
-}
-
-func syncDir(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = directory.Close() }()
-	return directory.Sync()
 }

@@ -21,7 +21,19 @@ import (
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
-func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
+type descriptorFixture struct {
+	authorityPublic  ed25519.PublicKey
+	authorityPrivate ed25519.PrivateKey
+	network          topology.Verified
+	generated        batch.Generated
+	payload          []byte
+}
+
+// buildDescriptorFixture assembles a full signed topology, DKG committee and
+// generated batch, so tests can exercise the descriptor and decoder at the
+// verification boundary rather than on hand-built structs.
+func buildDescriptorFixture(t *testing.T) descriptorFixture {
+	t.Helper()
 	authorityPublic, authorityPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -89,6 +101,17 @@ func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return descriptorFixture{
+		authorityPublic: authorityPublic, authorityPrivate: authorityPrivate,
+		network: network, generated: generated, payload: payload,
+	}
+}
+
+func TestEncryptedFabricCacheToVerifiedBrowserObject(t *testing.T) {
+	fixture := buildDescriptorFixture(t)
+	authorityPublic, authorityPrivate := fixture.authorityPublic, fixture.authorityPrivate
+	network, generated := fixture.network, fixture.generated
+	root := sha256.Sum256(fixture.payload)
 	descriptorBytes, _ := batch.EncodeDescriptor(generated.Descriptor)
 	descriptor, err := batch.VerifyDescriptor(descriptorBytes, authorityPublic, network)
 	if err != nil {

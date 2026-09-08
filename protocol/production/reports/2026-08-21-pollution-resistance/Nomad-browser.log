@@ -1,0 +1,26 @@
+repo: Nomad-browser
+commit: f929466b679b79fec35be55b013adf3e5496dd94
+branch: claude/nomad-production-ready-dxv4ql
+dirty: 0
+go version go1.24.7 linux/amd64
+--- gofmt ---
+GOFMT_OK
+--- build ---
+BUILD_OK
+--- vet ---
+VET_OK
+--- test ---
+ok  	github.com/Jtensetti/nomad-browser	1.285s
+ok  	github.com/Jtensetti/nomad-browser/adapter	1.136s
+ok  	github.com/Jtensetti/nomad-browser/egress	1.039s
+ok  	github.com/Jtensetti/nomad-browser/localcache	1.048s
+ok  	github.com/Jtensetti/nomad-browser/planner	1.021s
+ok  	github.com/Jtensetti/nomad-browser/selector	1.095s
+=== snapshot lock ===
+LOCK_OK
+-- components/nomad-local-reconstruction/
+ok  	github.com/Jtensetti/nomad-local-reconstruction/reconstruct	1.054s
+-- components/nomad-selection-firewall/
+ok  	github.com/Jtensetti/nomad-selection-firewall/firewall	1.021s
+-- components/nomad-semantic-basins/
+ok  	github.com/Jtensetti/nomad-semantic-basins/basin	1.151s

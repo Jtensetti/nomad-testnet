@@ -1,0 +1,21 @@
+repo: nomad-rlnc
+commit: 70fc47cccb7f0aa5263f9eb9c9621c4d5b399845
+branch: claude/nomad-production-ready-dxv4ql
+dirty: 0
+go version go1.24.7 linux/amd64
+--- gofmt ---
+GOFMT_OK
+--- build ---
+BUILD_OK
+--- vet ---
+VET_OK
+--- test ---
+ok  	github.com/Jtensetti/nomad-rlnc/rlnc	1.294s
+=== fuzz: budget property, 90s ===
+fuzz: elapsed: 1m31s, execs: 148530 (0/sec), new interesting: 63 (total: 102)
+PASS
+ok  	github.com/Jtensetti/nomad-rlnc/rlnc	91.037s
+=== fuzz: honest exactness, 90s ===
+fuzz: elapsed: 1m31s, execs: 134125 (0/sec), new interesting: 78 (total: 85)
+PASS
+ok  	github.com/Jtensetti/nomad-rlnc/rlnc	91.078s

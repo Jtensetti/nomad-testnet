@@ -14,6 +14,7 @@ import (
 	"os"
 
 	"github.com/Jtensetti/nomad-testnet/live/hop"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -75,7 +76,7 @@ func Verify(encoded []byte, authority ed25519.PublicKey, network topology.Verifi
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return Plan{}, errors.New("trailing fetch-plan data")
 	}
-	signature, err := base64.StdEncoding.Strict().DecodeString(plan.AuthoritySignature)
+	signature, err := strictjson.DecodeBase64(plan.AuthoritySignature)
 	if err != nil || len(signature) != ed25519.SignatureSize {
 		return Plan{}, errors.New("fetch-plan signature encoding is invalid")
 	}

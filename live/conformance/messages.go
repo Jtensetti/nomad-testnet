@@ -1,16 +1,19 @@
 package conformance
 
 import (
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
 	"github.com/Jtensetti/nomad-constant-rate-fabric/fabric"
 	"github.com/Jtensetti/nomad-local-reconstruction/reconstruct"
 	"github.com/Jtensetti/nomad-testnet/live/hop"
+	"github.com/Jtensetti/nomad-testnet/live/topology"
 	"github.com/Jtensetti/nomad-testnet/live/uplink"
 )
 
@@ -21,6 +24,7 @@ func All() ([]Vector, error) {
 		hopFrames,
 		uplinkCells,
 		objectManifests,
+		signedTopologies,
 	} {
 		built, err := builder()
 		if err != nil {
@@ -61,8 +65,23 @@ func hopFrames() ([]Vector, error) {
 			"stream":     hex.EncodeToString(metadata.Stream[:]),
 			"header_at":  strconv.Itoa(hop.CiphertextSize),
 			"tag_at":     strconv.Itoa(hop.CiphertextSize + hop.HeaderSize - hop.TagSize),
+			// The tag is a MAC, so a vector without its key and its bound
+			// context is a string nobody can check. Publishing them is what
+			// makes these vectors usable by a second implementation at all;
+			// without them the corpus proves only that this encoder is
+			// self-consistent.
+			//
+			// This key exists to be published. It is derived from a fixed
+			// label in a public repository, so every reader can already
+			// compute it, and it authenticates nothing outside the corpus.
+			// It must never appear in a topology or an operator secret.
+			"conformance_hop_key": hex.EncodeToString(key[:]),
+			"topology_digest":     hex.EncodeToString(context.TopologyDigest[:]),
+			"network_id":          context.NetworkID,
+			"epoch":               strconv.FormatUint(context.Epoch, 10),
+			"receiver":            strconv.FormatUint(uint64(context.Receiver), 10),
 		}
-		return NewVector("hop-cell-v1", name, description, cell[:], fields), nil
+		return NewVector("hop-cell-v2", name, description, cell[:], fields), nil
 	}
 
 	work, err := hop.WorkMetadata(stream, 3, 8)
@@ -128,13 +147,34 @@ func uplinkCells() ([]Vector, error) {
 		return nil, err
 	}
 	prefix := append([]byte(nil), cell[:uplink.SequenceSize]...)
+
+	// The AEAD ciphertext cannot be pinned, but the two derivations that
+	// decide it can, and they are where two implementations actually
+	// disagree: an HKDF info string assembled differently, or a nonce over
+	// the wrong fields, produces cells that are refused with no clue why.
+	// The shared secret is a fixed public test value derived from a label in
+	// a public repository and authenticates nothing outside this corpus.
+	sharedSecret := DeterministicBytes("uplink-shared-secret", 32)
+	sessionKey, err := uplink.SessionKey(sharedSecret, context)
+	if err != nil {
+		return nil, err
+	}
 	fields := map[string]string{
-		"sequence":            "9",
-		"sequence_size":       strconv.Itoa(uplink.SequenceSize),
-		"inner_size":          strconv.Itoa(uplink.InnerSize),
-		"cell_size":           strconv.Itoa(fabric.CellSize),
-		"ciphertext_is_fixed": "false",
-		"note":                "the sealed body is randomised; only the frame is pinned",
+		"sequence":                  "9",
+		"sequence_size":             strconv.Itoa(uplink.SequenceSize),
+		"inner_size":                strconv.Itoa(uplink.InnerSize),
+		"cell_size":                 strconv.Itoa(fabric.CellSize),
+		"padding_size":              strconv.Itoa(fabric.CellSize - uplink.SequenceSize - uplink.InnerSize - 16),
+		"tag_size":                  "16",
+		"conformance_shared_secret": hex.EncodeToString(sharedSecret),
+		"network_id":                context.NetworkID,
+		"epoch":                     strconv.FormatUint(context.Epoch, 10),
+		"entry_operator":            strconv.Itoa(int(context.EntryOperator)),
+		"topology_digest":           hex.EncodeToString(context.TopologyDigest[:]),
+		"session_key":               hex.EncodeToString(sessionKey[:]),
+		"nonce":                     hex.EncodeToString(uplink.Nonce(sessionKey, 9)),
+		"ciphertext_is_fixed":       "false",
+		"note":                      "the sealed body is randomised; only the frame is pinned",
 	}
 	return []Vector{
 		NewVector("uplink-cell-frame-v1", "sequence-prefix",
@@ -174,4 +214,122 @@ func objectManifests() ([]Vector, error) {
 			"a manifest over a known object, pinning field order and the signed message",
 			encoded, fields),
 	}, nil
+}
+
+// signedTopologies cover the document a second implementation must parse
+// before it can join anything: the peer set, the traffic class, the DKG
+// profile, every operator's attestation and the authority signature.
+//
+// It is the admission format, so it is the one an interoperating
+// implementation gets wrong first, and until now the corpus did not describe
+// it at all. The validity window is fixed and deliberately wide; conformance
+// checks parse, verify signatures and compare the canonical digest, which are
+// clock-independent, and a consumer that also enforces the window should use
+// the stated bounds rather than its own clock.
+func signedTopologies() ([]Vector, error) {
+	const (
+		notBefore = "2020-01-01T00:00:00Z"
+		notAfter  = "2100-01-01T00:00:00Z"
+		startAt   = "2020-01-01T00:05:00Z"
+	)
+	build := func(operators int) (topology.Signed, error) {
+		var session [32]byte
+		copy(session[:], DeterministicBytes("topology-dkg-session", 32))
+		document := topology.Document{
+			Version: topology.Version, NetworkID: "nomad-conformance", Epoch: 7,
+			NotBefore: notBefore, NotAfter: notAfter,
+			Traffic: topology.TrafficClass{
+				CellSize: topology.CellSize, CellIntervalMillis: 50,
+				MaxLatenessMillis: 200, QueueCapacity: 256,
+			},
+			DKG: topology.DKGProfile{
+				Threshold: 2, SessionID: base64.StdEncoding.EncodeToString(session[:]),
+				StartAt: startAt, PhaseDurationMillis: 30_000,
+			},
+			Operators: make([]topology.Operator, operators),
+		}
+		identities := make(map[string]ed25519.PrivateKey, operators)
+		for index := range document.Operators {
+			id := fmt.Sprintf("operator-%c", 'a'+index)
+			identity := DeterministicKey("topology-identity-" + id)
+			identities[id] = identity
+			kexSeed := DeterministicBytes("topology-kex-"+id, 32)
+			kex, err := ecdh.X25519().NewPrivateKey(kexSeed)
+			if err != nil {
+				return topology.Signed{}, err
+			}
+			// A DKG identity is an Edwards25519 point, so arbitrary bytes
+			// will not decode. An Ed25519 public key is such a point in the
+			// same encoding, and deriving it deterministically keeps the
+			// vector reproducible. Nothing secret is published: only the
+			// point appears in the document.
+			dkgPublic := DeterministicKey("topology-dkg-" + id).Public().(ed25519.PublicKey)
+			document.Operators[index] = topology.Operator{
+				ID: id, Index: uint16(index),
+				Endpoint:        fmt.Sprintf("198.51.100.%d:4200", index+1),
+				PartialEndpoint: fmt.Sprintf("http://198.51.100.%d:4300", index+1),
+				DKGEndpoint:     fmt.Sprintf("https://198.51.100.%d:4400", index+1),
+				IdentityKey:     base64.StdEncoding.EncodeToString(identity.Public().(ed25519.PublicKey)),
+				KEXKey:          base64.StdEncoding.EncodeToString(kex.PublicKey().Bytes()),
+				DKGIdentityKey:  base64.StdEncoding.EncodeToString(dkgPublic),
+				PeerPlan:        []uint16{uint16((index + 1) % operators)},
+			}
+		}
+		attested := document
+		var err error
+		for _, operator := range document.Operators {
+			attested, err = topology.Attest(attested, operator.ID, identities[operator.ID])
+			if err != nil {
+				return topology.Signed{}, err
+			}
+		}
+		return topology.Finalize(attested, DeterministicKey("topology-authority"))
+	}
+
+	var vectors []Vector
+	for _, shape := range []struct {
+		name        string
+		description string
+		operators   int
+	}{
+		{"topology-three-operators",
+			"the minimum multi-operator ring: three operators, each attesting the whole document", 3},
+		{"topology-eight-operators",
+			"a wider ring, pinning per-operator ordering and peer-plan encoding at scale", 8},
+	} {
+		signed, err := build(shape.operators)
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := topology.Encode(signed)
+		if err != nil {
+			return nil, err
+		}
+		verified, err := topology.Verify(encoded, DeterministicKey("topology-authority").
+			Public().(ed25519.PublicKey), time.Time{})
+		if err != nil {
+			return nil, fmt.Errorf("%s does not verify: %w", shape.name, err)
+		}
+		vectors = append(vectors, NewVector("topology-document-v3", shape.name, shape.description,
+			encoded, map[string]string{
+				// The pinned authority key. Trust never comes from the
+				// document -- a topology that names its own authority
+				// authenticates nothing -- so a verifier is given the key
+				// out of band, and a vector without it is a signature nobody
+				// can check. It is derived from a fixed label in a public
+				// repository and authenticates nothing outside this corpus.
+				"conformance_authority_key": base64.StdEncoding.EncodeToString(
+					DeterministicKey("topology-authority").Public().(ed25519.PublicKey)),
+				"network_id":       signed.Document.NetworkID,
+				"epoch":            strconv.FormatUint(signed.Document.Epoch, 10),
+				"operators":        strconv.Itoa(len(signed.Document.Operators)),
+				"threshold":        strconv.FormatUint(uint64(signed.Document.DKG.Threshold), 10),
+				"cell_size":        strconv.FormatUint(uint64(signed.Document.Traffic.CellSize), 10),
+				"cell_interval_ms": strconv.FormatUint(uint64(signed.Document.Traffic.CellIntervalMillis), 10),
+				"not_before":       notBefore,
+				"not_after":        notAfter,
+				"topology_digest":  hex.EncodeToString(verified.Digest[:]),
+			}))
+	}
+	return vectors, nil
 }

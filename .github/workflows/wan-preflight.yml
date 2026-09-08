@@ -14,17 +14,23 @@ on:
   push:
     paths:
       - '.github/workflows/wan-preflight.yml'
-      - 'deploy/wan/**'
+      - 'scripts/wan/**'
 
 permissions:
   contents: read
+
+concurrency:
+  # A superseded run tells nobody anything: it is testing a candidate that has
+  # already been replaced, while consuming a runner the new candidate needs.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   preflight:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Report which credential names are present
         env:
@@ -44,7 +50,10 @@ jobs:
                       SCALEWAY_SECRET_KEY SCALEWAY_PROJECT_ID \
                       SCALEWAY_ORGANIZATION_ID SCW_API_KEY SCW_TOKEN; do
             if [ -n "${!name}" ]; then
-              printf '%-32s set (%d chars)\n' "$name" "${#name}"
+              # Deliberately no length: the header above promises that only
+              # "set" or "MISSING" is emitted, and the count this printed was
+              # the length of the variable's name rather than its value.
+              printf '%-32s set\n' "$name"
             else
               printf '%-32s MISSING\n' "$name"
             fi

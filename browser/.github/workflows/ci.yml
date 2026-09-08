@@ -1,0 +1,130 @@
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+concurrency:
+  # A superseded run tells nobody anything: it is testing a candidate that has
+  # already been replaced, while consuming a runner the new candidate needs.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: {go-version: '1.25.x'}
+      - name: Verify pinned component snapshots
+        run: sha256sum --check --quiet COMPONENTS.sha256
+      - name: Verify module snapshot is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod
+          test -z "$(git status --porcelain -- go.mod go.sum)"
+      - name: Verify formatting, snapshots included
+        run: |
+          # Snapshots are excluded from nothing here: a formatting drift in a
+          # pinned copy is the first visible symptom of it diverging from the
+          # repository it was taken from.
+          unformatted="$(gofmt -l .)"
+          if test -n "$unformatted"; then
+            printf 'unformatted Go files:\n%s\n' "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+      - name: Check the renderer URL decisions against a second implementation
+        run: |
+          # PROD-16 asks for parser-differential evidence at the renderer
+          # boundary. The decision corpus is that evidence only if something
+          # other than the encoder that wrote it reads it. Run standalone here
+          # as well as from the Go test, so it is exercised even if the Go side
+          # is skipped for want of a python3 on the runner.
+          python3 conformance/reference/crosscheck_egress.py egress/testdata/url-decisions.json
+      - name: Install the tools the capability gates need
+        run: |
+          # The runtime-boundary gate traces the release binaries with strace,
+          # and the vendored egress capture needs tcpdump. Installing them here
+          # states the requirement in the workflow: a runner image that drops
+          # one fails this step instead of quietly turning a gate into a skip.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq strace tcpdump
+      - name: Run the tests, requiring the capability gates to actually run
+        env:
+          # A skip is green, so a gate that stops running for an environmental
+          # reason reports what a gate that passes reports. This says the
+          # capability is present here, so its absence fails.
+          NOMAD_REQUIRE_CAPABILITY_GATES: '1'
+        run: go test -race ./...
+      - run: go vet ./...
+      - name: Static analysis, failing closed
+        run: |
+          # staticcheck exits 0 when it cannot analyse a module, so "clean" and
+          # "read nothing" are the same exit code. The script proves the tool is
+          # analysing with a positive control before it trusts a clean run.
+          ./scripts/run-staticcheck.sh
+      - name: Test every pinned component snapshot
+        run: |
+          # components/* are separate modules behind replace directives, so
+          # the root `go test ./...` never touches them. An untested snapshot
+          # is how nomad-testnet shipped a silent wrong-decode in its vendored
+          # rlnc decoder; the digest lock proves the files are the ones
+          # pinned, not that they work.
+          for module in components/*/; do
+            echo "== $module =="
+            (cd "$module" && go build ./... && go vet ./... && \
+              NOMAD_REQUIRE_CAPABILITY_GATES=1 go test -race -count=1 ./...)
+          done
+      - name: Verify the Linux client cannot reach the network
+        run: |
+          # Any non-zero exit fails this step, exit 2 included. The script uses
+          # 2 for "this gate could not run", which on a developer machine is
+          # different from a failure but in CI is not: a release gate that
+          # silently did not run is the failure.
+          ./scripts/verify-networkless.sh
+      - name: Verify the vulnerability gate still fails closed
+        run: ./scripts/test-scan-vulnerabilities.sh
+      - name: Scan dependencies for reachable vulnerabilities
+        run: |
+          ./scripts/scan-vulnerabilities.sh
+      - name: Verify the build is deterministic across source paths
+        run: ./scripts/check-reproducible.sh
+      - name: Generate SBOM
+        run: ./scripts/generate-sbom.sh sbom.cdx.json
+      - name: Generate provenance for the SBOM
+        run: |
+          # generate-provenance.sh existed and no workflow ran it, so no
+          # provenance was produced anywhere. It attests rather than signs, and
+          # stamps itself unsigned outside a protected identity, so running it
+          # here cannot be mistaken for the signed provenance PROD-25 wants.
+          ./scripts/generate-provenance.sh sbom.cdx.json provenance.intoto.jsonl
+          test -s provenance.intoto.jsonl
+      - name: Upload SBOM and provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom
+          path: |
+            sbom.cdx.json
+            provenance.intoto.jsonl
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: {go-version: '1.25.x'}
+      # macOS is the platform this browser ships to, and until now the only
+      # thing that ran there was the DMG build. The Go suite -- the client, the
+      # renderer decisions, the update path -- ran on Linux only.
+      #
+      # The capability declaration is a list rather than the blanket flag
+      # because this runner has python3 and no strace: under the all-or-nothing
+      # version it could declare neither, and the parser-differential gate
+      # would have become a silent skip on exactly the platform that ships.
+      # The strace and tcpdump gates skip here and stay required on Linux.
+      - name: Run the tests, requiring the gates this platform can run
+        env:
+          NOMAD_REQUIRE_CAPABILITIES: 'python3'
+        run: go test -race ./...
+      - run: go vet ./...

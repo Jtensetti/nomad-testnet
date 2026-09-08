@@ -1,0 +1,631 @@
+{
+ "schema_version": 1,
+ "release": "nomad-production-rc1",
+ "last_reviewed": "2026-08-21",
+ "criteria": [
+  {
+   "id": "PROD-01",
+   "status": "PARTIAL",
+   "evidence": [
+    "golden vectors: 9-vector conformance corpus (hop cell incl. batch-coordinate maximum, uplink cell frame, object manifest, three- and eight-operator signed topologies), sealed by a digest over the ordered set, checked in CI against its encoders",
+    "cross-architecture: the corpus digest is identical on linux/amd64 and linux/386, so no vector depends on host word size; CI gates on both plus six supported build targets",
+    "compatibility matrix: nomad-testnet/conformance/COMPATIBILITY.md covers 58 frozen labels in three groups (document versions with stated refusal behaviour, signature/MAC/digest domain separators, and vendored component labels), enforced by TestCompatibilityMatrixCoversEveryWireVersion which fails naming any version constant the matrix omits",
+    "downgrade rule stated normatively: exactly one accepted version per format, an unrecognised version is refused rather than downgraded to, and a change forces a coordinated epoch change; six downgrade cases tested at the topology admission boundary",
+    "ambiguity: duplicate JSON keys, trailing content and malformed encodings refused before decoding; mutation and truncation sweeps over every published vector",
+    "external test report production/reports/2026-08-21-protocol-freeze/ (all suites green on two architectures; logs digested in SHA256SUMS)",
+    "the corpus has a published JSON Schema (nomad-testnet 7ff3c88, conformance/wire-vectors.schema.json, draft 2020-12) describing the corpus file so a second implementation can validate it with its own tooling rather than inferring the format from this project's encoder. CI validates our corpus against it so the schema cannot drift from the file; six mutations were verified to fail it, including a length that contradicts its hex and a digest that does not match its own bytes",
+    "the signed topology is specified: docs/PROTOCOL.md now gives its structure, its three signing domains and their exact messages, the verification order including rejecting duplicate JSON members before decoding, and the canonical encoding. It was previously absent altogether -- the document every other check is relative to had no specification at all, found by attempting a second implementation",
+    "the specification is demonstrably sufficient to build from: a second implementation written only from that text reproduces both corpus topology digests byte for byte",
+    "state transitions, errors and timeouts are in one normative document: docs/STATE_MACHINES.md covers emission, reception, both nonce spaces, publication, the airlock epoch, DKG phases, epoch rotation, topology acceptance and release installation, each as a transition table with the errors named and the timeouts distinguished into policy (from the signed topology) and fixed",
+    "the document is checked rather than trusted: nomad-testnet live/spec/spec_test.go asserts every value it states against the code it describes, and the failure message names the document. Mutation-verified -- narrowing the replay window to 32, halving the sequence reservation, starting a fresh sequence at zero and shortening the DKG window to three phases in the validator are all caught",
+    "an earlier version of that test asserted that four thirty-second phases are two minutes, which is true of arithmetic and says nothing about the code. It now drives topology validation with windows of three and four phases and requires the validator to draw the line where the document says it does",
+    "hop cell version 2 encrypts the whole cell -- payload and routing metadata -- under the pairwise link key (nomad-testnet live/hop/frame.go, DEC-016). What crosses a link is a uniform pseudorandom 1200-byte string apart from a 4-byte version and the 4-byte hop sequence, which is the keystream input and must be readable before decryption",
+    "encrypting the header alone would not have sufficed and the code says why: a work cell carries mix ciphertext, which parses as compressed group elements, while a cover cell is uniform random, so a second classifier separated the two perfectly without reading a header byte. Both distinguishers are now measured at chance on sealed cells (live/uplink/distinguisher_test.go), with the pre-v2 perfect separation kept as the before",
+    "the linkability measurement that motivated the change now runs in the opposite direction: TestARelayedCellDoesNotCarryItsStreamIDOnward sends a marked batch into a live relay and finds the identifier in 0 of 34 emitted cells across 2 relayed cells, searching the whole cell rather than the old header offsets, with a positive control that finds the same identifier when it is present so a search that finds nothing cannot be a search that looks nowhere",
+    "the conformance corpus was regenerated on the new format and the second implementation ported to it; both directions of the cross-implementation check pass (nomad-testnet live/conformance, 3 corpus cells verified and reproduced, 17 mutations and cross-context replays refused, 5 cells produced for the first implementation and accepted)",
+    "porting the second implementation found a real specification gap, which is what it is for: the two encrypted regions are not contiguous -- the version and the sequence sit between them -- so 'encrypt the payload and the routing metadata' has two readings that produce different bytes. The order is now normative in docs/PROTOCOL.md, and a mutation that restarts the keystream for the second region is caught only by the cross-implementation check",
+    "the topology's canonical encoding is specified rather than inherited from a library (DEC-017, nomad-testnet live/topology/canonical.go, docs/PROTOCOL.md): members sorted by UTF-16 code unit, no whitespace, minimal string escaping, integers only with a fractional or exponential literal refused rather than canonicalised, and an absent array as [] rather than null",
+    "two of the three inherited quirks were live defects: struct-declaration member order meant inserting a field in the middle of a struct would change the signed bytes of documents that had not otherwise changed, and an absent array encoded as null. The third -- Go escaping <, > and & -- was real and unreachable at once, because every free-form string in a topology is constrained by a pattern, a URL parser, RFC 3339 or base64 and none of those alphabets contains those characters. A test pins that unreachability so loosening a field becomes a failing test rather than two implementations disagreeing about a signature",
+    "8 mutations of the canonical encoder were all killed: unsorted members, Go's HTML escaping restored, an absent array as null, numbers routed through float64 (caught by a uint64 above 2^53), a fractional literal accepted, array order sorted, control characters written literally, and the encoder bypassed entirely",
+    "the corpus was regenerated on the new signing bytes and the second implementation ported to the specification rather than to Go's defaults; both directions of the cross-implementation check pass",
+    "a demonstrated cross-implementation differential on the signed topology was closed: Go's base64 decoder ignores CR and LF and Strict() does not change that, so a topology carrying the JSON escape \\n inside its authority signature verified in Go and was refused by the Python reference, which decodes with validate=True. The signature could not catch it, since the signature field is excluded from what it signs. All eighteen decode sites now reject characters outside the alphabet. Vectors and the before/after table in runtime/evidence/base64-differential/, EVIDENCE_INDEX F-18. Both implementations now refuse the case on the same corpus vector, and the Go mirror was checked against the lenient decoder it exists for. The topology refusal lists are now mirrored on both sides, and the reference's reported refusal counts are floored so neither list can shrink unseen -- verified by removing one entry from the reference and watching the floor fail."
+   ],
+   "blockers": [
+    "the specification is not frozen: docs/PROTOCOL.md describes the protocol but no signed specification tag exists, and tagging needs a project release key that must not be created or held by an agent (see EXTERNAL_BLOCKERS)"
+   ]
+  },
+  {
+   "id": "PROD-02",
+   "status": "PARTIAL",
+   "evidence": [
+    "docs/THREAT_MODEL.md: every one of the ten capabilities the criterion names now carries an explicit position (targeted / bounded / not defended), its exclusions, and a pointer to evidence",
+    "production/CLAIM_TEST_MATRIX.md supplies claim-to-test traceability, including a long-horizon correlation section whose three rows are honestly `none`",
+    "exclusions stated rather than implied: majority-compromised committee, dense coded pollution, availability under sustained loss, fair allocation under Sybil, whole-binary egress, long-horizon intersection",
+    "threat model gained a measured entry rather than a note: the hop header's visibility (work flag, stream ID, batch coordinates) had been carried as a risk in claude-progress.md since the uplink profile was built, and is now measured (live/node/linkability_test.go), stated in THREAT_MODEL.md with what it does and does not break, and given a CLAIM_TEST_MATRIX row marked as a finding"
+   ],
+   "blockers": [
+    "review by a party that did not author the document, of the documents as they now stand. A second-party review exists and is recorded at production/reviews/2026-08-27-internal-security-review.md: another agent, on a separate branch, reviewed THREAT_MODEL.md against CLAIM_TEST_MATRIX.md and concluded PROD-02 PASS, correcting stale future-state wording in the process. It is not being treated as closing this criterion, for a reason that is concrete rather than a judgement about who counts as a second party: it reviewed the 2026-08-27 state, and both documents have changed substantially since, including the endpoint-fallback row, the publisher-side target and the work-required list. A review of an older version does not cover the current one. The author of these documents must also not be the one who decides that their reviewer was adequate, which is why this stays PARTIAL rather than being promoted here."
+   ]
+  },
+  {
+   "id": "PROD-03",
+   "status": "PARTIAL",
+   "evidence": [
+    "second implementation: nomad-testnet conformance/reference/nomadwire.py implements hop-cell-v1 in another language, with no shared build and no dependency past the Python standard library, written from docs/PROTOCOL.md rather than from the Go",
+    "bidirectional conformance run, four directions: the second implementation verifies the committed corpus and re-seals it to identical bytes; produces cells the first has never seen, which live/conformance/crossimpl_test.go verifies and whose stream ID it recomputes; refuses 16 mutations and cross-context replays, mirrored in Go with a positive control so a Verify that refused everything could not pass; and verifies cells the first implementation sealed at test time",
+    "mutation-verified across the boundary: MAC domain string, header field layout, stream-ID domain, stream-ID preimage, and sealing without zeroing the tag region are all caught. The header-layout mutation survived a first attempt and is why the fresh-seal direction exists -- a committed corpus is a snapshot, and the other directions exercised only the Go decoder",
+    "building it found three specification defects and one corpus defect, which is what this criterion is for: docs/PROTOCOL.md described the last 48 bytes of every cell as 'random representation padding, fresh filler, not application data' when they are the hop header, so nobody could have interoperated from the published specification at all; it did not say the tag region is zeroed before the tag is computed; it did not say the stream-ID hash covers the batch size; and the corpus published authenticated cells without the key or the context their tag binds, so no second implementation could check a tag",
+    "run in CI standalone as well as from the Go test, so the second implementation is exercised even where the Go side skips for want of a python3",
+    "coverage extended to the signed topology, which is the root of trust: conformance/reference/nomadtopology.py verifies both corpus topologies, reproduces their digests byte for byte, refuses five structural mutations (unknown members inside and outside the document, an unrecognised version, trailing data, a duplicate member) and requires four content changes to move the digest",
+    "mutation-verified where it counts: changing the Go digest domain is caught, and so is sorting the canonical members -- which is the shape a well-meaning 'canonicalise this properly' change would take and which would silently stop every existing verifier from agreeing",
+    "coverage now spans every message type the corpus publishes (nomad-testnet e78e13c): nomadwire.py the hop cell, nomadtopology.py the signed topology, nomadobject.py the 228-byte object manifest with both signing messages, nomaduplink.py the publisher uplink frame with its HKDF session-key and nonce derivations. A Go test requires every corpus message type to be named in the second implementation's driver, so adding a vector type without a consumer fails rather than widening the corpus without widening the evidence",
+    "writing the uplink half found a real inconsistency, which is what a second implementation is for: the session-key info string length-prefixes the network identifier with eight bytes where the hop tag uses two for the same field. Two widths for one field in one protocol is a trap for any third implementer; it is now stated rather than matched by accident",
+    "the uplink derivations are checked by reproduction rather than acceptance: the second implementation derives the session key and nonce from the corpus inputs and must produce the same bytes. Verified non-vacuous by mutating each of session_key, nonce, topology_digest and epoch in the corpus, each of which the second implementation catches",
+    "AES-GCM is deliberately not reimplemented and the file says why: the Python standard library has no AES, and an AEAD either matches or fails loudly, while a derivation assembled differently produces a well-formed cell the other side refuses with no clue why. The uncovered part is named rather than papered over",
+    "a demonstrated cross-implementation differential on the signed topology was closed: Go's base64 decoder ignores CR and LF and Strict() does not change that, so a topology carrying the JSON escape \\n inside its authority signature verified in Go and was refused by the Python reference, which decodes with validate=True. The signature could not catch it, since the signature field is excluded from what it signs. All eighteen decode sites now reject characters outside the alphabet. Vectors and the before/after table in runtime/evidence/base64-differential/, EVIDENCE_INDEX F-18. Both implementations now refuse the case on the same corpus vector, and the Go mirror was checked against the lenient decoder it exists for. The topology refusal lists are now mirrored on both sides, and the reference's reported refusal counts are floored so neither list can shrink unseen -- verified by removing one entry from the reference and watching the floor fail."
+   ],
+   "blockers": [
+    "both implementations were written by the same author. That tests whether the specification is sufficient to build from -- it demonstrably was not -- but not whether it reads the same way to someone who did not write it, which is most of what two implementations are for. This is why the criterion is not MET"
+   ]
+  },
+  {
+   "id": "PROD-04",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/nomad-anytrust-mix-sim/commit/35aa0f84769023b92d108e511bad7af47c34bbd1"
+   ],
+   "blockers": [
+    "independent cryptographic review"
+   ]
+  },
+  {
+   "id": "PROD-05",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/nomad-anytrust-mix-sim/commit/1f75bfb79182db0968db00e612852f0ee6d028e8",
+    "https://github.com/Jtensetti/nomad-testnet/commit/80b9f5c83e30114f6f749a39b89a6d77638abe4c",
+    "https://github.com/Jtensetti/nomad-testnet/actions/runs/32301972409",
+    "https://github.com/Jtensetti/nomad-testnet/releases/tag/nomad-live-testnet-80b9f5c83e30"
+   ],
+   "blockers": [
+    "at least five independently administered operators with witnessed key custody and erasure (EB-2). The governance transitions the goal names are implemented and now mapped to their mechanisms and tests in docs/GOVERNANCE_TRANSITIONS.md, which also records what none of it establishes: every transition is exercised on one machine, by one administrator, with identities this project generated",
+    "epoch rotation and compromise recovery are implemented and tested here and have never been run by anyone else. All eight properties the drand and Kyber differential review names are covered by tests in live/epoch: DKG completion before activation, membership transition requiring the previous committee, interrupted ceremonies via the journal and halt markers, compromise recovery via the recovery drill and peer-quorum revocation, stale shares via cross-epoch rejection, key erasure with forward secrecy, split-brain via equivocation halting and burned epoch numbers, and rollback via epoch-skip and previous-digest refusal. That review found one defect (F-39): the DKG transcript's session binding was not checked at the point a third party checks a stored transcript, making an interrupted ceremony and its retry interchangeable there. Fixed and mutation-verified. What is not established is anything about rotation or recovery performed by independently administered operators, which is EB-2 and is the substance of this criterion",
+    "independent cryptographic review"
+   ]
+  },
+  {
+   "id": "PROD-06",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/nomad-anytrust-mix-sim/commit/35aa0f84769023b92d108e511bad7af47c34bbd1",
+    "https://github.com/Jtensetti/nomad-testnet/commit/80b9f5c83e30114f6f749a39b89a6d77638abe4c",
+    "https://github.com/Jtensetti/nomad-testnet/actions/runs/32301972409",
+    "encrypting to a small-order or identity public key is refused at every entry point (nomad-anytrust-mix-sim 60ccdb4). rejectSmallOrder existed and validateThresholdCommittee used it, but Encrypt never did, so a caller holding a bare PublicKey that never passed committee validation -- uplink.Session -- could encrypt to the identity and put the plaintext on the wire as y = m + r*0. An evaluator recovered a full fragment with no key material; the check now lives in publicPoint",
+    "a third-party verification tool exists and is a tool rather than a library function (nomad-anytrust-mix-sim a397537, cmd/nomad-mix-verify): it takes a published transcript file and the committee's identity keys, holds no key, opens no socket and needs no membership. It is tested by building and running the binary, because the gap between 'the package works' and 'the command works' is where a flag name or an exit code goes wrong and is what an outsider hits first",
+    "the committee's keys are supplied separately rather than read from the transcript: a transcript that named its own signers would authenticate nothing, and the tests substitute a stranger's key into the list to show the distinction is enforced",
+    "the tool states the limit of its own verdict and a test requires it to: a pass means each round's output is a re-randomised permutation of its input, signed by the mixer named for that position. That is correctness, not unlinkability, which needs one honest mixer and which no transcript can show -- a committee that colluded end to end would publish one that verifies",
+    "the verifier fails closed on thirteen shapes of wrong transcript, including a flipped proof byte, a flipped receipt signature, a broken chain, reordered rounds, a dropped first or last round, another epoch, another committee and another encryption key, with a positive control so the refusals are not a verifier that refuses everything",
+    "two defects were found by writing it: the wire encoding pads with fresh randomness, so encoding one batch twice gave different bytes and the chain could not be read from a published file at all -- transcripts encode with zero padding, and nothing in one is secret for padding to hide; and truncation is detectable only against the committee the caller names, which the test originally defeated by trimming its own key list to fit"
+   ],
+   "blockers": [
+    "separately administered production shuffle committee",
+    "independent cryptographic review"
+   ]
+  },
+  {
+   "id": "PROD-07",
+   "status": "PARTIAL",
+   "evidence": [
+    "accountable evidence: mix.AttributeFault walks a signed shuffle chain and names the mixer that signed an unsound round; mix.VerifyFaultReport re-derives the fault from the transcript so a third party confirms it without trusting the reporter",
+    "blame soundness: an honest three-round chain produces no report, a fabricated report against it does not verify, and a genuine report re-pointed at an innocent neighbour is rejected",
+    "non-attribution where the protocol cannot attribute: a forged receipt marks the impersonated mixer as a victim rather than a culprit; broken linkage is charged to the chain assembler because either neighbour could cause it, and is checked before soundness so a mixer handed the wrong input is not accused of an unsound round; an empty transcript is a fault with no one to blame",
+    "malformed input: TestHostileDatagramsAreRejectedForTheRightReason; strictjson refuses ambiguous encodings before decoding; mutation and truncation sweeps over every published conformance vector",
+    "replay and duplication: chain replay across epoch and committee refused, hop replay window, decoder duplicate deduplication before any budget is charged",
+    "drop and delay without private-dependent recovery: the one-second burst ceiling is asserted on every captured world, and the WAN campaign's emission counts are exactly equal across worlds on every host",
+    "availability accountability implemented: mix.RoundSchedule fixes a round's deadline from the epoch timetable and the round's position, taking a slot index rather than a batch so a deadline cannot vary with batch contents; each observer signs its own non-receipt bound to committee, epoch, batch, round, deadline and accused; a report is a quorum of statements from distinct certified operators",
+    "availability blame cannot be a weapon: below quorum establishes nothing, one operator repeating its own statement does not reach quorum, an uncertified key does not count, an operator cannot report itself, and an accusation cannot be re-pointed at an innocent member. Four mutants were run against the suite and each is killed by a distinct test",
+    "refutation names its signers: the accused answers with its own sound round for that exact position, and because every statement is individually signed the refutation names the observers the transcript contradicts. Answering with a round from another position, another mixer's round, or an unsound round all fail",
+    "availability observation holds the privacy boundary at the testnet: live/availability judges every certified operator at every deadline rather than only the failures, so report volume cannot track operator load; the deadline comes from the schedule rather than a clock; two observations of one position are byte-identical; and CI holds the package's transitive graph to mix and topology so it cannot reach a query, a basin or a reconstruction",
+    "an operator disappearing changes nothing the surviving peer sees: with a two-peer rotation and one operator's socket absent, the survivor receives exactly its half rather than the vanished peer's share, the sender counts every scheduled emission as sent, and the outage world is identical whether the node is idle or busy. The no-reroute claim is the one that matters: rerouting would announce the disappearance to whoever is still up, by giving them more traffic",
+    "selective failure is now measured rather than untested, and the result is a limit rather than a defence: an operator starving a quorum of peers is reported exactly as a total failure is, but one starving fewer is invisible, and rotating which minority it starves never accumulates because each report is scoped to one position",
+    "fault attribution is exercised against a live chain, not a corrupted transcript: nomad-anytrust-mix-sim mix/livefault_test.go runs a real committee through ShuffleAndSign every round, has one mixer cheat at its own turn -- substituting a cell, or dropping one -- and lets the honest mixers downstream shuffle the poisoned batch normally. The adversary model is the real one: a dishonest operator controls its own process, so it runs the production shuffle and then signs whatever it likes over the result",
+    "the property a constructed transcript cannot test: in a chain a fault at round k poisons every round after it, so attribution must name the mixer who cheated rather than the last one. Mutation-verified -- making AttributeFault blame the final round instead is caught with 'blamed round 3, and round 1 is the one that cheated'",
+    "three further mutations caught: reporting a fault without attributing it, dropping the check on who a report accuses (blame becomes re-pointable at any of the honest mixers), and letting a report verify against a sound chain (an invented report against every honest mixer verifies). The honest live chain is the control, without which each of these would pass against an AttributeFault that blamed somebody unconditionally"
+   ],
+   "blockers": [
+    "availability reports establish that work did not arrive at the observers, never that it was withheld: asynchrony makes those indistinguishable and the implementation says so rather than claiming otherwise. Deciding what a deployment does with a report is governance work that is not built",
+    "the observer is unit-tested against a delivery source, not run against a live committee where an operator actually stops: that needs the same live boundary PROD-17 does",
+    "selective failure below the observer quorum is undetectable by this mechanism and cannot be fixed by lowering the quorum: the same threshold is what stops a coalition evicting an honest operator, so one accuser must never be enough. An operator willing to starve a minority every round, rotating which minority, is invisible to availability reporting indefinitely. Detecting it needs something this design does not have -- cross-round accumulation, which would itself need a rule for whose accusations count over time",
+    "the shuffle chain still runs in one process. The entry operator is now a separate service (cmd/nomad-entry) and seals batches to a directory a chain would collect, so the mailbox boundary is real; the mixers themselves are not yet separate processes, and separate hosts needs EB-3"
+   ]
+  },
+  {
+   "id": "PROD-08",
+   "status": "MET",
+   "evidence": [
+    "docs/EPOCH_LIFECYCLE.md (normative v1)",
+    "Jtensetti/nomad-testnet@d9fa296 live/epoch (production path: cmd/nomad-operator, live/share/service.go)",
+    "live/epoch/testdata/epoch-descriptor-vectors.json sha256:4591483a82b95e2d...",
+    "membership: TestApprovalQuorumCannotBeForgedByOneOperator, TestMembershipTransitionRequiresPreviousCommittee, TestVerifyRejectsInsufficientApprovals, TestVerifyRejectsDuplicateApprovals",
+    "rotation: TestPlanIsDeterministicAndPublicOnly, TestPlanFollowsThePublicSchedule, TestNextDeadlineAdvancesMonotonically, TestHaltedChainPlansNothing",
+    "forward secrecy: TestForwardSecrecyAfterErasure",
+    "key erasure: TestErasureDestroysMaterialAndProducesVerifiableStatement, TestErasureStatementRejectsMissingLimitations",
+    "compromise recovery drill: TestRecoveryDrill (5 operators, 3-of-5), TestCompromiseRevocationNeedsPeerQuorum, TestSelfRevocationRequiresTheRevokedOperator",
+    "external test report production/reports/2026-08-21-full-suite/ (nomad-testnet 19b1d6c: live/epoch 53/53 race-clean incl. all 13 named boundary tests; logs digested in SHA256SUMS) satisfying evidence rule item 4",
+    "external test report production/reports/2026-08-24-gate-integrity/ (55 checks, every one exit=0, logs digested in SHA256SUMS): the first run in which nomad-testnet's `go test -race ./...` completes rather than timing out, and in which govulncheck passes in all nine repositories rather than running in one and failing there"
+   ],
+   "blockers": []
+  },
+  {
+   "id": "PROD-09",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/nomad-testnet/commit/80b9f5c83e30114f6f749a39b89a6d77638abe4c",
+    "https://github.com/Jtensetti/nomad-testnet/actions/runs/32301972409",
+    "https://github.com/Jtensetti/Nomad-browser/commit/f5d1d6aaca487d84c005a60b6518e1133c72c997",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32287433817",
+    "https://github.com/Jtensetti/Nomad-browser/commit/b19710be10b896e47e97885d5f7391c0c9213455",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32303046813",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32303046809",
+    "runtime evidence for a shipped binary now exists alongside the dependency-graph gate (Nomad-browser 1168851, runtime_boundary_test.go): the release verifier is built and run under a system-call trace, doing real work against a real signed manifest and artifact, and makes zero calls to socket, connect, sendto, sendmsg, sendmmsg, recvfrom, recvmsg, bind, listen, accept or accept4",
+    "a trace rather than a packet capture, deliberately: a capture sees what left, a trace sees what was attempted -- a connect that failed because nothing was listening, a resolver that gave up, a socket opened and never used. For a cannot-egress claim the attempt is the interesting event, and DNS is covered by construction because a resolver opens a socket like anything else",
+    "the refusal path is traced too: a verifier that opened a socket when a signature failed, to report or to check a revocation list, would be egress on exactly the input an attacker controls",
+    "the positive control caught a vacuous measurement before it became evidence: strace writes '<pid>  syscall(...)' when -f and -o are combined rather than '[pid N] syscall(...)', the parser matched only the second form, and both binaries therefore reported zero network syscalls -- including the control that opens one",
+    "scope is stated in the file rather than left to be inferred: QUIC, WebSockets, WebRTC, service workers, extensions and speculative fetch live in an engine, and per DEC-013 the engine forks are parked, so this is evidence about the Go binaries this repository ships and nothing else"
+   ],
+   "blockers": [
+    "runtime evidence now exists for the Go release binary on Linux, by system-call trace with a positive control. What the criterion asks for beyond that is an *independent* assessment and every supported platform: macOS in particular has no runner here, and an assessment this project performs on itself is QA rather than independence (EB-4)"
+   ]
+  },
+  {
+   "id": "PROD-10",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/nomad-testnet/commit/80b9f5c83e30114f6f749a39b89a6d77638abe4c",
+    "https://github.com/Jtensetti/nomad-testnet/actions/runs/32301972409",
+    "the timing campaign's standing finding is closed (nomad-constant-rate-fabric be54654, nomad-testnet ab5bddc, F-43): emission was sent immediately after a sleeping timer woke, and a timer's wake instant is a function of what else the process is doing -- measured in isolation, 585us late on a quiet process against 446us with one unrelated 2ms sleeper, every percentile shifted and reverting when it stopped. The mean inter-arrival was exactly the configured interval in every world, so the cadence looked correct; the distribution shape carried the difference, idle bimodal with a hole between 19.98 and 20.57 and active smooth across the same range. The scheduler now sleeps to just short of each deadline and spins the remainder, so the send instant is the deadline's rather than the timer's. Idle-to-active median gap 348us before, 4us after; standard deviation 0.74/0.42 before, 0.10/0.045 after; the preregistered rule goes from 10 rejected comparisons to 0 over the same 24 pairs",
+    "what remains red in that campaign is not private-dependent: 7 of 24 comparisons are inconclusive because the cpu-starvation stressor stops the node and leaves too few cells to compare. The gate fails on them deliberately, since an unmeasurable arm is not a pass, and nothing about that is softened",
+    "the timing campaign is green for the first time (nomad-testnet 367d781, F-44): 24 pairs compared, 0 inconclusive, 0 findings. The seven arms that had been inconclusive on every run were an experiment run at a 20ms cadence the system does not ship -- too little slack per tick for the node to survive its own cpu-starvation stressor, so it fail-closed after 2 to 50 cells and the rule's 20-cell minimum was never met. At the deployed 50ms cadence the node survives the identical stressor (39/39/40/39 cells) with no tolerance moved and no stressor weakened; two calibrations were tried and rejected on measurement first, reserving a core being vacuous (sd 0.1452 against a 0.1552 baseline) and duty-cycling being non-monotonic on a host whose baseline sd moved 0.155 to 0.423 between runs",
+    "the emitted-cell-count statistic is now judged rather than printed: worldGap computed it on every run and only two of three statistics reached decide(), so a world emitting materially fewer cells than another would have been logged and passed. It is the statistic that survives when a stressor leaves no cadence to compare. Verified to reject, not assumed: forcing the signal to 0.5 fails the arm naming the tolerance and the control spread it beat",
+    "what the green gate does not establish: that the rule could not separate the worlds at this sample size on this host is not indistinguishability. Under cpu-starvation the cadence statistic is still reported UNDECIDABLE because the control spread of 0.199 exceeds the 0.02 tolerance, and early termination remains reported rather than gated -- campaignRounds rounds give too few Bernoulli samples to decide whether a stop is private-dependent. Both need the sustained campaign of E-03 and E-09"
+   ],
+   "blockers": [
+    "blind two-world WAN captures under failure and congestion",
+    "supported-platform capture matrix"
+   ]
+  },
+  {
+   "id": "PROD-11",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/nomad-constant-rate-fabric/commit/872686c3626fda1381b9058887e90e9a343cd367",
+    "https://github.com/Jtensetti/nomad-testnet/actions/runs/32288962907",
+    "the timing campaign's standing finding is closed (nomad-constant-rate-fabric be54654, nomad-testnet ab5bddc, F-43): emission was sent immediately after a sleeping timer woke, and a timer's wake instant is a function of what else the process is doing -- measured in isolation, 585us late on a quiet process against 446us with one unrelated 2ms sleeper, every percentile shifted and reverting when it stopped. The mean inter-arrival was exactly the configured interval in every world, so the cadence looked correct; the distribution shape carried the difference, idle bimodal with a hole between 19.98 and 20.57 and active smooth across the same range. The scheduler now sleeps to just short of each deadline and spins the remainder, so the send instant is the deadline's rather than the timer's. Idle-to-active median gap 348us before, 4us after; standard deviation 0.74/0.42 before, 0.10/0.045 after; the preregistered rule goes from 10 rejected comparisons to 0 over the same 24 pairs",
+    "what remains red in that campaign is not private-dependent: 7 of 24 comparisons are inconclusive because the cpu-starvation stressor stops the node and leaves too few cells to compare. The gate fails on them deliberately, since an unmeasurable arm is not a pass, and nothing about that is softened",
+    "the timing campaign is green for the first time (nomad-testnet 367d781, F-44): 24 pairs compared, 0 inconclusive, 0 findings. The seven arms that had been inconclusive on every run were an experiment run at a 20ms cadence the system does not ship -- too little slack per tick for the node to survive its own cpu-starvation stressor, so it fail-closed after 2 to 50 cells and the rule's 20-cell minimum was never met. At the deployed 50ms cadence the node survives the identical stressor (39/39/40/39 cells) with no tolerance moved and no stressor weakened; two calibrations were tried and rejected on measurement first, reserving a core being vacuous (sd 0.1452 against a 0.1552 baseline) and duty-cycling being non-monotonic on a host whose baseline sd moved 0.155 to 0.423 between runs",
+    "the emitted-cell-count statistic is now judged rather than printed: worldGap computed it on every run and only two of three statistics reached decide(), so a world emitting materially fewer cells than another would have been logged and passed. It is the statistic that survives when a stressor leaves no cadence to compare. Verified to reject, not assumed: forcing the signal to 0.5 fails the arm naming the tolerance and the control spread it beat",
+    "what the green gate does not establish: that the rule could not separate the worlds at this sample size on this host is not indistinguishability. Under cpu-starvation the cadence statistic is still reported UNDECIDABLE because the control spread of 0.199 exceeds the 0.02 tolerance, and early termination remains reported rather than gated -- campaignRounds rounds give too few Bernoulli samples to decide whether a stop is private-dependent. Both need the sustained campaign of E-03 and E-09"
+   ],
+   "blockers": [
+    "72-hour supported-platform WAN captures",
+    "suspend/resume is now covered and clock drift, congestion and process-stall are not. The publication campaign builds a suspend pair on the same reasoning as its restart pair -- the interruption is externally observable by construction, so the private variable has to be the only difference between the two worlds -- and judges suspend-idle against suspend under the preregistered rule in CI. Measured: 100 cells each, one destination, one size, an identical maximum burst of 8 on resume, KS p = 0.96, mean drift 4.8e-05. Mutation-verified: a publisher that pauses differently on resume when its queue is non-empty is reported as a finding. What remains is real: clock drift and process stall are unexercised, and congestion does not belong in this harness at all, where emission is handed back to the caller and there is no socket to congest -- it needs the WAN campaign and EB-3"
+   ]
+  },
+  {
+   "id": "PROD-12",
+   "status": "MET",
+   "evidence": [
+    "https://github.com/Jtensetti/nomad-rlnc/commit/b395aa0b0dbd129a2820dbe02ee96d2a87f87273",
+    "authenticated coding: per-source-symbol SHA-256 commitments carried under the authority signature in batch descriptor v3 (nomad-testnet 99a80c1 live/batch/descriptor.go); VerifyDescriptor requires exactly K and rejects missing, short, non-hex or tampered sets",
+    "production path: live/materialize/materializer.go constructs rlnc.BoundedDecoder with DefaultLimits and the descriptor's commitments (not nil)",
+    "generation binding: TestDecoderRefusesForeignGenerationSymbols; cache-side stream commitment TestLoadRejectsCacheContentThatIsNotTheCommittedStream (both non-vacuous: disabling the checked code makes them fail)",
+    "Byzantine campaign at the materializer boundary: TestByzantinePollutionNeverYieldsAcceptedCorruption, 72 trials over 0-100% pollution, 39 exact reconstructions, 33 denials, 0 accepted corruptions; fails if no trial succeeds or none is denied",
+    "library campaign: TestByzantineCampaignStaysBounded (100k attempts at 50/90/100% malicious, every budget respected)",
+    "fuzz/property: FuzzBoundedDecoderStaysWithinBudget (134,125 execs) and FuzzHonestGenerationDecodesExactly; the latter fails within 0.5s against the pre-fix decoder, so it detects the wrong-decode defect rather than passing beside it",
+    "wrong-decode defect found and fixed this cycle (nomad-rlnc 70fc47c rlnc/decoder.go + pivot_order_test.go); no open Sev1/Sev2 contradicts this criterion",
+    "external test report production/reports/2026-08-21-pollution-resistance/ (logs digested in SHA256SUMS) satisfying evidence rule item 4",
+    "external test report production/reports/2026-08-24-gate-integrity/ (55 checks, every one exit=0, logs digested in SHA256SUMS): the first run in which nomad-testnet's `go test -race ./...` completes rather than timing out, and in which govulncheck passes in all nine repositories rather than running in one and failing there"
+   ],
+   "blockers": []
+  },
+  {
+   "id": "PROD-13",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/nomad-testnet/commit/80b9f5c83e30114f6f749a39b89a6d77638abe4c",
+    "https://github.com/Jtensetti/nomad-testnet/actions/runs/32301972409",
+    "private-state non-interference for storage is measured (nomad-testnet 2711803, live/rawcache/noninterference_test.go): two worlds take byte-identical public input and differ only in whether anything reads the cache, and the resulting store must be identical file for file and digest for digest, including a world that reads one stream eight times per step and probes for streams it never received",
+    "three of the four things this criterion names are architectural rather than measured, and the test says which: there is no eviction (a full cache refuses a new stream rather than choosing a victim), replication is driven by what signed peers send, and warming comes from a public seed bundle. The comparison covers the fourth, which is where an LRU touch or an access counter would be added by a future change",
+    "the comparison has a positive control: a world that writes one extra byte of read-derived state into a stream directory must produce a different transcript, so a comparison that noticed nothing could not pass for one that had nothing to notice"
+   ],
+   "blockers": [
+    "multi-region churn and partition testing",
+    "measured durability and repair targets"
+   ]
+  },
+  {
+   "id": "PROD-14",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/nomad-semantic-basins/commit/644bff28a2075b66426f1cf4b5960ae18363ac60",
+    "https://github.com/Jtensetti/nomad-testnet/commit/80b9f5c83e30114f6f749a39b89a6d77638abe4c",
+    "https://github.com/Jtensetti/nomad-testnet/actions/runs/32301972409",
+    "local emission failures no longer stop a node: Jtensetti/nomad-constant-rate-fabric ErrCellDropped -- any Source/Sink error previously returned from Scheduler.run, and in the live node that closed the socket, so a full disk or an exhausted socket buffer ended emission permanently",
+    "disk-full at the emission path: TestAFullDiskUnderTheSequenceReservationCostsCellsNotTheNode removes the directory under the hop sequence file and forces a reservation; 30 emissions dropped over 30 ticks with cadence held, where the node previously stopped at the first",
+    "mutation-verified on both sides: fabric M1-M4 (restore the old return, swallow every error, retry the dropped cell, stop counting) and node N1-N7 (including two that survived a first attempt and drove the restructuring)",
+    "the alarm that stopping used to provide is replaced rather than lost: send_dropped and last_sent_at are published, nomad-node --check-health fails a node that is up but emitting nothing, the Compose healthcheck uses it instead of `test -s`, and compose-e2e.sh asserts the counters are zero and an emission was recorded on a live run",
+    "memory bound under sustained flood: TestASustainedFloodCannotGrowTheHeapWithoutBound measures the live heap at two marks under continuous authentic work from an accepted peer. 234,978 datagrams delivered between the marks moved the heap 347 KiB to 747 KiB -- roughly 1.7 bytes per datagram, which is nothing retained. The structural bounds are asserted separately and exactly (cache streams, relay queue depth, peer and replay tables), so a quiet heap cannot hide a bound that was removed. Mutation-verified: retaining each received datagram grows the heap by 107 MB against the 8 MB ceiling, and removing the cache stream limit fails the companion bounds test",
+    "which failures cost a cell is an allowlist, not a denylist: TestOnlyKnownTransientConditionsCostACell tables seven transient errnos against EPERM, EINVAL, a closed socket, an exhausted or unreadable hop sequence and an unrecognised error. The first version asked the opposite question and answered it with a denylist of one, so hop sequence exhaustion -- whose own message says to rotate the topology epoch -- became a counter",
+    "permanent conditions stop the node: TestAPermanentlyRefusedDestinationStopsTheNode (real EINVAL from a port-0 destination) and TestAnUnusableHopSequenceStopsTheNode both require a stop with zero cells counted as dropped; TestATransientConditionThatNeverClearsEventuallyStopsTheNode bounds a transient condition that does not clear",
+    "a locally dropped cell is not readable on the wire: the hop sequence is cleartext in every header, so a number issued to a cell that then failed at the socket left a gap that counted local failures exactly. Sequence numbers are returned when a cell does not reach the socket, and TestADroppedCellDoesNotBurnASequenceNumberOnTheWire reads them off the emitted cells -- 27 cells carrying 1..27 across a run with 18 drops",
+    "structural two-world comparison at the receive-side cache limit: TestAReceiveSideLimitChangesNothingStructuralAboutWhatIsEmitted, deterministic, 15/15 under -race. The rate comparison is campaign-gated (TestAResourceLimitDoesNotChangeTheEmissionRate) against a floor measured from three worlds that differ by nothing; run per-push it failed CI about one in ten, in both directions",
+    "the replacement alarm is tested on the production path: TestTheLivenessTimestampFollowsWhatActuallyWentOut runs a healthy node, a totally failing one and one that breaks part-way, requiring last_sent_at to advance, stay zero and freeze. It exists because two mutations survived a first attempt -- never storing the timestamp, and storing it before the write, which makes a node dropping every cell report itself healthy forever",
+    "supervision reaches the deployment surfaces, not only Compose: MULTI_OPERATOR.md and OPERATOR_ONBOARDING.md carry the --check-health watchdog and the send_dropped alarm, the WAN campaign preflight and per-world check use it, and compose-e2e.sh asserts every operator container reports healthy rather than only recording the verdict",
+    "reviewed by an evaluator against CLAUDE.md before being recorded: two Sev1 defects (denylist polarity, the burnt sequence number as a wire channel) and three Sev2 (untested alarm, unupdated deployment surfaces, an exported test hook in production code) were found and fixed. QA by a subagent, not an independent external audit; see EVIDENCE_INDEX",
+    "encrypting the header alone would not have sufficed and the code says why: a work cell carries mix ciphertext, which parses as compressed group elements, while a cover cell is uniform random, so a second classifier separated the two perfectly without reading a header byte. Both distinguishers are now measured at chance on sealed cells (live/uplink/distinguisher_test.go), with the pre-v2 perfect separation kept as the before"
+   ],
+   "blockers": [
+    "a resource limit does change the work/cover mix, and that mix is no longer readable on the wire: hop cell v2 encrypts the whole cell per link (DEC-016) and both classifiers that separated work from cover are now at chance on sealed cells. Public replication policy still drives the mix, so this was never a reader-privacy claim; what changed is that it is not observable to a link observer either",
+    "the composed stack now has load evidence but not saturation evidence. The Compose gate runs the multi-process stack under a sustained flood and measures what it emits (see the third blocker), which the criterion had no measurement for at all. It does not run the stack to the point of failure, so where its limits actually are is still unmeasured: 3000 datagrams a second is load, not saturation",
+    "a real-interface wire trace under load now exists (CI run 33374193549, live-compose): two capture windows on the fabric bridge differing only by a 3000/s flood from an unrecognised sender at 150x the operator emission rate, with all three operators moving 0.01% against a 50 ms cadence, peer plans unchanged and send_dropped zero. The flood is required to be visible on the wire (17,961 datagrams in the loaded capture) and inside the process (24,960 peer-lookup refusals), because a flood that never arrived would produce a second quiet window and read as a pass. What remains is EB-3: three operators on one bridge is real process and interface isolation and is not a network"
+   ]
+  },
+  {
+   "id": "PROD-15",
+   "status": "PARTIAL",
+   "evidence": [
+    "docs/SITE_IDENTITY.md is normative v1 as of 2026-08-21; the draft header's own condition (implementation, vectors and tests) is met",
+    "implementation: Jtensetti/nomad-local-reconstruction package site -- self-certifying SiteIDs derived from genesis, descriptor chain, rotation, recovery, revocation, equivocation proofs, four client identity states",
+    "30 tests including adversarial: foreign-genesis bricking, forged and genuine equivocation proofs, a stolen signing majority failing to seize recovery, base64 non-malleability, revocation budget exhaustion, absorbing revocation, unbounded authorizations, possession proofs for new keys, failed claims reported invalid rather than unknown, race freedom",
+    "recovery drill: TestSiteKeyCompromiseRecoveryDrill rehearses the full sequence end to end -- publish, total signing-key theft, the attacker publishing indistinguishably, offline recovery through the recovery quorum, the attacker's later publications refused, the operator resuming under a rescued key, the compromised back catalogue correctly invalidated, and re-publication under the new key",
+    "the drill records the propagation window explicitly: a reader who has not yet seen the recovery still accepts the attacker, bounded by descriptor distribution rather than by the protocol",
+    "descriptor distribution implemented and specified: docs/SITE_IDENTITY.md section 'Descriptor distribution' (rules 5-8, normative) + Jtensetti/nomad-local-reconstruction site/transparency (RFC 6962 append-only log, signed checkpoints bound to a caller-supplied origin, inclusion and consistency proofs, freshness window, absorbing split-view state) and site/distribution.go",
+    "the gate is structural, not advisory: a chain built without a log view can never return PUBLISHER_VERIFIED, and the witnessed and unwitnessed append paths refuse to do each other's job (TestAnUnwitnessedChainCannotReachAPublisherVerdict, TestTheWitnessedAndUnwitnessedPathsDoNotSubstituteForEachOther)",
+    "the recovery drill's step 6 now measures the bound instead of recording its absence, in both following profiles: a reader mirroring the log's entries rejects the attacker as soon as it syncs (6a); a reader following only checkpoints loses to the attacker inside its window and stops issuing a verdict past it (6b), and an attacker who answers with a forged log produces a transferable split-view proof",
+    "distribution adds no read-dependent network behavior by construction: the inclusion proof travels with the publication and checkpoint refresh takes no read-derived argument; a failed refresh is never retried harder because a reader is waiting. Structural, with no wire capture",
+    "adversarial: RFC 6962 known-answer roots for sizes 0..8, exhaustive inclusion and consistency proofs at every size, a forked log refused by both verification routes, leaf/interior-node domain separation with a positive control, hostile-size termination under a deadline, tagged-reason refusal tables, bounded split-view memory that retains the held head, and the deployment's own concurrency shape under -race",
+    "mutation campaign over site/transparency: survivors 21/131 -> 3/131, the three remaining provably equivalent (an unreachable defensive branch, a same-result boundary rewrite, and an error path always caught downstream). 18 kills were refusals that had been passing only because a later check also failed",
+    "second implementation sharing no Go code: conformance/reference/nomadsitelog.py written from the specification and RFC 6962, with a published corpus (site/testdata/site-log-corpus.json) carrying preimages, 36 proofs and 14 must-refuse documents; crosscheck runs both directions plus 11 negative controls, and Go verifies proofs the second implementation built over a tree Go never saw"
+   ],
+   "blockers": [
+    "no independent review of the identity design; the specification, implementation and drill are all authored here"
+   ]
+  },
+  {
+   "id": "PROD-16",
+   "status": "PARTIAL",
+   "evidence": [
+    "canonical encodings: signed documents are verified by re-serialising what was parsed, so identity is the canonical form rather than the received bytes; TestAmbiguousJSONRepresentationsAreRefusedOrCanonical asserts that reordering, re-indentation and trailing whitespace either fail or map to the identical digest",
+    "ambiguity fails closed: live/strictjson refuses a duplicate JSON key at any depth, plus malformed input and a second document after the first, and runs before decoding in both topology.Verify and batch.VerifyDescriptor. Found by a parser-differential pass: a signed topology carrying one key twice was accepted, and Go's last-wins differs from parsers that keep the first",
+    "mutation and truncation: every sampled prefix and every sampled single-bit flip of every published vector must be refused (live/conformance/differential_test.go)",
+    "rollback/stale: live/topology/watermark.go refuses a topology older than one already accepted and fails closed on equivocation; verified at the binary boundary",
+    "cross-platform vectors: the 7-vector corpus produces the identical digest 44f69ea7544f156feb773f9da9041de6c4c2b049292de9e371151cc09a1f0c45 on linux/amd64 and linux/386 (64-bit and 32-bit int), with the full 18-package suite green on both; CI now gates on the 386 run and on six supported build targets",
+    "external test report production/reports/2026-08-21-pollution-resistance/ plus the cross-architecture run recorded above",
+    "external test report production/reports/2026-08-21-protocol-freeze/ (all suites green on two architectures; logs digested in SHA256SUMS)",
+    "external test report production/reports/2026-08-24-gate-integrity/ (55 checks, every one exit=0, logs digested in SHA256SUMS): the first run in which nomad-testnet's `go test -race ./...` completes rather than timing out, and in which govulncheck passes in all nine repositories rather than running in one and failing there",
+    "the recorded windows/amd64 build gap is closed (nomad-testnet b26c435): live/epoch's cross-process chain lock called unix.Flock unconditionally and is now split by build tag, with a LockFileEx implementation that blocks until the lock is available -- mandatory rather than advisory there, so stricter than flock and not weaker. All eight targets build, and windows/amd64 and windows/arm64 are in the CI matrix so it cannot regress quietly",
+    "the executable-content decisions are frozen as data: Nomad-browser egress/testdata/url-decisions.json carries 59 decisions (22 allowed, 37 refused) across the nomad, about, data and network schemes, each with the reason it matters. Four tests hold the code to it -- the gate must match every decision and refuse with ErrDenied; every media type the code allows must have a case, so one cannot be added without someone deciding it is non-scriptable; the corpus must name no type the code dropped; and every case must carry a reason and appear once",
+    "mutation-verified: allowing text/html in a data URL, dropping the query and fragment check on a nomad URL, accepting any about: page, and reading the data media type as the first token before a semicolon are all caught. The last is why the corpus carries data:text/plain;base64;charset=x,y -- a prefix match on a malformed header is how a scriptable type gets past",
+    "writing the corpus corrected the corpus rather than the code twice, and both now carry the reasoning: data:,x is allowed because RFC 2397 defaults an omitted media type to text/plain, and nomad:/ is allowed because whether a resource exists at the bundle root is the adapter's lookup to answer, not the URL gate's",
+    "the renderer decision corpus now has a consumer that is not its encoder (Nomad-browser 23c9117, conformance/reference/nomadegress.py): 59 frozen URL decisions read by an implementation in another language, using Python's own URL parser and path handling, sharing no code with the Go and depending on nothing outside the standard library. It runs from the Go test and again standalone in CI",
+    "it disagreed twice on its first run and both were bugs in the second implementation, which is what makes them worth keeping -- they are the mistakes a third implementer makes. It denied the bundle root nomad:/ for having an empty segment, and it *allowed* data:text/plain;base64;charset=x,y by taking the text before the first semicolon as the media type, which is a prefix match and is how a scriptable type gets past an allowlist",
+    "the corpus carries a stated reason per case, and that is what made the second disagreement legible rather than puzzling: a corpus of bare verdicts would have left a third implementer guessing which of the two was right",
+    "a control gives the cross-check a corpus with one decision inverted and requires it to fail naming the URL, so it cannot pass on a corpus it never read; and the check refuses a one-sided corpus, since one that only denied things is satisfied by an implementation that denies everything"
+   ],
+   "blockers": [
+    "Windows is now partly tested: a windows-latest job runs live/epoch on every push and gates the release. 58 tests pass there, none fail and none skip (run 33665504511), including the twenty-two store tests that failed the first time the job ran. Its first run found that the epoch store had never worked on Windows at all -- directory fsync is ERROR_ACCESS_DENIED there (F-26) -- and that a Windows checkout was not the commit (F-27). The job is scoped to that one package: the rest of the suite assumes a POSIX host in places, and a job that ran everything and was allowed to fail would be worse than no job. Windows remains unsupported for operators (DEC-026), and cross-platform still means eight build targets, two tested architectures, and one tested package on a third platform"
+   ]
+  },
+  {
+   "id": "PROD-17",
+   "status": "PARTIAL",
+   "evidence": [
+    "end-to-end deposit path implemented: live/deposit joins the publication queue to the airlock across the uplink. Nothing previously called Queue.Next or Airlock.Deposit, so publication had no distributed form; the sizes had been designed to fit (fragment 504 = uplink payload = mix plaintext; uplink inner 1152 = airlock deposit) and had never met",
+    "the entry operator cannot separate work from cover: the inner layer is a committee encryption either way, only threshold decryption reveals the reserved empty fragment, and by then the shuffle chain has destroyed the link to the depositor. TestEntryOperatorCannotTellWorkFromCover",
+    "deposits the airlock silently drops return success, so occupancy is not probeable through the ingress",
+    "controlled correlation experiment with a positive control: a no-defence batch is recovered at 1.00 by the same matcher that scores 0.231 against seal-only and 0.250 against the full path, chance 0.250, over 40 trials of 4 publishers. Recalibrated 2026-08-28 (nomad-testnet 71cbea5) after it failed by chance: it ran 12 trials and failed above twice chance, which fired spuriously about once in 1500 runs and had only ~50% power against a doubled recovery rate. It now fails at a cutoff computed from the exact null -- the fixed-point distribution of a uniform permutation, convolved over the trials -- at a stated false-failure budget of 1e-6: 74 of 160 hits, with ~85% power against a doubled rate. Verified still to have teeth: pointing the treatment at the undefended batch fails at 160 of 160",
+    "architecture: the deposit package may not import net directly and may not reach peer selection, the node scheduler, hop routing or basin classification; both guards verified to fail when deliberately violated",
+    "the publication uplink is on a production path: nomad-testnet cmd/nomad-publish opens the local queue, derives the uplink session, drains it through deposit.Drain and emits at the cadence the signed topology sets, over a real UDP socket. Verified end to end against an entry operator socket -- twelve cells opened under the entry operator's session key, sequences 1..12, none repeated",
+    "building it found a defect that only the production path exposes: the uplink sequence is the AEAD nonce, nothing persisted it, and every caller until now was an in-process test that counted from one and never restarted. A publisher built without noticing would have re-sealed fragments under nonces it had already used on every restart. live/uplink/sequence.go is a durable reserve-ahead sequence, and TestARestartedPublisherDoesNotReuseANonce runs the shipped binary twice against one socket and requires no sequence to repeat",
+    "the nonce space fails closed: an exhausted or unreadable reservation stops the publisher, and only a reservation write that failed is treated as a lost cell -- the same allowlist polarity as the operator's send path, for the same reason",
+    "the Selection Firewall direction is gated for the one process that holds both halves: cmd/nomad-publish must not reach semantic basins, reconstruction, peer selection, fetch planning or the node, checked in CI and in the command's own architecture test, alongside the existing check that live/publish still has no network capability",
+    "the batch is no longer followable across a hop by reading it: hop cell v2 encrypts payload and routing metadata under each link's own key, so the stream ID that used to appear unchanged at every hop now shares no bytes between two hops of the same batch (DEC-016, live/hop/confidentiality_test.go, live/node/linkability_test.go)",
+    "the uplink session is established in band (nomad-testnet live/uplink/handshake.go, DEC-018): the publisher agrees with the entry operator's static X25519 key from the signed topology -- the same kex_key the pairwise hop keys use -- and carries its own ephemeral key in the first cell of the session. No per-publisher secret is distributed to a named operator beforehand, which removes a channel that would have known who publishes what",
+    "the handshake is one-sided by design and the code says why: the publisher authenticates the operator and proves nothing about itself, because an entry operator that could authenticate publishers would hold exactly the identity the airlock exists to keep from existing. Everything bounding abuse afterwards is per session",
+    "the sealed region of a handshake must be all zero and is checked against a party that can produce a valid tag: a publisher holding a real ephemeral key can seal whatever it likes correctly, and only that check stops 1144 bytes reaching the entry operator from a party it cannot identify",
+    "a replayed ephemeral key is refused, because a handshake is a cell like any other and a second session on the same key means the same AEAD nonces under the same key on a construction whose nonces come from a sequence; the responder also bounds how many sessions it holds, since accepting handshakes without a limit turns a cheap cell into unbounded state",
+    "the session secret goes through the unchanged nomad-uplink-session-v1 derivation, so the data path, its published vectors and its second implementation do not move because the way the secret is obtained changed",
+    "8 mutations killed, including a derivation that ignores the ephemeral key, one that ignores the epoch, an unchecked sealed region, a forgotten replay set, a missing session limit, a reused ephemeral, additional data that omits the ephemeral key, and a session-identifier domain colliding with the session-secret domain -- that last one makes the public deposit identifier be the session secret, and no round-trip test notices it",
+    "exercised end to end across a real process boundary: cmd/nomad-publish runs as a compiled binary and the entry operator in the test holds only its own static key and the public context, with no secret file to read, and opens the session from the handshake the publisher sends as its first cell",
+    "the entry operator now has a process: cmd/nomad-entry terminates publisher uplinks, deposits into the airlock, seals on the public schedule and writes batches for the shuffle chain. TestThePublicationPathAcrossRealProcesses runs two shipped binaries against a real socket with a tcpdump capture on loopback, judged by the same fail-closed cadence rule the relay fabric's capture is judged by"
+   ],
+   "blockers": [
+    "the chain's own contribution IS now measured (nomad-testnet 886cef3): an adversary inside the committee, handed every corrupt mixer's permutation, recovers the sealed-to-released mapping at 1.000 with every mixer corrupt and 0.131 with one honest mixer against a chance rate of 0.125, over 20 trials of 8 publishers and 5 mixers, the honest position drawn per trial. That subsumes an adversary merely observing between hops, which holds strictly less. STILL NOT MEASURED: an adversary correlating across epochs, one with side information about who submits when, and one attacking the shuffle proofs rather than the permutation. The correlation experiment alongside it still models only an entry operator matching arrival order to release position, which the seal defeats on its own",
+    "no independent review of the deposit design",
+    "single host, not single process: publishers and the entry operator are now separate binaries on a real socket, so a distributed correlation experiment is one host short rather than one process short. Real hosts still need EB-3"
+   ]
+  },
+  {
+   "id": "PROD-18",
+   "status": "PARTIAL",
+   "evidence": [
+    "constant-rate ingress implemented: live/deposit Drain emits on every tick, taking work when there is work and cover otherwise, with the queue drained by a separate goroutine into a one-slot buffer so no disk I/O happens on the emission path",
+    "threshold mixing and protocol-defined time separation: the airlock seals at a public schedule, the shuffle chain runs over the sealed batch, and release timing is a pure function of four public parameters",
+    "multi-publisher campaign under all four named conditions -- success, timeout, restart part-way with a durable queue, adversarial loss -- plus two idle controls: every world emits exactly the same number of cells, all 1200 bytes, to one destination",
+    "captures written to runtime/evidence/publication-campaign/ in the same rendered form the preregistered rule reads",
+    "the campaign is judged by the full preregistered rule including timing, in CI: success, timeout and loss against a steady control, and restart-with-work against restart-without-work, since a restart is externally observable by construction and only that pair isolates the private variable. All five pass; the noise floor between two idle publishers is 0.0003 to 0.0038 of the interval against a 0.02 tolerance",
+    "the campaign now enforces its own preconditions instead of logging them: a world whose mean inter-arrival drifts from the nominal interval fails the run, and a control pair outside the registered 0.02 fails it too. Both were verified by setting the tolerance to an impossible value and confirming the run fails on that specific check. Previously the cadence figure was logged while CI went on to apply the timing rule to whatever captures the run produced",
+    "the timing experiments run off the race detector, which was distorting what they measure: a seal under -race costs more than the 150 ms interval, so the loop fell off its ticker; the package also could not finish inside Go's ten-minute default, so `go test -race ./...` was failing outright. Both experiments now run on a dedicated non-race CI step and the race build keeps the concurrency coverage",
+    "external test report production/reports/2026-08-24-gate-integrity/ (55 checks, every one exit=0, logs digested in SHA256SUMS): the first run in which nomad-testnet's `go test -race ./...` completes rather than timing out, and in which govulncheck passes in all nine repositories rather than running in one and failing there",
+    "the publisher's per-cell seal cost is measured, profiled and reduced: 103 ms for the old two-column workaround, 36 ms serial on the single-cell path, 12 ms with the eighteen independent rows encrypted in parallel on four cores (2.1 GHz Xeon). Race-clean, and covered by a test that seals twenty-four cells at once and requires each to decrypt to its own plaintext with no two sharing ciphertext, which is what catches a random stream repeating across workers",
+    "profiling changed what the problem is: of the 36 ms serial cost, about 30 ms is kyber's Point.Embed and under 4 ms is the two scalar multiplications per row that actually encrypt. Embed puts 28 bytes in a point's y-coordinate by picking a random candidate and multiplying by the group order to test subgroup membership, retrying until one lands -- on the curve about half the time, in the prime-order subgroup one time in eight -- so it discards roughly sixteen full scalar multiplications per chunk, eighteen chunks per cell",
+    "the parallelism is safe for the emission invariant and the reason is recorded rather than assumed: sealing happens on the publisher's own machine, ahead of time, into a pull-only queue that a scheduler on a public clock drains, so how long it took never reaches the wire",
+    "the publication uplink is on a production path: nomad-testnet cmd/nomad-publish opens the local queue, derives the uplink session, drains it through deposit.Drain and emits at the cadence the signed topology sets, over a real UDP socket. Verified end to end against an entry operator socket -- twelve cells opened under the entry operator's session key, sequences 1..12, none repeated",
+    "building it found a defect that only the production path exposes: the uplink sequence is the AEAD nonce, nothing persisted it, and every caller until now was an in-process test that counted from one and never restarted. A publisher built without noticing would have re-sealed fragments under nonces it had already used on every restart. live/uplink/sequence.go is a durable reserve-ahead sequence, and TestARestartedPublisherDoesNotReuseANonce runs the shipped binary twice against one socket and requires no sequence to repeat",
+    "the nonce space fails closed: an exhausted or unreadable reservation stops the publisher, and only a reservation write that failed is treated as a lost cell -- the same allowlist polarity as the operator's send path, for the same reason",
+    "the Selection Firewall direction is gated for the one process that holds both halves: cmd/nomad-publish must not reach semantic basins, reconstruction, peer selection, fetch planning or the node, checked in CI and in the command's own architecture test, alongside the existing check that live/publish still has no network capability",
+    "the uplink session is established in band (nomad-testnet live/uplink/handshake.go, DEC-018): the publisher agrees with the entry operator's static X25519 key from the signed topology -- the same kex_key the pairwise hop keys use -- and carries its own ephemeral key in the first cell of the session. No per-publisher secret is distributed to a named operator beforehand, which removes a channel that would have known who publishes what",
+    "the handshake is one-sided by design and the code says why: the publisher authenticates the operator and proves nothing about itself, because an entry operator that could authenticate publishers would hold exactly the identity the airlock exists to keep from existing. Everything bounding abuse afterwards is per session",
+    "the sealed region of a handshake must be all zero and is checked against a party that can produce a valid tag: a publisher holding a real ephemeral key can seal whatever it likes correctly, and only that check stops 1144 bytes reaching the entry operator from a party it cannot identify",
+    "a replayed ephemeral key is refused, because a handshake is a cell like any other and a second session on the same key means the same AEAD nonces under the same key on a construction whose nonces come from a sequence; the responder also bounds how many sessions it holds, since accepting handshakes without a limit turns a cheap cell into unbounded state",
+    "the session secret goes through the unchanged nomad-uplink-session-v1 derivation, so the data path, its published vectors and its second implementation do not move because the way the secret is obtained changed",
+    "8 mutations killed, including a derivation that ignores the ephemeral key, one that ignores the epoch, an unchecked sealed region, a forgotten replay set, a missing session limit, a reused ephemeral, additional data that omits the ephemeral key, and a session-identifier domain colliding with the session-secret domain -- that last one makes the public deposit identifier be the session secret, and no round-trip test notices it",
+    "exercised end to end across a real process boundary: cmd/nomad-publish runs as a compiled binary and the entry operator in the test holds only its own static key and the public context, with no secret file to read, and opens the session from the handshake the publisher sends as its first cell",
+    "the entry operator now has a process: cmd/nomad-entry terminates publisher uplinks, deposits into the airlock, seals on the public schedule and writes batches for the shuffle chain. TestThePublicationPathAcrossRealProcesses runs two shipped binaries against a real socket with a tcpdump capture on loopback, judged by the same fail-closed cadence rule the relay fabric's capture is judged by",
+    "the capture covers the publication path specifically: one publisher, every datagram exactly 1200 bytes, one destination, mean interval within 0.2% of the configured cadence, handshake included because the capture starts before either process",
+    "the publisher applies its own per-session deposit bound: every in-window cell is a deposit and the operator charges cover and work alike, so a drain that kept taking work past the bound unlinked fragments from the queue that the airlock then refused in silence -- six work cells emitted for a bound of two, four destroyed. Emit now declines work once the bound is spent, from the signed schedule alone with no operator feedback, and a drain past its bound emits the same cells and sequence prefixes as one with no queue at all (nomad-testnet 9069372, EVIDENCE_INDEX F-11, DEC-024)"
+   ],
+   "blockers": [
+    "replication is exercised at the unit boundary and on the live stack, and is still one bridge rather than a network. Both functions that are the replication path measured 0.0% coverage -- enqueueCached, the sweep that re-offers complete cached streams for relay, and seed, which fills a joining operator from a bundle -- because every node test set CacheSweep to an hour. They are now at 75% and 77% across seven tests covering complete and incomplete streams, arrival-order independence, a full queue, and a seed larger than the operator's relay share. The Compose gate reads the stream identifier from the bundle operator-a alone was seeded with and requires it present cell for cell in operator-b's and operator-c's caches; the one-seed condition it depends on is asserted in deploy/compose_test.go, and the measurement refuses to run at all if operator-a holds fewer than two cells, so it cannot pass by comparing zero against zero. Green on CI run 33748910606, job 100634026331 (live-compose), commit 51d1b58, and again on run 33757183995, job 100661236940, commit 7d84173 after the mix snapshot was re-vendored. What remains is EB-3: three containers on one bridge is real process and interface isolation and is not a network, so WAN loss, reordering and a network adversary are still unexercised against replication",
+    "the seal cost measures 9.5-13 ms across runs against a 50 ms deployed interval (live/capacity, shared container), which is real headroom, but still above the 5 ms the topology permits as its shortest cadence, and the parallel speedup is a function of core count -- on one core the cost is unchanged at 36 ms. Removing the cost rather than spreading it needs a prime-order group encoding (Ristretto-style), which is a wire-format decision and not an optimisation, and it should be settled before the protocol freeze alongside the hop-header question",
+    "single host: the publisher and entry operator are separate processes on loopback, which is a real interface and real process isolation, but not separate hosts. WAN loss, reordering and a network adversary are not exercised (EB-3)",
+    "work destroyed at the deposit cutoff is FIXED (DEC-022, nomad-testnet 54e79db). The publisher derives the public deposit window from the same signed topology the operator anchors to and does not take work off its durable queue while that window is shut; the cadence is unchanged. Measured on two real processes with the queue sampled every 50 ms: 0 fragments lost across 83 intervals inside shut windows, against 19 lost across four consecutive shut windows with the gate removed. DEC-020's specified fix -- retain the sealed cell and retransmit it verbatim -- was REJECTED, not implemented: the uplink sequence is eight cleartext bytes, durable and strictly increasing, and cover is never retransmitted, so a repeat tells the entry operator this publisher had work refused; re-sealing under the same sequence is an AES-GCM nonce reuse, now refused by Drain.Emit. STILL OPEN: work is lost when an epoch is full, a per-session quota is exhausted, or a datagram is dropped, and the publisher cannot detect any of these by design. The mechanism for those is re-submission as a fresh publication triggered by not observing the object in a release, which needs the read path and is not implemented"
+   ]
+  },
+  {
+   "id": "PROD-19",
+   "status": "PARTIAL",
+   "evidence": [
+    "admission authenticates protocol state: topology carries an authority signature over a document every listed operator attested; TestVerifyRefusesDowngradedTopologies covers six weakenings (superseded version, stripped attestation, dropped operator, off-profile cell size, sub-floor threshold, sub-floor operator count), each signed by a genuine authority key so only the property under test is wrong",
+    "stale directory: live/topology/watermark.go persists a per-network topology high-water mark; a node refuses an older epoch and fails closed on two topologies signed for the same network epoch. Wired into cmd/nomad-node and verified at the binary boundary, not only in unit tests",
+    "replay: TestReceiveRejectsInvalidSourcesAuthenticationAndReplay (node) and TestReplayWindowAllowsReorderingButRejectsDuplicates (hop)",
+    "no dependence on private content: TestPeerSetComesOnlyFromTheSignedTopology, TestNoRuntimeEventCanAddAPeer (249 unknown-peer datagrams, 0 stored, peer set unchanged), TestUnsignedIdentitiesGainNothingByExisting",
+    "interoperability format published: conformance corpus now carries signed-topology vectors (three- and eight-operator rings), each verified through topology.Verify as it is generated",
+    "external test report production/reports/2026-08-21-protocol-freeze/ (all suites green on two architectures; logs digested in SHA256SUMS)",
+    "the admission format now has a published schema as well as golden vectors (conformance/wire-vectors.schema.json), so a second implementation has something to validate against rather than only bytes to compare",
+    "the admission and topology formats now have a consumer that shares no code with this repository: conformance/reference/ parses the corpus, verifies hop cells and signed topologies, and reproduces their digests and tags. It is still authored here, so it is a second implementation rather than a second party",
+    "the corpus now has a consumer that is not its encoder for every message type it publishes (nomad-testnet e78e13c): hop cell, signed topology, object manifest and uplink frame, each read by a second implementation in another language sharing no build and no protocol code, with a Go test that fails if a new message type arrives without one",
+    "the process that composes the uplink for a real operator is now covered: live/entry had no test file at all, so every guard the uplink library provides was tested from the library and the composition deciding which of them a datagram meets was tested from nowhere. Six tests now cover the session table, and they found that a source address was bound to exactly one session and a cell from a bound address never reached the responder again -- a publisher restarting behind a NAT that kept its mapping was locked out of that operator for the life of its process, and anyone able to spoof a source address could cause the same on purpose. Fixed with a bounded per-address session list that refuses rather than evicts (nomad-testnet ba5b657, F-42). docs/STATE_MACHINES.md already gave the recovery this made impossible: uplink sequence-space exhaustion is fatal with the response 'establish a new session', and a publisher doing that from the same socket sent its new handshake from the address its exhausted session was bound to",
+    "three validity guards on the signed topology were unheld by any test and are now held with vacuity arms: epoch zero (which the watermark file uses to mean absent, so accepting one writes a record the node cannot read back), an unparseable not-before (which parses as the zero time, a window with no lower edge, and which epoch.Verify compares an activation against), and the file boundary in Load. Mutation-verified: each fails when its guard is neutralised"
+   ],
+   "blockers": [
+    "interoperability evidence needs a consumer of the corpus written by someone other than its author. Every message type the corpus publishes now has an independent consumer -- another language, no shared build, no shared protocol code, written from the specification -- but it lives in this repository and was written here, so it establishes that the specification is sufficient to build from and not that it reads the same way to a third party. That needs EB-5"
+   ]
+  },
+  {
+   "id": "PROD-20",
+   "status": "PARTIAL",
+   "evidence": [
+    "docs/ADMISSION_AND_RATE_CONTROL.md (normative v1)",
+    "eclipse: TestNoRuntimeEventCanAddAPeer, TestPeerSetComesOnlyFromTheSignedTopology",
+    "sybil: TestUnsignedIdentitiesGainNothingByExisting",
+    "amplification: TestFloodFromAnAcceptedPeerNeitherAmplifiesNorInducesCatchUp (0.0003-0.0008)",
+    "abusive peers: TestHostileDatagramsAreRejectedForTheRightReason",
+    "external test report production/reports/2026-08-21-protocol-freeze/ (all suites green on two architectures; logs digested in SHA256SUMS)",
+    "fair allocation implemented at both layers that a flood reaches (nomad-testnet cc3fd69): rawcache.OpenShared gives each signed sender an equal share of the stream budget and records who introduced each stream so the share survives a restart, and live/node.FairQueue keeps a relay line per source served in a fixed rotation whose cursor advances on the tick rather than on who has work",
+    "the cache was the more binding of the two and is why a queue fix alone would have been theatre: it refuses a new stream once full with no eviction, so work refused there never reached the queue to be scheduled at all",
+    "measured rather than argued: a sender asking for 64 streams gets its exact share of 4 while three other senders keep all of theirs; a flooder enqueuing 6400 cells keeps 16 and is served 4 times in 16 emissions like everyone else; and against a live node under a continuous flood that drove 4527 cache rejections, a second operator's two-cell batch was still admitted and completed",
+    "neither layer changes when anything is emitted -- the scheduler asks for one cell per tick on a fixed cadence whether the queue is empty or overflowing, and the rotation decides only which cell. A source outside the signed set gets no line and no share, so a Sybil cannot buy relay capacity by sending",
+    "8 mutations killed, including the per-sender cache share removed from the node entirely, a queue share widened to the whole capacity, a rotation that never rotates, a stream whose creator is not recorded, and a full line evicting its own oldest instead of refusing",
+    "admission on the publication uplink is now specified normatively rather than only implemented: docs/ADMISSION_AND_RATE_CONTROL.md states the three bounds -- a session budget that is spent and never returned (the responder must remember every ephemeral key it accepted or a replayed handshake reuses that key's AEAD nonces, so nothing can free a slot), a capped per-address session list that refuses rather than evicts, and the airlock's per-session slot quota -- and states that every refusal is silent and fail-closed",
+    "a configuration comment that described a different bound than the code: SessionLimit was documented as sessions held at once and the flag as maximum concurrent sessions, while the implementation is a budget spent for the life of the process. An operator sizing it as an occupancy would have sized it far too small. Both now say what the code does and a test with a vacuity arm pins it. The exhaustion that follows is recorded as DEC-029 with the three alternatives and why each fails: expiry is forgetting with a clock in front of it, per-address handshake rate limits bound nothing when source addresses are free, and binding the handshake to the release epoch works but costs a frozen wire label",
+    "a publisher can no longer use the reserved padding of an uplink cell as a side channel to the entry operator it is anonymous to. The AEAD stops every other party, so the padding check defends only against the session-key holder; it was unheld by any test and is now held, including a single non-zero byte at either end of the padding"
+   ],
+   "blockers": [
+    "the economic half of the analysis: costing an attack in money needs deployment parameters that do not exist yet",
+    "availability under sustained flood is now allocated rather than merely bounded, and the remaining half of this blocker is the lateness budget: a flood still costs receive-side work, and nothing here measures how close a small node comes to its cadence deadline under one on constrained hardware. That needs a host this project does not have. A second availability cost is now written down rather than left to be discovered: the uplink session budget is a denial of service an attacker buys with that many valid handshakes, after which the operator establishes no further sessions until restart. It is accepted rather than solved, because the alternative reopens handshake replay onto a live session's nonces; what is missing is a figure for the headroom against a real publisher population, which is the same absent deployment parameter as the bullet above",
+    "red-team saturation by a party other than the implementer; the eclipse, Sybil, amplification and abusive-peer tests are all authored here"
+   ]
+  },
+  {
+   "id": "PROD-21",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/nomad-testnet/commit/80b9f5c83e30114f6f749a39b89a6d77638abe4c",
+    "https://github.com/Jtensetti/nomad-testnet/actions/runs/32301972409",
+    "https://github.com/Jtensetti/nomad-testnet/blob/80b9f5c83e30114f6f749a39b89a6d77638abe4c/deploy/MULTI_OPERATOR.md",
+    "IPv6 is a first-class operator address at the document layer, not something the format tolerates: IPv6, IPv4 and mixed operator sets are admitted, and the endpoint grammar and canonical form are frozen in conformance/COMPATIBILITY.md (nomad-testnet ea4e4b5)",
+    "the operator-distinctness check compares socket addresses rather than the strings that spell them. Before this, two operators could occupy one address as [::1] against [0:0:0:0:0:0:0:1], as 127.0.0.1 against its IPv4-mapped form, as operator-a against operator-a., or across http and https on one TCP port, and be counted as two"
+   ],
+   "blockers": [
+    "three independently administered operators and regions",
+    "WAN IPv4/IPv6, NAT, churn and partition evidence",
+    "IPv6 now reaches the wire on loopback: two nodes exchange cells over ::1, a sealed cell is stored, an IPv6 source the topology does not name is refused, and a replay is refused, with the test asserting the addresses are IPv6 before asserting anything about them. That is loopback and not a WAN -- NAT, path MTU, dual-stack address selection and IPv6 across a real network still need the multi-region deployment this cannot provide (EB-2). The development container has no IPv6 stack at all, so the test skips there and fails where NOMAD_REQUIRE_CAPABILITY_GATES=1 declares the environment has one"
+   ]
+  },
+  {
+   "id": "PROD-22",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/Nomad-browser/commit/f5d1d6aaca487d84c005a60b6518e1133c72c997",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32287433817",
+    "https://github.com/Jtensetti/nomad-testnet/commit/80b9f5c83e30114f6f749a39b89a6d77638abe4c",
+    "https://github.com/Jtensetti/nomad-testnet/actions/runs/32301972409",
+    "https://github.com/Jtensetti/Nomad-browser/commit/b19710be10b896e47e97885d5f7391c0c9213455",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32303046813",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32303046809",
+    "the engine-side egress audit exists as a machine-checked list rather than a paragraph: 31 Gecko surfaces (firefox-nomad fbc1b2b2e8) and 18 Blink surfaces (chromium-nomad 37cfdd900e), each anchored to a real path with what the integration owes it, plus a verifier that fails when an anchor stops existing"
+   ],
+   "blockers": [
+    "Apple-provisioned App Group or independently reviewed production IPC boundary",
+    "independent browser/client assessment",
+    "no engine code is modified in either fork, and per DEC-013 none will be: Nomad-browser is the browser and the forks are parked. The inventories are the prerequisite work, not the integration. This criterion names 'at least one supported browser/client build', which Nomad-browser is by construction rather than by subtraction -- but the release-binary integration test it also names still needs EB-1"
+   ]
+  },
+  {
+   "id": "PROD-23",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/Nomad-browser/commit/f5d1d6aaca487d84c005a60b6518e1133c72c997",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32287433817",
+    "https://github.com/Jtensetti/Nomad-browser/releases/tag/nomad-browser-macos-f5d1d6aa",
+    "https://github.com/Jtensetti/Nomad-browser/commit/b19710be10b896e47e97885d5f7391c0c9213455",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32303046813",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32303046809",
+    "the entitlement gate now runs where it is pushed, not only where it can be built: the release bundle's declared capabilities were checked by macos/scripts/security_gate.sh, which needs PlistBuddy and swift and so runs only on a macOS runner -- and the only macOS workflow triggered on push for `branches: [agent/macos-browser]`, so on every other branch nothing checked the entitlements at all. Nomad-browser/bundle_test.go parses the plists directly and runs on every push (77d632c)",
+    "entitlements are an allowlist with a written reason per key rather than a denylist of the ones someone thought of: an unexplained key fails until a reason is recorded, and named defeats (network client/server, mach-lookup exceptions, unsigned executable memory, library validation off, get-task-allow, apple-events) fail by name. Info.plist must declare no URL types, document types or extension points and no App Transport Security exceptions",
+    "the forbidden-Swift-symbol scan is checked against itself: a second test runs it over samples containing each construct, so a pattern that stopped matching after a rename is caught rather than passing over sources that happen to be clean. It found one immediately -- a word boundary made the CFNetwork pattern miss CFNetworkCopySystemProxySettings, which the shell version caught",
+    "the surfaces this criterion enumerates are individually anchored in both engine forks, including the ones a URL-level or DNS-level control would miss: DNS-over-HTTPS, WebRTC (which reaches the network with no channel or URLLoader at all), speculative connect and DNS prefetch (which fire on hover and on parse rather than on navigation), captive portal probes, OCSP fetching, and the component updater",
+    "runtime evidence for a shipped binary now exists alongside the dependency-graph gate (Nomad-browser 1168851, runtime_boundary_test.go): the release verifier is built and run under a system-call trace, doing real work against a real signed manifest and artifact, and makes zero calls to socket, connect, sendto, sendmsg, sendmmsg, recvfrom, recvmsg, bind, listen, accept or accept4",
+    "a trace rather than a packet capture, deliberately: a capture sees what left, a trace sees what was attempted -- a connect that failed because nothing was listening, a resolver that gave up, a socket opened and never used. For a cannot-egress claim the attempt is the interesting event, and DNS is covered by construction because a resolver opens a socket like anything else",
+    "the refusal path is traced too: a verifier that opened a socket when a signature failed, to report or to check a revocation list, would be egress on exactly the input an attacker controls",
+    "the positive control caught a vacuous measurement before it became evidence: strace writes '<pid>  syscall(...)' when -f and -o are combined rather than '[pid N] syscall(...)', the parser matched only the second form, and both binaries therefore reported zero network syscalls -- including the control that opens one",
+    "scope is stated in the file rather than left to be inferred: QUIC, WebSockets, WebRTC, service workers, extensions and speculative fetch live in an engine, and per DEC-013 the engine forks are parked, so this is evidence about the Go binaries this repository ships and nothing else"
+   ],
+   "blockers": [
+    "the Go binaries this repository ships are measured on Linux by system-call trace, including the refusal path. The matrix the criterion names is wider in two directions this project cannot close: every supported platform needs a macOS runner, and the engine-side paths -- QUIC, WebSockets, WebRTC, service workers, extensions, speculative fetch -- live in forks that DEC-013 parked, so nothing here is evidence about them"
+   ]
+  },
+  {
+   "id": "PROD-24",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/nomad-semantic-basins/commit/644bff28a2075b66426f1cf4b5960ae18363ac60",
+    "reproducible model identity implemented (nomad-semantic-basins a96d821, basin/attest.go): a service is fingerprinted over a fixed public probe set, and verification refuses when its basins move. The fingerprint is over quantized basins rather than raw vectors on purpose -- float output differs in the last bits between runs and hardware without meaning anything, while a change large enough to move a basin is by definition a change that moves what a reader fetches",
+    "the attestation refuses to fingerprint nothing: fewer than four probes, a repeated probe, an empty probe and a service that answers every input identically are all rejected when the attestation is made rather than discovered later matching everything. Verification fails closed on an unknown version, a malformed digest, an edited or reordered probe set, a different quantizer seed, a service that errors and a nil embedder",
+    "the artefact carries no private state: probes are fixed public strings, exported so an operator can see what is sent to their service, and a test embeds unrelated reader queries between two attestations and requires the digest not to move",
+    "https://github.com/Jtensetti/nomad-semantic-basins/commit/bd3c5cc7222a0d125a92bdfa30195e453b1ae579",
+    "mutual IPC authentication implemented as a sealed channel rather than a handshake (nomad-semantic-basins bd3c5cc, basin/loopback/seal.go, service.go, cmd/nomad-embed-service): the client sealed the query to a shared service key instead of posting it to whichever process held the loopback port. A challenge-response gate was considered and rejected in the code: it proves somebody holding the key is reachable, not that the party receiving the query is that somebody, since an impostor on the configured port can relay the challenge to the real service on another port; and it leaves the reply unauthenticated, where an impostor's chosen vector chooses the reader's basin",
+    "each request draws a fresh 32-byte salt; both directions derive their own key from it with HKDF-SHA256 and are sealed with AES-256-GCM, so a request key never opens a reply and a reply captured once cannot be replayed onto a later request. Plaintext is padded to 256-byte blocks because AEAD hides content and not length",
+    "the disclosure claim is tested directly (basin/loopback/sealed_test.go): a process without the key receives the sealed bytes and never the query text, never a fragment of it, never a credential header and never the key; a vector from a process without the key is refused whether sealed under another key, returned as plain OpenAI-shaped JSON, empty or invented; a genuine reply replayed onto a second request is refused; the shim never reaches the model server with a request it could not open; every refusal it returns is the same message, so it is not an oracle; and the full client-shim-model chain succeeds, so the refusals are not a client that refuses everything",
+    "15 mutations of the production path were all killed, including a compatibility fallback to plain JSON when unsealing fails, a constant salt, key derivation that ignores the salt, additional data that ignores the salt, dropped response-size and dimension bounds, a deleted loopback address check on both the client and the shim's upstream, and a refusal that says which check failed. The campaign asserts a green baseline before and after, after an earlier run left a mutation applied and made its own results meaningless",
+    "https://github.com/Jtensetti/nomad-semantic-basins/commit/2dc8eb40ac024f9ebf760643e121625fe8a97cd5",
+    "deploy/nomad-embed-service.service confines the shim with IPAddressDeny=any, IPAddressAllow=localhost, an empty capability set and a system call filter, with a test pinning each directive so one deleted line cannot pass review silently",
+    "https://github.com/Jtensetti/nomad-semantic-basins/commit/a9c468c",
+    "attempted-egress capture exists and is a measurement rather than a configuration (nomad-semantic-basins a9c468c, basin/loopback/egress_test.go): the client, the shim and a model server run inside a network namespace whose only interface is loopback -- off-host is absent rather than blocked, since there is no route -- and the embedding completes anyway, which is a statement about the code rather than about a profile somebody applied",
+    "a packet capture inside that namespace records every datagram the chain produced (21 in the recorded run) and requires all of them to name loopback at both ends. The namespace establishes that nothing could leave; the capture establishes that nothing did",
+    "three defects in the measurement itself were found and fixed rather than papered over: a fresh namespace has loopback DOWN, so binding 127.0.0.1 succeeds while connecting fails and a probe that only bound would have concluded loopback worked; checking addresses by substring accepts exactly the packets the check exists to catch, because ::1 is a substring of 2001:db8::1, and the control case now includes that packet; and tcpdump's buffer, unwritten when the process is killed, leaves a truncated file that reads as 'nothing was captured', which is indistinguishable from the result the test reports",
+    "CORRECTION 2026-08-31 (nomad-semantic-basins 8fa3a57): the two entries above describe a run on a developer machine, not on CI. The launcher used plain `unshare --net`, which needs CAP_SYS_ADMIN, and GitHub's runners are not root, so both tests took their skip path on every run that gated a merge. The skip said in as many words that it was an environment limit and not a pass, and it was still green. The namespace is now obtained by whichever of three probed mechanisms works -- an unprivileged user namespace, plain unshare when already root, or sudo where AppArmor restricts the first, which is the runner case on Ubuntu 24.04 -- and because the mechanism is probed before use, a permission failure afterwards is a failure rather than a skip. An environment with no mechanism at all, or without tcpdump, still skips saying so"
+   ],
+   "blockers": [
+    "attestation establishes reproducibility, never authenticity: the embedding service is a separate process and nothing it says about which model it loaded can be checked from outside. A service willing to lie about its model is willing to lie about a hash of it. What is detected is change, which is the property the system depends on, and the implementation says so rather than claiming more",
+    "the sealed channel authenticates the service; it does not sandbox it. The systemd profile is checked for the presence of its directives, never by attempting to escape them on a running system, and the README says so rather than letting a hardening file read as a proven sandbox"
+   ]
+  },
+  {
+   "id": "PROD-25",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/nomad-testnet/releases/tag/nomad-live-testnet-80b9f5c83e30",
+    "https://github.com/Jtensetti/nomad-testnet/actions/runs/32301972409",
+    "https://github.com/Jtensetti/nomad-testnet/commit/80b9f5c83e30114f6f749a39b89a6d77638abe4c",
+    "https://github.com/Jtensetti/Nomad-browser/commit/b19710be10b896e47e97885d5f7391c0c9213455",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32303046813",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32303046809",
+    "the vulnerability gate runs in all nine Go repositories and on all nine vendored component modules, verified by exit code. It previously ran in one, and that one was failing: 20 reachable standard-library vulnerabilities, because the repositories pinned Go 1.23 after it stopped receiving backported security fixes. Every repository is now on 1.25 and scans clean",
+    "SLSA-shaped provenance is generated in CI alongside the SBOM (Nomad-browser 41631ae). The generator existed and no workflow ran it, so no provenance was produced anywhere; it attests rather than signs and stamps itself unsigned outside a protected identity, so it cannot be mistaken for the signed provenance this criterion wants",
+    "external test report production/reports/2026-08-24-gate-integrity/ (55 checks, every one exit=0, logs digested in SHA256SUMS): the first run in which nomad-testnet's `go test -race ./...` completes rather than timing out, and in which govulncheck passes in all nine repositories rather than running in one and failing there",
+    "build determinism is measured on every push, not assumed (Nomad-browser 7ad564b): the Go release binaries are built twice from two copies of the source at different path lengths and must be byte-identical across three targets. Two paths is the point -- building twice in one directory proves almost nothing, while two paths show the source path does not reach the binary, which -trimpath is supposed to guarantee and which nothing had checked. Removing -trimpath makes it fail, so it does not pass vacuously",
+    "the dependency set is closed and reviewed (nomad-testnet 2711803, DEPENDENCY_POLICY.json + supplychain/dependency_test.go): every external module any module in the repository may require is listed with its version and a reason, and anything else fails. A version bump is a new review because the bytes are different, and an approved entry nothing requires fails too so the list cannot grow stale",
+    "also enforced: every replace points inside the repository (one pointing out substitutes code with no go.sum entry and no manifest line), every approved module has both its go.mod hash and its module hash in go.sum, nothing in the environment relaxes module verification, and CI runs go mod verify on the root and every vendored component -- a vulnerability scan over substituted bytes reports on the wrong code",
+    "6 mutations killed: an unreviewed direct dependency, an unreviewed transitive one inside a vendored component, a silent version bump, a replace pointing at /tmp, an approved entry nothing uses, and a requirement with no go.sum entry"
+   ],
+   "blockers": [
+    "what a repository can establish about malicious dependencies is now established: the set is closed, reviewed, content-addressed and verified against what the toolchain actually resolves rather than against go.mod's text. That last part was added after the fact (F-23, F-24): the earlier version of this line was written about a check whose components exception also licensed the root module, so the shipped build could be downgraded to a version approved only for a vendored component with nothing red. What no repository can establish is that a listed module's upstream source is benign -- nothing here reads it -- and the policy file says so in its own text rather than leaving the gap to be inferred",
+    "provenance is generated but not signed: signing needs a key no repository may hold, and no release key exists yet (EB-7)",
+    "determinism is established; independence is not. A second builder on their own machine getting the same bytes is not something this project can establish about itself (EB-2). docs/REPRODUCIBILITY.md records the procedure and the trap: Go stamps the commit hash and dirty flag by default, so a git checkout and an exported tarball differ from identical source",
+    "the macOS .dmg is out of scope for the determinism check: codesign and hdiutil embed timestamps and a signature is not reproducible by construction, so reproducing the shipped installer would mean comparing the unsigned payload, which is not implemented"
+   ]
+  },
+  {
+   "id": "PROD-26",
+   "status": "PARTIAL",
+   "evidence": [
+    "https://github.com/Jtensetti/Nomad-browser/releases/tag/nomad-browser-macos-f5d1d6aa",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32287433817",
+    "https://github.com/Jtensetti/Nomad-browser/commit/b19710be10b896e47e97885d5f7391c0c9213455",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32303046813",
+    "https://github.com/Jtensetti/Nomad-browser/actions/runs/32303046809",
+    "uninstall and retention: macos/scripts/uninstall.sh removes the sandbox container, which under com.apple.security.app-sandbox holds every path the app can write, plus the unsandboxed locations a development build would use. It refuses to run while the app is open and supports --dry-run (Nomad-browser 77d632c)",
+    "docs/DATA_RETENTION.md documents what macOS retains outside the app's control, with the command to clear each where one exists: crash reports (which record thread stacks as raw machine words and so can carry object fragments, written outside the container and surviving uninstall), local APFS snapshots and Time Machine, the Spotlight index, unified log entries, and swap",
+    "the uninstaller is cross-checked against the source rather than trusted: every directory name the Swift sources construct must appear in the script, the bundle identifier must match Info.plist, and the retained-data list must stay in both the script and the document. Each check was verified by introducing the drift it exists to catch",
+    "update verification with anti-rollback implemented and adversarially tested (Nomad-browser/update, 9121eca): rollback, equivocation and substitution each refused by name; unknown manifest versions refused rather than downgraded; a manifest signed by an untrusted key refused although it verifies under its own; an unreadable watermark refuses the install rather than being treated as absent, which is what stops anyone who can corrupt one file from switching rollback protection off",
+    "the updater is architecturally unable to grant the networkless browser network access: it verifies bytes the user already has and fetches nothing, and a dependency test fails if its transitive graph gains net, net/http, net/url or os/exec -- verified by adding an http import and confirming the test fires"
+   ],
+   "blockers": [
+    "Developer ID signing and Apple notarization",
+    "secure updater and rollback prevention",
+    "key storage, local-data deletion and clean-uninstall verification",
+    "the uninstall script has never been executed against a real installed bundle on macOS, and the retention lists are derived from documented platform behaviour rather than observed empirically. That needs the same macOS host with a signed bundle that H-01 and F-09 need",
+    "the update mechanism has no release key and no installer integration: cmd/nomad-browser-verify refuses to run without a compiled-in key rather than pretending, and nothing invokes it automatically when a user mounts a disk image, so updating is a manual step. See EB-7",
+    "OS-backed key storage (H-09) does not exist: the trusted release public key is a build constant, which is correct for a public key, but its private half has no documented custody"
+   ]
+  },
+  {
+   "id": "PROD-27",
+   "status": "PARTIAL",
+   "evidence": [
+    "schema allowlist: live/telemetry fails closed on any field without a written public rationale; fourteen counters are named forbidden with the reason each is forbidden",
+    "log scraping: a production node runs with known secrets and every file under its state directory is scanned in raw, hex, upper hex and three base64 forms, with the instrument rehearsed against all five secrets first",
+    "crash data: GOTRACEBACK=none on every compose service, verified against a real panicking process built under testdata -- no goroutine dump, no frame arguments, no secret. The in-process debug.SetTraceback(\"none\") was measured to be inert and replaced; see the finding in EVIDENCE_INDEX",
+    "a compose test fails any service that declares its own environment without repeating GOTRACEBACK, which is how the three DKG services were caught silently dropping it via YAML merge semantics",
+    "retention: output is bounded rather than accumulating (health file rewritten in place, no append-only log); operator-side journal caps, no central shipping and disabled core dumps are documented in deploy/OPERATOR_ONBOARDING.md",
+    "external test report production/reports/2026-08-21-protocol-freeze/ (all suites green on two architectures; logs digested in SHA256SUMS)"
+   ],
+   "blockers": [
+    "privacy review by a party that did not build the instrumentation. The allowlist, the scanner and the crash control are all authored here, and the criterion names a review; the implementer must not be the only judge of its own change. A second-party review (production/reviews/2026-08-27-internal-security-review.md) examined this scope and concluded NOT YET PASS, independently reaching the same operator-host core-dump boundary recorded below -- corroboration rather than closure. Does not require external independence (PROD-04 and PROD-29 are the criteria that do), only a second party.",
+    "operator host settings cannot be verified from here. The shipping Compose deployment now enforces what it can reach: every service inherits ulimits core soft/hard 0 from the locked-service anchor, deploy/compose_test.go fails on an anchor that does not, and compose-e2e.sh reads the limit back from each running container rather than trusting the file (F-33). On an operator's own platform the property still depends on their journald and coredump configuration, which this project's evidence does not cover and does not claim to."
+   ]
+  },
+  {
+   "id": "PROD-28",
+   "status": "PARTIAL",
+   "evidence": [
+    "published SLOs: nomad-testnet deploy/SLO.md gives every target the test that measured it, and marks the ones that are wishes -- no uptime target, no capacity number, no disk-bytes bound, no regional-failure measurement. Availability is stated as subordinate to the privacy invariant, because where they conflict the protocol loses work rather than emit a private-dependent signal",
+    "disaster-recovery exercise that runs: live/node/recovery_test.go destroys each piece of a node's durable state in turn -- raw cache, hop sequence, topology watermark, and the combination -- and records what the code does. deploy/RECOVERY.md is written from what it measured rather than from what recovery ought to look like",
+    "the exercise's finding: a hop sequence file restored from backup moves the counter backwards and the node reissues numbers its peers have already seen. Measured in the unit exercise (sender emitted 18 cells, 0 local drops, receiver refused 17 as replays) and again end to end in the drill with shipped binaries (sender sent 99 cells, 0 local drops, passed --check-health; peer refused 80 replays). The sender cannot detect it at all; the only signal is a peer's replay_rejected, and the runbook is built around that",
+    "incident drill that runs: scripts/incident-drill.sh builds the real binaries, bootstraps three operators on loopback and works two scenarios with a pass or fail for each -- a node present and not working, and the sequence rollback. It runs in CI rather than on request, because a runbook whose drill has not been run since the code moved is a document about an older system",
+    "second drill finding: a stopped node that is resumed exits rather than carrying on, because it missed its lateness budget and a fixed-cadence sender refuses a catch-up burst. Recovery from a hang is therefore a restart and not a resume, which the runbook now says. That is the privacy invariant costing availability on purpose",
+    "the drill found two defects in itself before it found any in the system, both recorded: it asked only one peer for replay_rejected when the signed plan decides who hears whom, and it backed up and restored the sequence file either side of a single restart, where the bytes are identical and the restore does nothing. Both made it report that the documented signal never appears",
+    "capacity figures now exist: nomad-testnet live/capacity derives the envelope from the deployed traffic class and deploy/SLO.md publishes it. Two of the three figures PROD-28 names are not measurements -- a fixed-cadence fabric emits one cell per interval per link whether or not anyone is using it, so cells per second per operator (40 at the deployed 50 ms cadence with two links) is a fact about the signed topology, and objects per epoch (1,660 at 1 MiB over a 24-hour epoch, from 3,456,000 cells x 504 payload bytes) is arithmetic and an explicit ceiling that assumes every cell carries work",
+    "what the hardware actually decides is measured instead: the margin by which per-cell work fits inside the cadence. TestCapacityReport measures hop seal, hop open, the relay path, the raw-cache write, the publisher's uplink seal and the handshake, and deploy/capacity-report.json carries the artifact with its environment attached",
+    "TestTheRelayPathFitsInsideTheCadence asserts the relay path for every link fits the interval with a wide margin, so a change that puts a signature, a disk write or a network round trip on the per-cell path is caught",
+    "TestTheReportedDeploymentIsTheDeployedOne fails if the report's assumed cadence, operator count or cache-stream default stops matching deploy/compose.yaml and cmd/nomad-node; each of the three drift cases was confirmed to fire",
+    "the arithmetic is checked against hand-computed values rather than against its own re-derivation, and Report.Validate refuses to publish a capacity report that lacks an environment or a statement of what it does not establish",
+    "the entry-operator role now has a deployment: cmd/nomad-entry constructs uplink.NewResponder with a bounded session limit, which is what the earlier 'no deployed value to measure' blocker was about"
+   ],
+   "blockers": [
+    "no 30-day soak. Every figure in SLO.md comes from tests measured in seconds, in a container, alongside other work: they establish that a bound exists and is enforced and say nothing about drift, leaks or degradation over weeks, which is what a soak is for. This cannot be compressed and is why the criterion is not MET",
+    "no regional-failure exercise: the drill is three processes on one host's loopback. Node loss is exercised, regional failure is not, and that needs multi-region infrastructure (EB-3)",
+    "no incident history: these objectives have been tested only by exercises this project designed and ran",
+    "the capacity figures are not capacity targets: every measurement comes from a shared development container running other work concurrently, each cost is measured in isolation rather than with the scheduler, socket and cache contending, and nothing runs long enough to speak to drift. They are what the implementation costs today, not what an operator should expect from their hardware, and closing that needs the soak and a dedicated host",
+    "concurrent publishers is now a deployed parameter rather than an absent one: cmd/nomad-entry constructs the uplink responder with a --sessions bound, so the figure exists and its cost is measured. What is not measured is the bound under real concurrency -- the boundary test runs one publisher, and many publishers against one entry operator needs hosts this project does not have"
+   ]
+  },
+  {
+   "id": "PROD-29",
+   "status": "BLOCKED",
+   "evidence": [],
+   "blockers": [
+    "blocked on EB-4: independent cryptographic, systems, browser and privacy assessors. This criterion cannot be self-approved, and a subagent review is QA rather than independence"
+   ]
+  },
+  {
+   "id": "PROD-30",
+   "status": "PARTIAL",
+   "evidence": [
+    "the two-person release process is a control rather than a document: a release manifest carries approvals, and Nomad-browser update.Decode refuses one without signatures from at least two distinct trusted approver keys. The refusal happens on the machine that would otherwise install the release, which is the one party with no incentive to skip the step",
+    "adversarial, mutation-verified: fewer than two approvals refused; two approvals from the same key refused, because one person signing twice is one person; an approval from an untrusted key refused; a build whose trusted set is one key or one key listed twice refused before a manifest is read; approvals do not transfer between releases, covering version, channel, artifact name, digest and size. Five mutations of the rule are all caught",
+    "the manifest format is v2 and Sign is gone: a release is not signed by the project, it is approved by people. Prepare builds the manifest, Approve adds one person's signature, and Approve takes a single key on purpose because a function taking two at once would be a two-person process one person can run",
+    "exercised end to end with the shipped binary: two approvers verify, one trusted approver is refused with 'One person who can approve alone is not a two-person process', and a build with no keys refuses and names EB-6 and EB-7",
+    "rollback plan in Nomad-browser docs/RELEASE_PROCESS.md: roll-forward only, because an updater that can move a user backwards is one an attacker can move backwards. It also records what cannot be solved -- a user already on a bad release cannot be reached, since the browser fetches nothing, and a compromised approver key has no revocation channel, so a build trusting exactly two keys cannot survive losing one"
+   ],
+   "blockers": [
+    "no monitored multi-operator beta: nothing has been given to users at all, which is the substance of this criterion and needs people (EB-4). The Linux gap recorded here on 2026-09-02 is closed on the process side: its release workflow had never run (F-29) and the process document never mentioned Linux, and both are fixed -- a Linux section covering the tag, the absence of any notarization equivalent, the verifier command and the both-architectures rule, with update/linux_release_test.go exercising the two-approval path against a real tarball rather than leaving it platform-neutral by construction and untested. DEC-027 is unchanged in substance: the client stays a build target until someone decides to offer it, and nothing has been given to anyone",
+    "no release red team. An internal adversarial exercise is not one, and a subagent review is QA rather than independence",
+    "no second approver and no release keys: the mechanism is ready and exercised only against test keys, which the tool says out loud every time it is used that way (EB-6, EB-7)",
+    "two keys held by one person satisfy every check the code makes. Key custody is what makes this a two-person process and it is an operational property, not a cryptographic one"
+   ]
+  }
+ ]
+}

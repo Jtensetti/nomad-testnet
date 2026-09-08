@@ -14,6 +14,7 @@ import (
 
 	"github.com/Jtensetti/nomad-constant-rate-fabric/fabric"
 	"github.com/Jtensetti/nomad-testnet/live/hop"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 )
 
 const (
@@ -71,7 +72,7 @@ func Verify(encoded []byte) (Verified, error) {
 	copy(stream[:], decodedStream)
 	payloads := make([][hop.CiphertextSize]byte, len(file.Cells))
 	for index, encodedCell := range file.Cells {
-		decoded, err := base64.StdEncoding.Strict().DecodeString(encodedCell)
+		decoded, err := strictjson.DecodeBase64(encodedCell)
 		if err != nil || len(decoded) != hop.CiphertextSize {
 			return Verified{}, fmt.Errorf("seed cell %d has invalid encoding or size", index)
 		}

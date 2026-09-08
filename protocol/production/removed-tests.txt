@@ -1,0 +1,36 @@
+# Tests the evidence index names that no longer exist.
+#
+# The index is a historical record, so an entry describing a test that was
+# removed has to name it. Every such name is listed here with why, so that a
+# citation going stale by accident still fails scripts/check-cited-tests.py.
+# The claim matrix is not allowed entries here: a claim is only evidenced by a
+# test that exists.
+
+TestWireRoundTripIsExactly1200BytesPerCell
+  F-09. Removed as part of the finding: its headline assertion compared a
+  compile-time constant to itself, and three tests that measure the wire tail
+  replaced it.
+
+TestARelayedCellCarriesItsStreamIDOnwardInTheClear
+  F-21. Renamed to TestARelayedCellDoesNotCarryItsStreamIDOnward when version 2
+  encrypted the whole cell. Named in F-21 because the matrix row citing it
+  recorded the property as measured false long after it was fixed.
+
+TestASendFailureCostsOneCellAndNotTheNode
+  F-21. Renamed to TestATransientSendFailureCostsOneCellAndNotTheNode.
+
+TestOnlyAClosedSocketEndsTheSchedule
+  F-21. Renamed to TestOnlyKnownTransientConditionsCostACell when the
+  classification helper changed polarity.
+
+TestNonZeroPaddingIsRefused
+  F-42. Removed rather than renamed, because it did not test what it was
+  named for. It sealed an ordinary uplink cell, opened it, and asserted that
+  the padding was longer than zero bytes -- reasoning, in its own comment,
+  that the padding sits inside the sealed plaintext and cannot be altered
+  from outside without breaking the tag. True, and the wrong party: the one
+  who can write there is the publisher holding the session key, which is the
+  party the check exists to stop. Neutralising the guard left the whole suite
+  green. The property is now held by
+  TestAPublisherCannotSmuggleBytesInTheReservedPadding, which builds cells
+  past SealWork so it can produce the case the old test could not.

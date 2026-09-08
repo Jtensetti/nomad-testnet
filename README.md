@@ -1,119 +1,90 @@
-# Nomad live testnet
+# Nomad
 
-Nomad's reader-side reference deployment. It runs three separately keyed
-operator processes, emits authenticated 1200-byte UDP cells on a signed fixed
-cadence, stores only valid encrypted work, obtains public threshold partials on
-an independent fixed schedule, and materializes a signed object for Nomad
-Browser without any query-triggered network action. The epoch committee is
-created by three networked Kyber Pedersen DKG processes; the live descriptor is
-accepted only with the resulting all-operator activation certificate.
+**Verify content locally. Keep private reading separate from network activity.**
 
-This repository now contains two harnesses:
+Nomad's verification library, local reader, network reference implementation
+and supporting evidence are now assembled into **one evaluation repository**.
+You do not need to collect nine repositories to assess the technology.
 
-- `go run ./cmd/nomad-testnet` is the deterministic protocol integration test.
-- `deploy/compose.yaml` is the live fabric-to-cache deployment and release gate.
+**Start with Nomad Verify:** a Go library for signed content, append-only
+history, proof verification and detection of conflicting signed histories.
+The broader Nomad network is an integration testnet with remaining production
+requirements. This package is for technical evaluation and handover.
 
-It also ships `nomad-operator` and `nomad-topology` for an offline
-multi-administrator topology ceremony. Each operator generates separate
-Ed25519, X25519 and DKG secrets, publishes only a self-signed enrollment, signs
-the same complete topology draft and locally derives directed hop keys. The
-authority sees no operator private key and distributes no pairwise MAC or
-threshold secret.
+## See it work
+
+Requires Git and Go 1.25 or newer. The demonstrations need no external Go
+modules, account, API key, Docker, model download or paid infrastructure.
 
 ```bash
-nomad-operator init --id=operator-a --endpoint=host-a:4200 \
-  --partial-endpoint=https://host-a:4300 \
-  --dkg-endpoint=https://host-a:4400 \
-  --secret=node-secrets.json --enrollment=enrollment.json
-
-nomad-topology draft --network-id=nomad-live --epoch=1 \
-  --dkg-start-delay=10m --dkg-phase-duration=2m --dkg-threshold=2 \
-  --enrollments=a.json,b.json,c.json --out=topology-draft.json
-
-nomad-operator attest --secret=node-secrets.json \
-  --draft=topology-draft.json --out=operator-a.attestation.json
+git clone --branch codex/nomad-product-package-20260907 https://github.com/Jtensetti/nomad-testnet.git nomad
+cd nomad
+./nomad demo
+./nomad reader-demo
 ```
 
-After collecting exactly one attestation from every member, the authority uses
-`nomad-topology finalize`; every operator runs `nomad-operator verify` before
-starting its node. Every operator then runs `nomad-dkg` before the signed start
-time. The command exchanges only signed public ceremony traffic and writes one
-operator-local threshold share plus the identical all-operator-certified public
-committee certificate. The complete runbook is in `deploy/MULTI_OPERATOR.md`.
+The first command exercises seven existing tests against the actual transparency
+library: valid history, forged content, stale checkpoints, conflicting signed
+histories and witness signatures. PASS means those scenarios passed locally.
+The second opens a signed Swedish introduction to Nomad and searches it locally.
+It explicitly pins the fixture's publisher key and uses the lexical baseline.
+See the [evaluation guide](product/EVALUATION.md).
 
-## Run the live network
+## What you can evaluate
 
-Docker Compose supplies the reproducible single-administrator deployment:
+| Part | Useful for | Included today |
+| --- | --- | --- |
+| **Nomad Verify** | Checking signed content and release/identity histories | Go source, inclusion/consistency proofs, Ed25519 checkpoints, freshness checks, witness policies, adversarial tests |
+| **Nomad Reader** | Reading and searching an already supplied, verified collection | Linux CLI, macOS SwiftUI source, publisher trust checks, local cache and ranking |
+| **Nomad Network** | Researching content distribution whose emission plan does not depend on private reading | Fixed-cadence cells, mix/DKG/RLNC components, live testnet and deployment harnesses |
+
+The initial commercial conversation is **technology handover or a partner-owned
+integration**, with the buyer's team responsible for operation and release review.
+Read the [buyer brief](product/BUYER_BRIEF.md) and [handover scope](product/HANDOVER.md).
+
+## One checkout, traceable sources
+
+| Path | Contents |
+| --- | --- |
+| `sdk/` | Full pinned snapshots of all six core libraries, with tests and licences |
+| `browser/` | Full pinned reader/client repository |
+| `protocol/` | Specifications, threat model and readiness evidence |
+| `cmd/`, `live/`, `deploy/` | Network integration implementation |
+| `components/` | Exact library versions already used by the network integration |
+| `product/` | Evaluation guide, buyer brief, handover and current scope |
+
+Runtime and reader retain their existing component pins. Some copies are
+intentionally duplicated: consolidation does not silently upgrade cryptographic
+dependencies. [PACKAGING.lock.json](PACKAGING.lock.json) records every imported
+file and full source commit. Original repositories remain available for history.
+Browser-engine and unrelated upstream reference forks are outside this kit.
 
 ```bash
-./scripts/compose-e2e.sh
+./nomad check          # verify imported sources; requires Python 3
+./nomad status         # read the included readiness registry
+./nomad test           # verification module, race detector and vet
+./nomad test all       # every Go module; broader environment requirements
+./nomad package        # source ZIP from a clean committed checkout
 ```
 
-The script builds the locked-down image, bootstraps a signed epoch, runs three
-TLS DKG processes, compares their certified public result, starts three UDP
-nodes using three distinct distributed shares, three threshold-share servers,
-one public-cadence partial fetcher and one networkless materializer. It waits for
-the exact verified browser object,
-checks every process and container boundary, records packet/process/health
-evidence from the dedicated fabric bridge, and rejects a capture whose cells
-are not 1200 bytes or whose cadence/topology is wrong. Bootstrap and the
-materializer run with Docker networking disabled.
+## Current boundary
 
-To feed a locally installed Nomad Browser directly, set its existing object
-cache as the materializer destination before starting Compose:
+The pinned production registry records **2 MET, 27 PARTIAL and 1 BLOCKED** out
+of 30 requirements. These are development labels, not independent certification.
+The [status page](product/STATUS.md) explains the evidence and remaining work.
+No production anonymity guarantee, SLA, semantic model weights or turnkey web
+browser are offered by this evaluation package.
 
-```bash
-export NOMAD_VERIFIED_CACHE="$HOME/Library/Containers/io.nomad.browser/Data/Library/Application Support/NomadBrowser/objects"
-docker compose -f deploy/compose.yaml up --build
-```
+## Rights and contact
 
-Docker Desktop must be allowed to mount that directory. The browser performs
-only local cache reads and signature verification; it has no network
-entitlement. See `deploy/MULTI_OPERATOR.md` for deployment across independently
-controlled hosts.
+The owner selected the Nomad Restricted Source License for commercial protection
+and reports that MIT texts were introduced while the repositories were private.
+The pinned source copies retain differing licence texts as provenance. Their
+presence alone does not establish the history of permissions granted to others.
+Read [COMPONENT_LICENSES.md](COMPONENT_LICENSES.md) before reuse. A commercial
+agreement must identify the assets and rights, with any valid pre-existing and
+third-party permissions respected.
 
-## What the deterministic harness does
-
-1. Creates canonical content and a signed object manifest.
-2. Produces fixed 504-byte RLNC generation packets over GF(2^8).
-3. Encrypts them and performs two independently randomized, verified Neff
-   sequence shuffles through Kyber v4.
-4. Serializes each ciphertext as an exact 1200-byte wire cell.
-5. Emits 16 cells at a 20 ms cadence through the fixed-rate scheduler to four
-   UDP loopback peers selected by the public Selection Firewall plan.
-6. Captures real datagrams on the receiver side and checks size, destination,
-   count, cadence and public-plan conformance.
-7. Runs the same stream in an idle reader world and a concurrent private-query
-   world, then compares normalized observer traces.
-8. Parses, decrypts and RLNC-decodes only the captured cells, then verifies the
-   exact SHA-256 commitment and Ed25519 signatures locally.
-
-The workflow also inspects Go's dependency graph: network-domain modules may
-not import semantic selection/reconstruction modules, and private-domain
-modules may not import the fabric, planner or mix.
-
-## Reproducible private-module composition
-
-The component repositories are private, so a repository-scoped Actions token
-cannot check them out. `components/` is a generated source snapshot used only
-for integration CI. `COMPONENTS.lock` records the exact source commit for every
-snapshot. Component changes must update both the snapshot and lock entry.
-
-## Live security status
-
-**Live testnet software, not yet an audited production anonymity network.** The
-live path uses networked authenticated Pedersen DKG output, unanimous committee
-activation, 2-of-3 proved threshold decryption and one verified Neff shuffle per
-operator. Its one-host Compose profile demonstrates process, key and cache
-separation; it cannot prove that three organizations independently administer
-the operators. The exact release gate and remaining external production
-requirements are in `LIVE_DOD.md` and `DKG_DOD.md`.
-
-The lexical hashing embedder is an offline development baseline, not a semantic
-model. A real embedding model must remain local.
-
-```bash
-go test -race ./...
-go vet ./...
-./scripts/compose-e2e.sh
-```
+Owner: **Jonatan Tensetti**, [Jtensetti on GitHub](https://github.com/Jtensetti).
+For enquiries, [open an issue](https://github.com/Jtensetti/nomad-testnet/issues/new).
+Network engineers can start with the [original integration guide](LEGACY_README.md).

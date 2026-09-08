@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fail closed unless a capture shows stable exact-size UDP cadence per sender."""
 
+import argparse
 import collections
 import json
 import statistics
@@ -10,18 +11,31 @@ from capture import CaptureError, read_capture
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        print("usage: verify-pcap.py CAPTURE.pcap EXPECTED_INTERVAL_MS", file=sys.stderr)
-        return 2
-    try:
-        expected_interval = float(sys.argv[2]) / 1000.0
-    except ValueError:
-        raise SystemExit("expected interval must be numeric")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("capture")
+    parser.add_argument("interval_ms", type=float)
+    # The filter and the sender floor are arguments because this rule now
+    # judges two different captures: the three-operator relay fabric, and the
+    # publication path, where the senders are publishers and there are fewer of
+    # them. Reimplementing the rule for the second one would let the two drift,
+    # and the direction they would drift is toward agreeing that a capture is
+    # fine.
+    parser.add_argument("--filter", default="udp port 4200",
+                        help="capture filter expression")
+    parser.add_argument("--min-senders", type=int, default=3,
+                        help="fewest distinct senders the capture must show")
+    parser.add_argument("--min-cells", type=int, default=20,
+                        help="fewest cells each sender must have emitted")
+    arguments = parser.parse_args()
+
+    expected_interval = arguments.interval_ms / 1000.0
     if expected_interval <= 0:
         raise SystemExit("expected interval must be positive")
+    if arguments.min_senders < 1:
+        raise SystemExit("at least one sender must be required")
     try:
         times, sizes, packet_destinations, sources = read_capture(
-            sys.argv[1], "udp port 4200"
+            arguments.capture, arguments.filter
         )
     except CaptureError as error:
         raise SystemExit(f"capture could not be read in full: {error}")
@@ -32,11 +46,13 @@ def main() -> int:
             raise SystemExit(f"non-1200-byte UDP payload from {source}: {size}")
         flows[source].append(time)
         destinations[source].add(destination)
-    if len(flows) < 3:
-        raise SystemExit(f"capture has {len(flows)} senders, want at least 3")
+    if len(flows) < arguments.min_senders:
+        raise SystemExit(
+            f"capture has {len(flows)} senders, want at least {arguments.min_senders}"
+        )
     evidence = {}
     for source, timestamps in sorted(flows.items()):
-        if len(timestamps) < 20:
+        if len(timestamps) < arguments.min_cells:
             raise SystemExit(f"sender {source} has only {len(timestamps)} cells")
         intervals = [right - left for left, right in zip(timestamps, timestamps[1:])]
         minimum = min(intervals)

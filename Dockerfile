@@ -2,16 +2,27 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY . .
-RUN CGO_ENABLED=0 go test ./live/... && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-bootstrap ./cmd/nomad-bootstrap && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-dkg ./cmd/nomad-dkg && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-fixture-publisher ./cmd/nomad-fixture-publisher && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-node ./cmd/nomad-node && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-operator ./cmd/nomad-operator && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-topology ./cmd/nomad-topology && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-share ./cmd/nomad-share && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-partial-fetch ./cmd/nomad-partial-fetch && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nomad-materializer ./cmd/nomad-materializer
+# The image is built from code that passes its own tests, and -short is what
+# keeps that affordable. The heavy campaigns -- the timing measurements, the
+# unlinkability experiments, the cross-process boundary run -- already gate
+# this image: live-compose declares `needs: unit`, so `go test -race ./...`
+# has passed on this exact commit before the build starts. Running them a
+# second time here, without the race detector, adds minutes and finds nothing
+# the first run did not.
+#
+# What -short does NOT skip is the bulk of the suite, which is the point: an
+# operator building this image outside CI still gets the guard.
+RUN CGO_ENABLED=0 go test -short ./live/... && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ \
+        ./cmd/nomad-bootstrap \
+        ./cmd/nomad-dkg \
+        ./cmd/nomad-fixture-publisher \
+        ./cmd/nomad-node \
+        ./cmd/nomad-operator \
+        ./cmd/nomad-topology \
+        ./cmd/nomad-share \
+        ./cmd/nomad-partial-fetch \
+        ./cmd/nomad-materializer
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates

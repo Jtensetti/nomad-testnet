@@ -1,0 +1,14 @@
+# Nomad browser integration snapshot lock v2
+#
+# module  commit  branch  tree
+#
+# tree is the sha256 of this component's sorted lines in COMPONENTS.sha256,
+# so the lock cannot be left behind when the vendored code moves. v1 recorded
+# only the commit and nothing checked it: all three entries had gone stale and
+# the digest lock passing said nothing about it, because the two files pin
+# different things -- COMPONENTS.sha256 pins the bytes that ship, and this
+# pins which upstream commit they came from. snapshot_test.go checks it now,
+# as nomad-testnet's has since its own v2.
+github.com/Jtensetti/nomad-local-reconstruction 71549da claude/nomad-production-ready-dxv4ql 89d07dd05e4a1fb6f36e98d6222af87f6fe7eea7a73de2b5675fbf5da505e4c7
+github.com/Jtensetti/nomad-selection-firewall f45a5f9 claude/nomad-production-ready-dxv4ql 042f7ebd075fa1f6684598af3e23e739898bfc750c697d7744489e1753fc6d35
+github.com/Jtensetti/nomad-semantic-basins 1c08c6d claude/nomad-production-ready-dxv4ql 93866cd0ca40815ffb3718fff4c502c3ce22af3255acc9405423d2486e63dac4

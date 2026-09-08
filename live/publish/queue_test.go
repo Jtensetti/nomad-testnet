@@ -25,7 +25,7 @@ func testPublisher(t *testing.T) ed25519.PublicKey {
 func openQueue(t *testing.T, maximum int) (*Queue, string) {
 	t.Helper()
 	root := t.TempDir()
-	queue, err := Open(root, Options{MaximumFragments: maximum})
+	queue, err := Open(root, Options{MaximumFragments: maximum, Key: UnprotectedKeyFile()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +76,10 @@ func TestQueueIsBoundedAndFailsLocally(t *testing.T) {
 	}
 }
 
+// This says the fragment file does not contain the plaintext. It says nothing
+// about who can decrypt it, which depends entirely on the key source: see
+// TestAPassphraseQueueKeepsNothingOnDiskThatOpensIt and
+// TestTheUnprotectedKeyFileOpensItsOwnQueue for the two answers.
 func TestFragmentsAreEncryptedAtRest(t *testing.T) {
 	queue, root := openQueue(t, 64)
 	publisher := testPublisher(t)
@@ -155,7 +159,7 @@ func TestNextDrainsAndReconstructs(t *testing.T) {
 
 func TestQueueSurvivesReopen(t *testing.T) {
 	root := t.TempDir()
-	queue, err := Open(root, Options{MaximumFragments: 64})
+	queue, err := Open(root, Options{MaximumFragments: 64, Key: UnprotectedKeyFile()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +173,7 @@ func TestQueueSurvivesReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := Open(root, Options{MaximumFragments: 64})
+	reopened, err := Open(root, Options{MaximumFragments: 64, Key: UnprotectedKeyFile()})
 	if err != nil {
 		t.Fatal(err)
 	}

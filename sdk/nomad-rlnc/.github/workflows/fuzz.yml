@@ -1,0 +1,78 @@
+name: fuzz
+
+# The two fuzz targets have never been fuzzed by anything automated. `go test`
+# replays their committed seed corpus, which makes them regression tests and
+# nothing more: a target that stopped exploring -- an input filter that rejects
+# everything early, a constructor that fails on all but the seeds -- would
+# replay those seeds perfectly and look exactly like one that works.
+#
+# Not in the per-push job, because fuzzing is not deterministic and a new
+# crasher would turn a push red for a reason unrelated to its diff. Here, where
+# a red run means "the fuzzer found something" and the crasher is uploaded so
+# it can be committed as a seed.
+on:
+  # A push trigger, because `schedule` and `workflow_dispatch` fire only from
+  # the default branch and this file will not be there for a while. A workflow
+  # that cannot run is worth less than no workflow, because it looks like
+  # coverage. See nomad-protocol F-28.
+  push:
+    paths:
+      - "rlnc/**"
+      - ".github/workflows/fuzz.yml"
+  workflow_dispatch:
+  schedule:
+    # Once a day once this is on the default branch: a fuzzer's value is in
+    # the runs nobody asked for.
+    - cron: '41 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - FuzzBoundedDecoderStaysWithinBudget
+          - FuzzHonestGenerationDecodesExactly
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: {go-version-file: go.mod}
+
+      - name: Fuzz ${{ matrix.target }}
+        run: |
+          go test ./rlnc/ -run '^$' -fuzz '^${{ matrix.target }}$' \
+            -fuzztime=240s | tee fuzz.log
+
+      # A fuzzer that explores nothing passes by finding nothing, exactly as a
+      # scan that returns nothing does. Four minutes finds dozens of new inputs
+      # locally; zero means the target is no longer reachable past its seeds,
+      # and that is a broken target rather than a clean run.
+      - name: Require the target to have explored
+        run: |
+          interesting=$(grep -o 'new interesting: [0-9]*' fuzz.log | tail -1 | grep -o '[0-9]*$')
+          test -n "$interesting" || { echo "no coverage line in the fuzzer output"; exit 1; }
+          echo "${{ matrix.target }} found $interesting new interesting inputs"
+          test "$interesting" -gt 0 || {
+            echo "the target explored nothing past its seed corpus, so it is"
+            echo "replaying seeds rather than fuzzing"
+            exit 1
+          }
+
+      - name: Upload any crasher the fuzzer wrote
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-crashers-${{ matrix.target }}
+          path: |
+            rlnc/testdata/fuzz/**
+            fuzz.log
+          if-no-files-found: warn

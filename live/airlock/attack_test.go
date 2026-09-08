@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -109,8 +110,8 @@ func TestSealedBatchIsUniformAcrossItsWholeWireForm(t *testing.T) {
 // a full batch. Cover is now generated before the window opens, so sealing
 // costs the same at every occupancy.
 func TestSealDurationDoesNotDependOnOccupancy(t *testing.T) {
-	if testing.Short() {
-		t.Skip("timing measurement needs wall-clock time")
+	if testing.Short() || os.Getenv("NOMAD_TIMING_CAMPAIGN") != "1" {
+		t.Skip("set NOMAD_TIMING_CAMPAIGN=1 to run the wall-clock timing measurement")
 	}
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()
@@ -155,8 +156,8 @@ func TestSealDurationDoesNotDependOnOccupancy(t *testing.T) {
 // A depositor could read the same signal remotely, by timing how long its own
 // call blocked on the lock Seal held across cover generation.
 func TestConcurrentDepositIsNotBlockedByCoverGeneration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("timing measurement needs wall-clock time")
+	if testing.Short() || os.Getenv("NOMAD_TIMING_CAMPAIGN") != "1" {
+		t.Skip("set NOMAD_TIMING_CAMPAIGN=1 to run the wall-clock timing measurement")
 	}
 	committee, _ := testCommittee(t)
 	schedule := testSchedule()

@@ -1,0 +1,13 @@
+repo: nomad-selection-firewall
+commit: fea6344d27270d25d50d18ded60327e67e0e4153
+branch: claude/nomad-production-ready-dxv4ql
+dirty: 0
+go version go1.24.7 linux/amd64
+--- gofmt ---
+GOFMT_OK
+--- build ---
+BUILD_OK
+--- vet ---
+VET_OK
+--- test ---
+ok  	github.com/Jtensetti/nomad-selection-firewall/firewall	1.021s

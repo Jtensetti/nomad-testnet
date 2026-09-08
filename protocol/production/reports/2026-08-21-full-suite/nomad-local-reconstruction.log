@@ -1,0 +1,12 @@
+repo: nomad-local-reconstruction
+commit: ff25433515095f3af30367a1cd5523a33de5bc9e
+branch: claude/nomad-production-ready-dxv4ql
+dirty: 0
+go version go1.24.7 linux/amd64
+--- build ---
+BUILD_OK
+--- vet ---
+VET_OK
+--- test ---
+ok  	github.com/Jtensetti/nomad-local-reconstruction/reconstruct	1.039s
+ok  	github.com/Jtensetti/nomad-local-reconstruction/site	1.636s
