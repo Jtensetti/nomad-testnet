@@ -1,0 +1,301 @@
+{
+ "version": "nomad-browser-url-decisions-v1",
+ "description": "Frozen decisions for the renderer URL gate. Each entry is a URL a renderer might dispatch and the decision egress.Policy.CheckRendererURL must make. Published so the decisions are data a second implementation can check rather than behaviour only this codebase's tests describe.",
+ "cases": [
+  {
+   "url": "nomad:/index.html",
+   "allow": true,
+   "why": "an ordinary local resource"
+  },
+  {
+   "url": "nomad:/assets/style.css",
+   "allow": true,
+   "why": "a nested local resource"
+  },
+  {
+   "url": "nomad:/a-b_c.1/d.png",
+   "allow": true,
+   "why": "punctuation a real bundle path uses"
+  },
+  {
+   "url": "nomad://host/index.html",
+   "allow": false,
+   "why": "a host turns a local scheme into a network one"
+  },
+  {
+   "url": "nomad:/index.html?q=1",
+   "allow": false,
+   "why": "a query is reader state in a URL"
+  },
+  {
+   "url": "nomad:/index.html#top",
+   "allow": false,
+   "why": "a fragment is reader state in a URL"
+  },
+  {
+   "url": "nomad://user@/index.html",
+   "allow": false,
+   "why": "user info has no meaning for a local read"
+  },
+  {
+   "url": "nomad:/../etc/passwd",
+   "allow": false,
+   "why": "traversal out of the bundle"
+  },
+  {
+   "url": "nomad:/a/../../etc/passwd",
+   "allow": false,
+   "why": "traversal after a legitimate segment"
+  },
+  {
+   "url": "nomad:/%2e%2e/etc/passwd",
+   "allow": false,
+   "why": "percent-encoded traversal decodes before the check"
+  },
+  {
+   "url": "nomad:/%2E%2E%2Fetc/passwd",
+   "allow": false,
+   "why": "upper-case percent-encoded traversal"
+  },
+  {
+   "url": "nomad:/a//b",
+   "allow": false,
+   "why": "an empty segment is not a canonical path"
+  },
+  {
+   "url": "nomad:/",
+   "allow": true,
+   "why": "the bundle root is a well-formed local path; whether a resource exists there is the adapter's lookup to answer, not the URL gate's, and both gates must agree on the path rule"
+  },
+  {
+   "url": "nomad:",
+   "allow": false,
+   "why": "no path at all"
+  },
+  {
+   "url": "nomad:/a\\b",
+   "allow": false,
+   "why": "a backslash is a separator on some platforms and not others"
+  },
+  {
+   "url": "about:blank",
+   "allow": true,
+   "why": "the empty document a renderer needs"
+  },
+  {
+   "url": "about:config",
+   "allow": false,
+   "why": "any other about: page is engine surface"
+  },
+  {
+   "url": "about:blank#x",
+   "allow": false,
+   "why": "not the exact value"
+  },
+  {
+   "url": "ABOUT:BLANK",
+   "allow": false,
+   "why": "the exact-match rule is on the raw URL, not the parsed scheme"
+  },
+  {
+   "url": "http://example.invalid/x",
+   "allow": false,
+   "why": "http is not a renderer-local scheme"
+  },
+  {
+   "url": "https://example.invalid/x",
+   "allow": false,
+   "why": "https is not a renderer-local scheme"
+  },
+  {
+   "url": "ftp://example.invalid/x",
+   "allow": false,
+   "why": "ftp is not a renderer-local scheme"
+  },
+  {
+   "url": "ws://example.invalid/x",
+   "allow": false,
+   "why": "ws is not a renderer-local scheme"
+  },
+  {
+   "url": "wss://example.invalid/x",
+   "allow": false,
+   "why": "wss is not a renderer-local scheme"
+  },
+  {
+   "url": "file://example.invalid/x",
+   "allow": false,
+   "why": "file is not a renderer-local scheme"
+  },
+  {
+   "url": "blob://example.invalid/x",
+   "allow": false,
+   "why": "blob is not a renderer-local scheme"
+  },
+  {
+   "url": "javascript:alert(1)",
+   "allow": false,
+   "why": "javascript is not a renderer-local scheme"
+  },
+  {
+   "url": "chrome://example.invalid/x",
+   "allow": false,
+   "why": "chrome is not a renderer-local scheme"
+  },
+  {
+   "url": "resource://example.invalid/x",
+   "allow": false,
+   "why": "resource is not a renderer-local scheme"
+  },
+  {
+   "url": "moz-extension://example.invalid/x",
+   "allow": false,
+   "why": "moz-extension is not a renderer-local scheme"
+  },
+  {
+   "url": "view-source://example.invalid/x",
+   "allow": false,
+   "why": "view-source is not a renderer-local scheme"
+  },
+  {
+   "url": "data:text/plain,x",
+   "allow": true,
+   "why": "text/plain is on the non-scriptable allowlist"
+  },
+  {
+   "url": "data:text/css,x",
+   "allow": true,
+   "why": "text/css is on the non-scriptable allowlist"
+  },
+  {
+   "url": "data:image/png,x",
+   "allow": true,
+   "why": "image/png is on the non-scriptable allowlist"
+  },
+  {
+   "url": "data:image/jpeg,x",
+   "allow": true,
+   "why": "image/jpeg is on the non-scriptable allowlist"
+  },
+  {
+   "url": "data:image/gif,x",
+   "allow": true,
+   "why": "image/gif is on the non-scriptable allowlist"
+  },
+  {
+   "url": "data:image/webp,x",
+   "allow": true,
+   "why": "image/webp is on the non-scriptable allowlist"
+  },
+  {
+   "url": "data:image/avif,x",
+   "allow": true,
+   "why": "image/avif is on the non-scriptable allowlist"
+  },
+  {
+   "url": "data:font/woff,x",
+   "allow": true,
+   "why": "font/woff is on the non-scriptable allowlist"
+  },
+  {
+   "url": "data:font/woff2,x",
+   "allow": true,
+   "why": "font/woff2 is on the non-scriptable allowlist"
+  },
+  {
+   "url": "data:font/ttf,x",
+   "allow": true,
+   "why": "font/ttf is on the non-scriptable allowlist"
+  },
+  {
+   "url": "data:font/otf,x",
+   "allow": true,
+   "why": "font/otf is on the non-scriptable allowlist"
+  },
+  {
+   "url": "data:application/pdf,x",
+   "allow": true,
+   "why": "application/pdf is on the non-scriptable allowlist"
+  },
+  {
+   "url": "data:text/html,x",
+   "allow": false,
+   "why": "text/html can carry script, and a navigated data: URL has an opaque origin that does not inherit the adapter's CSP"
+  },
+  {
+   "url": "data:image/svg+xml,x",
+   "allow": false,
+   "why": "image/svg+xml can carry script, and a navigated data: URL has an opaque origin that does not inherit the adapter's CSP"
+  },
+  {
+   "url": "data:application/javascript,x",
+   "allow": false,
+   "why": "application/javascript can carry script, and a navigated data: URL has an opaque origin that does not inherit the adapter's CSP"
+  },
+  {
+   "url": "data:text/javascript,x",
+   "allow": false,
+   "why": "text/javascript can carry script, and a navigated data: URL has an opaque origin that does not inherit the adapter's CSP"
+  },
+  {
+   "url": "data:application/xhtml+xml,x",
+   "allow": false,
+   "why": "application/xhtml+xml can carry script, and a navigated data: URL has an opaque origin that does not inherit the adapter's CSP"
+  },
+  {
+   "url": "data:application/xml,x",
+   "allow": false,
+   "why": "application/xml can carry script, and a navigated data: URL has an opaque origin that does not inherit the adapter's CSP"
+  },
+  {
+   "url": "data:text/xml,x",
+   "allow": false,
+   "why": "text/xml can carry script, and a navigated data: URL has an opaque origin that does not inherit the adapter's CSP"
+  },
+  {
+   "url": "data:application/ecmascript,x",
+   "allow": false,
+   "why": "application/ecmascript can carry script, and a navigated data: URL has an opaque origin that does not inherit the adapter's CSP"
+  },
+  {
+   "url": "data:module,x",
+   "allow": false,
+   "why": "module can carry script, and a navigated data: URL has an opaque origin that does not inherit the adapter's CSP"
+  },
+  {
+   "url": "data:,x",
+   "allow": true,
+   "why": "RFC 2397 defaults an omitted media type to text/plain, which is on the non-scriptable allowlist"
+  },
+  {
+   "url": "data:TEXT/PLAIN,x",
+   "allow": true,
+   "why": "media types are case-insensitive"
+  },
+  {
+   "url": "data:text/plain;base64,eA==",
+   "allow": true,
+   "why": "base64 is a transfer encoding, not a type"
+  },
+  {
+   "url": "data:text/html;base64,eA==",
+   "allow": false,
+   "why": "base64 does not make html non-scriptable"
+  },
+  {
+   "url": "data:text/plain;charset=utf-8,x",
+   "allow": true,
+   "why": "a charset parameter is not a different type"
+  },
+  {
+   "url": "data:;base64,eA==",
+   "allow": true,
+   "why": "an omitted media type is text/plain even with a transfer encoding; a browser will not run it as script"
+  },
+  {
+   "url": "data:text/plain;base64;charset=x,y",
+   "allow": false,
+   "why": "a header this malformed must not be read as though the type were the first token, because that is how a scriptable type slips past a prefix match"
+  }
+ ]
+}

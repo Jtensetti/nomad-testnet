@@ -1,0 +1,5 @@
+=== nomad-protocol
+=== commit: 7fa38b0ac8b6742e4cd0fde672d7fd4c8a9cf318
+--- scripts/check_docs.py ---
+Nomad protocol documentation checks passed
+exit=0

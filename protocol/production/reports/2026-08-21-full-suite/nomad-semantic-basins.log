@@ -1,0 +1,12 @@
+repo: nomad-semantic-basins
+commit: b5f8d5908765627b6aac649fc52f0cded8b1b2a2
+branch: claude/nomad-production-ready-dxv4ql
+dirty: 0
+go version go1.24.7 linux/amd64
+--- build ---
+BUILD_OK
+--- vet ---
+VET_OK
+--- test ---
+ok  	github.com/Jtensetti/nomad-semantic-basins/basin	1.143s
+?   	github.com/Jtensetti/nomad-semantic-basins/cmd/basin	[no test files]

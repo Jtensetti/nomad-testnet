@@ -1,40 +1,52 @@
-# Licences of the vendored components
+# Rights and source provenance
 
-`components/*` are byte-for-byte snapshots of separate repositories, so each
-carries the licence its upstream carries. When that differs from this
-repository's own licence, the difference has to be written down here or
-`supplychain/licence_test.go` fails: a licence changing under a vendored tree
-is exactly the kind of thing that arrives in a snapshot diff nobody reads.
+The top-level `LICENSE` is the Nomad Restricted Source License 1.0 already
+adopted on this repository's `main` on 2026-08-27. It does not replace licences
+or permissions attached to imported or previously published code.
 
-This file records what is true. It does not resolve anything, and nothing in
-it should be read as legal advice or as a decision that has been made.
+The integration code was also published under MIT at the development commit
+in `PACKAGING.lock.json`. Its exact notice is retained in
+`LICENSES/nomad-testnet-MIT-before-consolidation.txt`. This packaging does not
+claim to withdraw those permissions. Newly added packaging material follows
+the top-level licence, subject to pre-existing and third-party rights.
 
-## This repository
+| Scope | Licence in the pinned source |
+| --- | --- |
+| `browser/` | NOMAD RESTRICTED SOURCE LICENSE 1.0; nested components retain their licences |
+| `protocol/` | MIT License; embedded skills retain recorded upstream attribution |
+| `sdk/nomad-constant-rate-fabric/` | NOMAD RESTRICTED SOURCE LICENSE 1.0 |
+| `sdk/nomad-anytrust-mix-sim/` | MIT License |
+| `sdk/nomad-local-reconstruction/` | MIT License |
+| `sdk/nomad-rlnc/` | MIT License |
+| `sdk/nomad-selection-firewall/` | MIT License |
+| `sdk/nomad-semantic-basins/` | MIT License |
+| `components/nomad-constant-rate-fabric/` | NOMAD RESTRICTED SOURCE LICENSE 1.0 |
+| Other integration snapshots: nomad-anytrust-mix-sim, nomad-local-reconstruction, nomad-rlnc, nomad-selection-firewall, nomad-semantic-basins | MIT License |
+| `browser/components/` | MIT License, as recorded in each component's LICENSE |
 
-`LICENSE`: MIT.
+Every snapshot includes its original LICENSE, unchanged. Exact revisions and
+file digests are in `PACKAGING.lock.json`; integration dependency pins remain
+in the existing `COMPONENTS.lock` and `COMPONENTS.sha256` files. External Go
+dependencies such as Kyber, fixbuf and Go extended libraries retain their own
+licences. This package does not claim ownership of them.
 
-## Mismatches
+## What a commercial agreement can cover
 
-| Component | Its licence | Status |
-|---|---|---|
-| `nomad-constant-rate-fabric` | `NOMAD RESTRICTED SOURCE LICENSE 1.0` | **UNRESOLVED — needs the project owner** |
+- Permission to use owner-controlled restricted portions for an agreed purpose.
+- A defined handover of architecture, evidence, source history and stewardship.
+- Newly commissioned adaptation, if a delivery team and funding are agreed.
+- Transfer of owner-controlled rights, subject to contributor/provenance review.
 
-### nomad-constant-rate-fabric
+The MIT verification library can already be used under MIT. Payment is not
+required merely to exercise those rights. An offer involving it must identify
+the additional handover, future work or other assets being purchased.
 
-Upstream adopted the Nomad Restricted Source License 1.0 on its `main`
-(`8b00852`, merged in `e0d8301`) on 2026-08-27. This repository vendors that
-tree and is itself MIT, so an MIT-licensed repository now ships code under a
-more restrictive licence.
+No exclusive ownership of all included software is represented. Before a rights
+transfer, identify the exact files and rights, check contributor ownership and
+distinguish current branch licences from earlier versions. The historical
+licensing blocker in `protocol/production/EXTERNAL_BLOCKERS.md` is retained as
+evidence, not silently marked resolved by this inventory.
 
-The snapshot carries the upstream licence deliberately. `COMPONENTS.sha256`
-pins the vendored tree by content and `supplychain/snapshot_test.go` fails when
-the snapshot and its upstream disagree, so replacing the vendored `LICENSE`
-with this repository's own would make the manifest describe a tree that does
-not exist upstream. Vendoring faithfully and recording the conflict is the
-honest option; hiding it inside the snapshot is not.
-
-Two of the nine repositories carry the restricted licence (`Nomad-browser` and
-`nomad-constant-rate-fabric`) and seven carry MIT. Which licence applies where,
-and what an MIT repository may do with restricted-source code it vendors, is a
-decision for the project owner rather than for whoever last ran the vendoring
-script. Recorded as EB-10 in `nomad-protocol production/EXTERNAL_BLOCKERS.md`.
+The Darkbloom/Eigen Labs, Firefox, Chromium, Nym and other reference forks are
+not incorporated. Their presence elsewhere in the account does not make them
+Nomad-owned commercial assets.

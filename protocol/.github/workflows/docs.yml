@@ -1,0 +1,36 @@
+name: docs
+on: [push, pull_request]
+permissions:
+  contents: read
+concurrency:
+  # A superseded run tells nobody anything: it is testing a candidate that has
+  # already been replaced, while consuming a runner the new candidate needs.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 scripts/check_docs.py
+      - name: Check out the code repositories the claim matrix cites
+        run: |
+          # The matrix names tests that live in the sibling repositories, so
+          # the check that they exist needs them present. They are cloned at
+          # the branch under development, falling back to the default branch
+          # once that branch has merged.
+          branch=claude/nomad-production-ready-dxv4ql
+          for repo in nomad-testnet nomad-anytrust-mix-sim nomad-constant-rate-fabric \
+                      nomad-local-reconstruction nomad-rlnc nomad-selection-firewall \
+                      nomad-semantic-basins Nomad-browser; do
+            url="https://github.com/${{ github.repository_owner }}/$repo.git"
+            git clone --depth 1 --branch "$branch" "$url" "../$repo" 2>/dev/null \
+              || git clone --depth 1 "$url" "../$repo"
+          done
+      - name: Every test the claim matrix cites must exist
+        env:
+          # Declared, so a repository that failed to clone fails the run rather
+          # than being reported as nothing to check.
+          NOMAD_REQUIRE_SIBLING_REPOS: '1'
+        run: python3 scripts/check-cited-tests.py

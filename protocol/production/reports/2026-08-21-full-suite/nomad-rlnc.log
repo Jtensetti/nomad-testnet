@@ -1,0 +1,11 @@
+repo: nomad-rlnc
+commit: d7c017c66f1c3e3e74c2ab32c9495248f91e162f
+branch: claude/nomad-production-ready-dxv4ql
+dirty: 0
+go version go1.24.7 linux/amd64
+--- build ---
+BUILD_OK
+--- vet ---
+VET_OK
+--- test ---
+ok  	github.com/Jtensetti/nomad-rlnc/rlnc	1.280s

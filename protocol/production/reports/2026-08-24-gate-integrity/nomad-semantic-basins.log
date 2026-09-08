@@ -1,0 +1,20 @@
+=== repository: nomad-semantic-basins
+=== commit:     29e2d97c4e44b475acec4ecbd9df288cba5d38c0
+=== branch:     claude/nomad-production-ready-dxv4ql
+=== worktree:   0 modified files
+=== toolchain:  go version go1.25.13 linux/amd64
+=== date:       2026-08-25T06:22:10Z
+
+--- go build ./... ---
+exit=0
+--- go vet ./... ---
+exit=0
+--- gofmt -l ---
+exit=0
+--- go test -race -count=1 ./... ---
+ok  	github.com/Jtensetti/nomad-semantic-basins/basin	2.454s
+?   	github.com/Jtensetti/nomad-semantic-basins/cmd/basin	[no test files]
+exit=0
+--- govulncheck ./... ---
+No vulnerabilities found.
+exit=0

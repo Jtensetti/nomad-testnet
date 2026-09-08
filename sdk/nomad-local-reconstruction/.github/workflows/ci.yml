@@ -1,0 +1,53 @@
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  # A superseded run tells nobody anything: it is testing a candidate that has
+  # already been replaced, while consuming a runner the new candidate needs.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.x'
+      - name: Verify formatting
+        run: |
+          # This package is vendored into nomad-testnet and Nomad-browser,
+          # where a formatting difference shows up as spurious divergence
+          # between the copy that ships and the copy that is developed.
+          unformatted="$(gofmt -l .)"
+          if test -n "$unformatted"; then
+            printf 'unformatted Go files:\n%s\n' "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+      - name: Test, with the environment declaring what it can run
+        # A skip is green. Declaring the capability turns "python3 is missing"
+        # from a silent skip into a failure, so the cross-implementation check
+        # cannot stop running without anyone noticing.
+        env:
+          NOMAD_REQUIRE_CAPABILITY_GATES: '1'
+        run: go test -race ./...
+      - run: go vet ./...
+      - name: Static analysis, failing closed
+        run: |
+          # staticcheck exits 0 when it cannot analyse a module, so "clean" and
+          # "read nothing" are the same exit code. The script proves the tool is
+          # analysing with a positive control before it trusts a clean run.
+          ./scripts/run-staticcheck.sh
+      - name: Verify the vulnerability gate still fails closed
+        run: ./scripts/test-scan-vulnerabilities.sh
+      - name: Scan dependencies for reachable vulnerabilities
+        run: |
+          # A vulnerability gate in one repository is a gate on one
+          # repository. This ran only in Nomad-browser, leaving the
+          # integration root and the cryptographic core unscanned.
+          ./scripts/scan-vulnerabilities.sh

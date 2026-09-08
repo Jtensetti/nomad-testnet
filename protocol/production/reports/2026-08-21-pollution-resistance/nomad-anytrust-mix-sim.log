@@ -1,0 +1,14 @@
+repo: nomad-anytrust-mix-sim
+commit: 7f7d7ad155c421d47b311fe0339103d255ef70e5
+branch: claude/nomad-production-ready-dxv4ql
+dirty: 0
+go version go1.25.0 linux/amd64
+--- gofmt ---
+GOFMT_OK
+--- build ---
+BUILD_OK
+--- vet ---
+VET_OK
+--- test ---
+?   	github.com/Jtensetti/nomad-anytrust-mix-sim/cmd/mix-sim	[no test files]
+ok  	github.com/Jtensetti/nomad-anytrust-mix-sim/mix	27.470s
