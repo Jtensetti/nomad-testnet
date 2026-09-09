@@ -1,0 +1,52 @@
+name: chatgpt-nomad-bundle
+
+on:
+  push:
+    branches:
+      - chatgpt/nomad-bundle-20260909
+    paths:
+      - .github/workflows/chatgpt-nomad-bundle.yml
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Collect Nomad repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bundle
+          repos=(
+            nomad-protocol
+            nomad-constant-rate-fabric
+            nomad-anytrust-mix-sim
+            nomad-rlnc
+            nomad-semantic-basins
+            nomad-local-reconstruction
+            nomad-selection-firewall
+            nomad-testnet
+            Nomad-browser
+          )
+          for repo in "${repos[@]}"; do
+            git clone --depth 1 "https://github.com/Jtensetti/${repo}.git" "bundle/${repo}"
+            rm -rf "bundle/${repo}/.git"
+          done
+          {
+            echo "Nomad repository bundle"
+            echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            printf '%s\n' "${repos[@]}"
+          } > bundle/MANIFEST.txt
+          zip -qr Nomad-repos-2026-09-09.zip bundle
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nomad-repos-bundle
+          path: Nomad-repos-2026-09-09.zip
+          if-no-files-found: error
+          retention-days: 7
