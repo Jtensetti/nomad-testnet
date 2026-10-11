@@ -37,4 +37,3 @@ func inv(a byte) byte {
 	}
 	return pow(a, 254)
 }
-

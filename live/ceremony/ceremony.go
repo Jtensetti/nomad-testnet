@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -353,7 +354,7 @@ func strictJSON(encoded []byte, destination any) error {
 }
 
 func decodeFixed(encoded string, size int) ([]byte, error) {
-	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	decoded, err := strictjson.DecodeBase64(encoded)
 	if err != nil || len(decoded) != size {
 		return nil, errors.New("invalid base64 or length")
 	}

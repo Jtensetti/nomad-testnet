@@ -6,6 +6,12 @@ import (
 	"testing"
 )
 
+// A gate that skips has not passed. These resolve the package graph with
+// go/build, a library call over source that is present whenever tests run
+// at all, so a failure here means the capability boundary was not checked
+// rather than that this environment is unusual -- and an unchecked boundary
+// on the emission path is exactly what must not pass quietly.
+
 // The CI workflow runs the same check over the transitive graph. This one
 // runs in `go test` so the boundary fails at the point of change rather than
 // on a push, and states which imports are the problem.
@@ -48,7 +54,8 @@ func TestAirlockHasNoNetworkOrSchedulingCapability(t *testing.T) {
 	root := "github.com/Jtensetti/nomad-testnet/live/airlock"
 	pkg, err := build.Import(root, "", 0)
 	if err != nil {
-		t.Skipf("cannot resolve the package graph in this environment: %v", err)
+		t.Fatalf("cannot resolve the package graph, so the capability boundary went "+
+			"unchecked: %v", err)
 	}
 	for _, next := range pkg.Imports {
 		if strings.HasPrefix(next, "golang.org/x/") {

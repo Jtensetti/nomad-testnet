@@ -1,7 +1,16 @@
-# Nomad integration snapshot lock v1
-github.com/Jtensetti/nomad-anytrust-mix-sim 1f75bfb79182db0968db00e612852f0ee6d028e8 agent/nomad-v0.1
-github.com/Jtensetti/nomad-constant-rate-fabric 872686c3626fda1381b9058887e90e9a343cd367 agent/nomad-v0.1
-github.com/Jtensetti/nomad-local-reconstruction 032f6f1ad3984e86d5812bd6ae07143d7a806a24 agent/nomad-v0.1
-github.com/Jtensetti/nomad-rlnc b395aa0b0dbd129a2820dbe02ee96d2a87f87273 agent/nomad-v0.1
-github.com/Jtensetti/nomad-selection-firewall 0bc4acd475f10bbfe0388629a3d00810a6579328 agent/nomad-v0.1
-github.com/Jtensetti/nomad-semantic-basins 644bff28a2075b66426f1cf4b5960ae18363ac60 agent/nomad-v0.1
+# Nomad integration snapshot lock v2
+#
+# module  commit  branch  tree
+#
+# tree is the sha256 of this component's sorted lines in
+# COMPONENTS.sha256, so the lock cannot be left behind when the vendored
+# code moves. v1 recorded only the commit, nothing checked it, and it sat
+# pointing at a fabric with no ErrCellDropped while the vendored tree had
+# one: anyone auditing which fabric this integration carries would have
+# checked out the wrong code. supplychain/snapshot_test.go checks it now.
+github.com/Jtensetti/nomad-anytrust-mix-sim 37f41ee claude/nomad-production-ready-dxv4ql 4478efa7cce1f5dbb78e1ecdd00ea039f0bc155880790417db3b619f9f74dd5a
+github.com/Jtensetti/nomad-constant-rate-fabric af4ba45 claude/nomad-production-ready-dxv4ql 45fc4e3cfd9c6763b7e0fb6af1f6699ce9382aeb9b2c6a5611f15bac6edec1bf
+github.com/Jtensetti/nomad-local-reconstruction 71549da claude/nomad-production-ready-dxv4ql 89d07dd05e4a1fb6f36e98d6222af87f6fe7eea7a73de2b5675fbf5da505e4c7
+github.com/Jtensetti/nomad-rlnc af0865e claude/nomad-production-ready-dxv4ql ab50183ef849f242a1572c8a2c064ff1e4f7505ac6acc61441c63222e5a8b1cb
+github.com/Jtensetti/nomad-selection-firewall f45a5f9 claude/nomad-production-ready-dxv4ql 042f7ebd075fa1f6684598af3e23e739898bfc750c697d7744489e1753fc6d35
+github.com/Jtensetti/nomad-semantic-basins bd3c5cc claude/nomad-production-ready-dxv4ql 546b8e868bbac5cd615aa36daa8fbf4772e06e4678920bf8afb91f07b889fc33

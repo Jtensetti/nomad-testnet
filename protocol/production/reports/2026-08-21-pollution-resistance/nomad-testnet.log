@@ -1,0 +1,63 @@
+repo: nomad-testnet
+commit: 99a80c18e443ad7cb7432e8309a3c2795f2ef0d8
+branch: claude/nomad-production-ready-dxv4ql
+dirty: 0
+go version go1.25.0 linux/amd64
+--- gofmt ---
+GOFMT_OK
+--- build ---
+BUILD_OK
+--- vet ---
+VET_OK
+--- test ---
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-bootstrap	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-conformance	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-dkg	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-fixture-publisher	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-materializer	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-node	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-operator	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-partial-fetch	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-share	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-testnet	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-topology	[no test files]
+ok  	github.com/Jtensetti/nomad-testnet/live/airlock	355.418s
+?   	github.com/Jtensetti/nomad-testnet/live/batch	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/live/bundle	[no test files]
+ok  	github.com/Jtensetti/nomad-testnet/live/ceremony	1.547s
+?   	github.com/Jtensetti/nomad-testnet/live/committee	[no test files]
+ok  	github.com/Jtensetti/nomad-testnet/live/conformance	3.116s
+ok  	github.com/Jtensetti/nomad-testnet/live/dkg	4.615s
+ok  	github.com/Jtensetti/nomad-testnet/live/epoch	35.844s
+?   	github.com/Jtensetti/nomad-testnet/live/fetchplan	[no test files]
+ok  	github.com/Jtensetti/nomad-testnet/live/hop	1.025s
+ok  	github.com/Jtensetti/nomad-testnet/live/materialize	149.021s
+ok  	github.com/Jtensetti/nomad-testnet/live/node	3.955s
+ok  	github.com/Jtensetti/nomad-testnet/live/partialfetch	1.140s
+ok  	github.com/Jtensetti/nomad-testnet/live/publish	1.059s
+ok  	github.com/Jtensetti/nomad-testnet/live/rawcache	1.032s
+ok  	github.com/Jtensetti/nomad-testnet/live/share	1.126s
+ok  	github.com/Jtensetti/nomad-testnet/live/telemetry	1.026s
+ok  	github.com/Jtensetti/nomad-testnet/live/topology	1.278s
+ok  	github.com/Jtensetti/nomad-testnet/live/uplink	21.101s
+ok  	github.com/Jtensetti/nomad-testnet/live/wire	1.023s
+ok  	github.com/Jtensetti/nomad-testnet/testnet	22.807s
+=== component modules ===
+-- components/nomad-anytrust-mix-sim/
+ok  	github.com/Jtensetti/nomad-anytrust-mix-sim/mix	27.618s
+-- components/nomad-constant-rate-fabric/
+ok  	github.com/Jtensetti/nomad-constant-rate-fabric/fabric	1.184s
+-- components/nomad-local-reconstruction/
+ok  	github.com/Jtensetti/nomad-local-reconstruction/reconstruct	1.045s
+-- components/nomad-rlnc/
+ok  	github.com/Jtensetti/nomad-rlnc/rlnc	1.323s
+-- components/nomad-selection-firewall/
+ok  	github.com/Jtensetti/nomad-selection-firewall/firewall	1.022s
+-- components/nomad-semantic-basins/
+ok  	github.com/Jtensetti/nomad-semantic-basins/basin	1.166s
+=== conformance corpus ===
+corpus matches: 5 vectors, digest 18000519156db3ff565ec7a906cd85d7988cdce446ffea4d4f8a6bbdd079ee30
+=== analysis self-tests ===
+all analysis self-tests passed
+=== campaign verdict self-tests ===
+all campaign verdict self-tests passed

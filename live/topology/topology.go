@@ -13,13 +13,17 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 )
 
 const (
@@ -134,12 +138,23 @@ func Verify(encoded []byte, authority ed25519.PublicKey, now time.Time) (Verifie
 	if len(authority) != ed25519.PublicKeySize {
 		return Verified{}, errors.New("pinned topology authority key is invalid")
 	}
+	// Reject a document that more than one parser can read differently before
+	// anything is decoded from it. A signature check cannot catch this: each
+	// implementation verifies against whatever it parsed, so a duplicate key
+	// makes one accept what another refuses.
+	if err := strictjson.RejectDuplicateKeys(encoded); err != nil {
+		return Verified{}, fmt.Errorf("topology encoding is ambiguous: %w", err)
+	}
 	var signed Signed
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&signed); err != nil {
 		return Verified{}, fmt.Errorf("decode topology: %w", err)
 	}
+	// Depth: the strict walk above already refuses trailing content, and
+	// disabling only this line leaves the corpus differential test green.
+	// Kept because the entailment lives in another package, and named so a
+	// reader does not take this for the check that provides the property.
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return Verified{}, errors.New("trailing topology data")
 	}
@@ -349,32 +364,40 @@ func validateDocument(document Document, now time.Time) error {
 			return fmt.Errorf("duplicate operator ID %q", operator.ID)
 		}
 		ids[operator.ID] = struct{}{}
-		host, port, err := net.SplitHostPort(operator.Endpoint)
-		if err != nil || host == "" || port == "" {
-			return fmt.Errorf("operator %s has invalid UDP endpoint", operator.ID)
+		canonical, err := canonicalEndpoint(operator.Endpoint)
+		if err != nil {
+			return fmt.Errorf("operator %s has invalid UDP endpoint: %w", operator.ID, err)
 		}
-		if _, exists := endpoints[operator.Endpoint]; exists {
+		if _, exists := endpoints[canonical]; exists {
 			return fmt.Errorf("duplicate UDP endpoint %q", operator.Endpoint)
 		}
-		endpoints[operator.Endpoint] = struct{}{}
+		endpoints[canonical] = struct{}{}
 		partialURL, err := url.Parse(operator.PartialEndpoint)
 		if err != nil || (partialURL.Scheme != "http" && partialURL.Scheme != "https") ||
 			partialURL.Hostname() == "" || partialURL.Port() == "" || partialURL.User != nil ||
 			(partialURL.Path != "" && partialURL.Path != "/") || partialURL.RawQuery != "" || partialURL.Fragment != "" {
 			return fmt.Errorf("operator %s has invalid partial endpoint", operator.ID)
 		}
-		if _, exists := partialEndpoints[operator.PartialEndpoint]; exists {
+		canonicalPartial, err := canonicalURLEndpoint(partialURL)
+		if err != nil {
+			return fmt.Errorf("operator %s has invalid partial endpoint: %w", operator.ID, err)
+		}
+		if _, exists := partialEndpoints[canonicalPartial]; exists {
 			return fmt.Errorf("duplicate partial endpoint %q", operator.PartialEndpoint)
 		}
-		partialEndpoints[operator.PartialEndpoint] = struct{}{}
+		partialEndpoints[canonicalPartial] = struct{}{}
 		dkgURL, err := url.Parse(operator.DKGEndpoint)
 		if err != nil || !validCeremonyURL(dkgURL) {
 			return fmt.Errorf("operator %s has invalid DKG endpoint", operator.ID)
 		}
-		if _, exists := dkgEndpoints[operator.DKGEndpoint]; exists {
+		canonicalDKG, err := canonicalURLEndpoint(dkgURL)
+		if err != nil {
+			return fmt.Errorf("operator %s has invalid DKG endpoint: %w", operator.ID, err)
+		}
+		if _, exists := dkgEndpoints[canonicalDKG]; exists {
 			return fmt.Errorf("duplicate DKG endpoint %q", operator.DKGEndpoint)
 		}
-		dkgEndpoints[operator.DKGEndpoint] = struct{}{}
+		dkgEndpoints[canonicalDKG] = struct{}{}
 		if _, err := decodeFixed(operator.IdentityKey, ed25519.PublicKeySize); err != nil {
 			return fmt.Errorf("operator %s has invalid identity key", operator.ID)
 		}
@@ -478,7 +501,11 @@ func validateStrongConnectivity(document Document) error {
 }
 
 func canonicalDocument(document Document) ([]byte, error) {
-	return json.Marshal(cloneDocument(document))
+	encoded, err := json.Marshal(cloneDocument(document))
+	if err != nil {
+		return nil, err
+	}
+	return canonicalJSON(encoded)
 }
 
 func operatorSigningMessage(document Document, operatorID string) ([]byte, error) {
@@ -494,7 +521,11 @@ func operatorSigningMessage(document Document, operatorID string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	return signingMessage("nomad-operator-attestation-v3", encoded), nil
+	canonical, err := canonicalJSON(encoded)
+	if err != nil {
+		return nil, err
+	}
+	return signingMessage("nomad-operator-attestation-v3", canonical), nil
 }
 
 func verifyAttestations(document Document) error {
@@ -537,11 +568,23 @@ func signingMessage(domain string, payload []byte) []byte {
 }
 
 func decodeFixed(encoded string, size int) ([]byte, error) {
-	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	decoded, err := strictjson.DecodeBase64(encoded)
 	if err != nil || len(decoded) != size {
 		return nil, errors.New("invalid base64 or length")
 	}
 	return decoded, nil
+}
+
+// OperatorIdentity decodes an operator's signing key from the signed topology.
+// Callers that verify or accuse an operator must resolve its key this way
+// rather than carrying one alongside, so the key they act on is always the one
+// the topology signature covers.
+func OperatorIdentity(operator Operator) (ed25519.PublicKey, error) {
+	decoded, err := decodeFixed(operator.IdentityKey, ed25519.PublicKeySize)
+	if err != nil {
+		return nil, errors.New("invalid operator identity key")
+	}
+	return ed25519.PublicKey(decoded), nil
 }
 
 // StableOperatorIDs is used in evidence and bootstrap output. It deliberately
@@ -553,4 +596,196 @@ func (v Verified) StableOperatorIDs() []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+// canonicalEndpoint reduces an operator's UDP endpoint to one form per socket
+// address, so the distinctness check compares what endpoints mean rather than
+// how they are spelled: [::1] and [0:0:0:0:0:0:0:1], 2001:db8::1 with and
+// without zero padding, 127.0.0.1 and [::ffff:127.0.0.1], a trailing root
+// label, and differences of case are all one address.
+//
+// It establishes distinctness of socket addresses only. Two ports on one host
+// are two operators here, and nothing in a document can show that two
+// operators are two machines, still less two trust domains.
+//
+// It parses rather than resolves: netip.ParseAddr never touches DNS, so a
+// signed document's validity does not depend on what a resolver says at the
+// moment someone checks it, and admission performs no network lookup.
+//
+// The host grammar is strict. An unparseable address is refused rather than
+// falling through to "treat it as a hostname", which would admit
+// operator-a\x00, a trailing space, [foo:bar], 2130706433 and 0177.0.0.1 --
+// each of which some implementation reads as a different host than Go does. A
+// document one implementation admits as N operators and another as N-1 has not
+// been agreed on, which is the same divergence strictjson.RejectDuplicateKeys
+// refuses for JSON.
+//
+// Two hostnames pointing at one machine are indistinguishable here, and
+// nothing here knows whether two addresses belong to one operator.
+func canonicalEndpoint(endpoint string) (string, error) {
+	host, port, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return "", err
+	}
+	if host == "" || port == "" {
+		return "", errors.New("endpoint needs both a host and a port")
+	}
+	number, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return "", fmt.Errorf("invalid port %q", port)
+	}
+	if number == 0 {
+		// Port zero means "any port" to the operating system, so it names
+		// nothing a peer can send to. Admitting it defers the failure to the
+		// first node that tries to use the document.
+		return "", errors.New("port must not be zero")
+	}
+
+	canonicalHost, err := canonicalHost(host, strings.HasPrefix(endpoint, "["))
+	if err != nil {
+		return "", err
+	}
+	return canonicalHost + ":" + strconv.FormatUint(number, 10), nil
+}
+
+// loopbackHost is the single key every loopback spelling folds onto:
+// 127.0.0.0/8, ::1, and the name localhost, which RFC 6761 reserves and
+// requires to resolve to loopback. validCeremonyURL already relies on that, and
+// two operators on one machine's loopback are not two operators however they
+// are written.
+const loopbackHost = "loopback"
+
+func canonicalHost(host string, bracketed bool) (string, error) {
+	if address, err := netip.ParseAddr(host); err == nil {
+		address = address.Unmap()
+		if address.Zone() != "" {
+			// A zone distinguishes interfaces, but live/node keys inbound
+			// peers on IP and port with the zone dropped, so two zone-distinct
+			// peers are indistinguishable as datagram sources at runtime.
+			// Admitting one would promise a distinctness the node does not
+			// deliver, so it is refused rather than silently flattened.
+			return "", errors.New("a zoned address cannot be distinguished at runtime")
+		}
+		if !usableAsPeerAddress(address) {
+			// Same rationale as port zero: these name nothing a peer can send
+			// to, and "0.0.0.0" is the natural typo when a listen flag is
+			// copied into an endpoint field.
+			return "", fmt.Errorf("address %s cannot be a peer endpoint", address)
+		}
+		if address.IsLoopback() {
+			return loopbackHost, nil
+		}
+		return address.String(), nil
+	}
+	if bracketed {
+		return "", errors.New("a bracketed host must be an IP address")
+	}
+	return canonicalHostname(host)
+}
+
+func usableAsPeerAddress(address netip.Addr) bool {
+	if !address.IsValid() || address.IsUnspecified() || address.IsMulticast() {
+		return false
+	}
+	// The IPv4 limited broadcast address has no netip predicate of its own.
+	return address != netip.AddrFrom4([4]byte{255, 255, 255, 255})
+}
+
+// canonicalHostname folds a DNS name to one spelling and refuses anything that
+// is not one.
+//
+// The grammar is the letter-digit-hyphen form, which is what a UDP endpoint in
+// a signed document can honestly carry: ASCII only, so folding is ASCII-only
+// too. strings.ToLower is Unicode-aware and maps U+212A KELVIN SIGN onto "k",
+// which would merge two byte-distinct hosts and reject a legitimate topology --
+// the one false-merge direction that existed here.
+func canonicalHostname(host string) (string, error) {
+	// Exactly one trailing dot is the root label: operator-a. is operator-a.
+	name := strings.TrimSuffix(host, ".")
+	if name == "" || strings.HasSuffix(name, ".") {
+		return "", errors.New("host is empty or has a trailing empty label")
+	}
+	if len(name) > 253 {
+		return "", errors.New("host is longer than a DNS name may be")
+	}
+	lowered := make([]byte, 0, len(name))
+	for _, label := range strings.Split(name, ".") {
+		if len(label) == 0 || len(label) > 63 {
+			return "", fmt.Errorf("host label %q is empty or too long", label)
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return "", fmt.Errorf("host label %q begins or ends with a hyphen", label)
+		}
+		if len(lowered) > 0 {
+			lowered = append(lowered, '.')
+		}
+		for index := 0; index < len(label); index++ {
+			character := label[index]
+			switch {
+			case character >= 'a' && character <= 'z',
+				character >= '0' && character <= '9',
+				character == '-':
+				lowered = append(lowered, character)
+			case character >= 'A' && character <= 'Z':
+				lowered = append(lowered, character+('a'-'A'))
+			default:
+				return "", fmt.Errorf("host label %q contains a character that is not "+
+					"a letter, digit or hyphen", label)
+			}
+		}
+	}
+	// RFC 1123 2.1: the top-level label must not be all-numeric. The rule
+	// exists precisely so a hostname cannot be read as a dotted quad, and
+	// without it "2130706433" and "0177.0.0.1" pass as hostnames here while
+	// inet_aton reads both as 127.0.0.1.
+	labels := strings.Split(string(lowered), ".")
+	if allDigits(labels[len(labels)-1]) {
+		return "", errors.New("the top-level host label is all digits, so this is " +
+			"neither a hostname nor an address this parser accepts")
+	}
+	if string(lowered) == "localhost" {
+		return loopbackHost, nil
+	}
+	return string(lowered), nil
+}
+
+func allDigits(label string) bool {
+	if label == "" {
+		return false
+	}
+	for index := 0; index < len(label); index++ {
+		if label[index] < '0' || label[index] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// canonicalURLEndpoint reduces an operator's HTTP endpoint to one form per
+// socket address, exactly as canonicalEndpoint does for the UDP one.
+//
+// The same weakness applied and for the same reason: the distinctness check
+// compared raw strings, so "http://127.0.0.1:4300" and "http://127.0.0.1:4300/"
+// were two operators, as were a host in two cases and a scheme in two cases.
+//
+// The scheme is deliberately **not** part of the key. http://operator-a:4300
+// and https://operator-a:4300 are one host on one TCP port; keying on the
+// scheme would let two operators occupy that port by differing only in a field
+// that says how to talk to it rather than where it is. The scheme is still
+// validated by the caller, which is where it belongs. The path is likewise not
+// part of the key: the caller already constrains it to "" or "/", which are the
+// same resource and were the two spellings that compared unequal.
+func canonicalURLEndpoint(endpoint *url.URL) (string, error) {
+	// These guards are defence in depth. Every caller validates the URL first,
+	// so they are unreachable today; they are kept so this function is safe if
+	// somebody later calls it somewhere else.
+	if endpoint == nil {
+		return "", errors.New("endpoint is required")
+	}
+	host := endpoint.Hostname()
+	port := endpoint.Port()
+	if host == "" || port == "" {
+		return "", errors.New("endpoint needs both a host and a port")
+	}
+	return canonicalEndpoint(net.JoinHostPort(host, port))
 }

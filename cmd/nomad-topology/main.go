@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Jtensetti/nomad-testnet/live/ceremony"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -207,7 +208,7 @@ func loadAuthorityPrivate(path string) (ed25519.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	decoded, err := base64.StdEncoding.Strict().DecodeString(string(bytes.TrimSpace(encoded)))
+	decoded, err := strictjson.DecodeBase64(string(bytes.TrimSpace(encoded)))
 	if err != nil || len(decoded) != ed25519.PrivateKeySize {
 		return nil, errors.New("authority private key must be one strict-base64 Ed25519 private key")
 	}

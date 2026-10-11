@@ -295,24 +295,51 @@ func CreatePartialDecryption(committee ThresholdCommittee, member MemberSecret, 
 		"member-public": publicShare,
 	}
 	predicates := []proof.Predicate{proof.Rep("member-public", "share", "base")}
+
+	// The scalar multiplications are split across cores; the proof is not.
+	// The rest of this call is proof.HashProve over the conjunction, which is
+	// kyber's to parallelise: a proof assembled by reaching into another
+	// library's prover is a proof nobody can review.
+	//
+	// Names and predicate order are built afterwards in the sequence they
+	// were built in before, so this produces the proof it produced before.
+	//
+	// secret and the batch points are shared across lanes rather than cloned
+	// into them. kyber's Mul writes only its receiver and geScalarMult reads
+	// its scalar and point arguments, so an operand is safe to share;
+	// TestSharedOperandsSurviveConcurrentUse holds that to it.
+	type product struct {
+		point   kyber.Point
+		encoded [pointSize]byte
+		err     error
+	}
+	width := batch.Len()
+	products := make([]product, ChunkCount*width)
+	parallel(len(products), func(l *lane, index int) {
+		point := l.point().Mul(secret, batch.x[index/width][index%width])
+		encoded, err := point.MarshalBinary()
+		switch {
+		case err != nil:
+			products[index].err = err
+		case len(encoded) != pointSize:
+			products[index].err = errors.New("unexpected partial-decryption point size")
+		default:
+			products[index].point = point
+			copy(products[index].encoded[:], encoded)
+		}
+	})
+
 	pointIndex := 0
 	for row := 0; row < ChunkCount; row++ {
-		for col := 0; col < batch.Len(); col++ {
+		for col := 0; col < width; col++ {
+			if products[pointIndex].err != nil {
+				return nil, products[pointIndex].err
+			}
 			cipherName := fmt.Sprintf("cipher-%d", pointIndex)
 			partialName := fmt.Sprintf("partial-%d", pointIndex)
-			partialPoint := s.Point().Mul(secret, batch.x[row][col])
-			encoded, err := partialPoint.MarshalBinary()
-			if err != nil {
-				return nil, err
-			}
-			if len(encoded) != pointSize {
-				return nil, errors.New("unexpected partial-decryption point size")
-			}
-			var stored [pointSize]byte
-			copy(stored[:], encoded)
-			partial.Points = append(partial.Points, stored)
+			partial.Points = append(partial.Points, products[pointIndex].encoded)
 			points[cipherName] = batch.x[row][col]
-			points[partialName] = partialPoint
+			points[partialName] = products[pointIndex].point
 			predicates = append(predicates, proof.Rep(partialName, "share", cipherName))
 			pointIndex++
 		}
@@ -435,7 +462,7 @@ func ThresholdDecryptColumns(committee ThresholdCommittee, batch *Batch, partial
 	if err != nil {
 		return nil, err
 	}
-	return recoverColumns(newSuite(), committee, batch, decoded)
+	return recoverColumns(committee, batch, decoded)
 }
 
 func verifiedPartialPoints(committee ThresholdCommittee, batch *Batch,
@@ -443,25 +470,45 @@ func verifiedPartialPoints(committee ThresholdCommittee, batch *Batch,
 	if len(partials) < int(committee.Threshold) {
 		return nil, errors.New("not enough partial decryptions")
 	}
+	// Partials are verified in parallel: each is a proof over every point in
+	// the batch, and three in series was the largest cost in a release.
+	//
+	// Results are then walked in slice order, so a batch carrying both an
+	// invalid partial and a duplicated member reports the fault it reported
+	// before. An error whose identity depends on scheduling is a coin toss.
+	type verified struct {
+		points []kyber.Point
+		err    error
+	}
+	results := make([]verified, len(partials))
+	parallel(len(partials), func(l *lane, index int) {
+		partial := partials[index]
+		if err := VerifyPartialDecryption(committee, batch, partial); err != nil {
+			results[index].err = err
+			return
+		}
+		points := make([]kyber.Point, len(partial.Points))
+		for i := range partial.Points {
+			points[i] = l.point()
+			if err := points[i].UnmarshalBinary(partial.Points[i][:]); err != nil {
+				results[index].err = err
+				return
+			}
+		}
+		results[index].points = points
+	})
+
 	seen := make(map[uint32]struct{}, len(partials))
 	decoded := make(map[uint32][]kyber.Point, len(partials))
-	s := newSuite()
-	for _, partial := range partials {
-		if err := VerifyPartialDecryption(committee, batch, partial); err != nil {
-			return nil, err
+	for index, partial := range partials {
+		if results[index].err != nil {
+			return nil, results[index].err
 		}
 		if _, exists := seen[partial.MemberIndex]; exists {
 			return nil, errors.New("duplicate partial-decryption member")
 		}
 		seen[partial.MemberIndex] = struct{}{}
-		points := make([]kyber.Point, len(partial.Points))
-		for index := range partial.Points {
-			points[index] = s.Point()
-			if err := points[index].UnmarshalBinary(partial.Points[index][:]); err != nil {
-				return nil, err
-			}
-		}
-		decoded[partial.MemberIndex] = points
+		decoded[partial.MemberIndex] = results[index].points
 	}
 	if len(seen) < int(committee.Threshold) {
 		return nil, errors.New("not enough unique partial decryptions")
@@ -469,33 +516,64 @@ func verifiedPartialPoints(committee ThresholdCommittee, batch *Batch,
 	return decoded, nil
 }
 
-func recoverColumns(s proof.Suite, committee ThresholdCommittee, batch *Batch,
+// recoverColumns interpolates each column's shared point and subtracts it.
+//
+// Columns are independent -- each reads the batch and the decoded partials and
+// writes only its own entry -- so they are recovered in parallel. This is the
+// most expensive step the committee performs, and it was the whole of it:
+// eighteen Lagrange recoveries and eighteen point subtractions per column,
+// one after another.
+//
+// Nothing about the result changes. There is no randomness here to reorder and
+// no proof transcript to disturb: the interpolation is deterministic, and it
+// was already independent of the order the partials are visited in, since the
+// map it reads them from has never had one. Each worker takes its own suite
+// for the same reason EncryptCell does -- kyber's suite carries a random
+// stream that is not safe to share, even where this path does not draw from
+// it.
+//
+// A column that fails to decrypt still fails only itself, which is the
+// property ThresholdDecryptColumns exists for; a recovery failure is still a
+// committee-level fault and still fails the whole call.
+func recoverColumns(committee ThresholdCommittee, batch *Batch,
 	decoded map[uint32][]kyber.Point) ([]DecryptedCell, error) {
-	out := make([]DecryptedCell, batch.Len())
-	for col := 0; col < batch.Len(); col++ {
+	columns := batch.Len()
+	out := make([]DecryptedCell, columns)
+	failures := make([]error, columns)
+	parallel(columns, func(l *lane, col int) {
 		for row := 0; row < ChunkCount; row++ {
-			pointIndex := row*batch.Len() + col
-			publicShares := make([]*share.PubShare, 0, len(decoded))
-			for memberIndex, points := range decoded {
-				publicShares = append(publicShares, &share.PubShare{I: memberIndex, V: points[pointIndex]})
+			pointIndex := row*columns + col
+			shares := make([]*share.PubShare, 0, len(decoded))
+			for member, points := range decoded {
+				shares = append(shares, &share.PubShare{I: member, V: points[pointIndex]})
 			}
-			sharedPoint, err := share.RecoverCommit(s, publicShares, committee.Threshold, uint32(len(committee.Members)))
+			sharedPoint, err := share.RecoverCommit(l.suite, shares,
+				committee.Threshold, uint32(len(committee.Members)))
 			if err != nil {
-				// Share recovery failing is a committee-level fault rather
-				// than a property of this column, so it fails the call.
-				return nil, fmt.Errorf("recover shared point for cell %d chunk %d: %w", col, row, err)
+				// A recovery failure is a committee-level fault, not a
+				// property of this column, so it fails the whole call.
+				failures[col] = fmt.Errorf(
+					"recover shared point for cell %d chunk %d: %w", col, row, err)
+				return
 			}
-			message := s.Point().Sub(batch.y[row][col], sharedPoint)
-			data, err := message.Data()
+			data, err := l.point().Sub(batch.y[row][col], sharedPoint).Data()
 			if err != nil {
 				out[col].Err = fmt.Errorf("decrypt cell %d chunk %d: %w", col, row, err)
-				break
+				return
 			}
 			if len(data) != ChunkSize {
-				out[col].Err = fmt.Errorf("decrypt cell %d chunk %d: got %d bytes", col, row, len(data))
-				break
+				out[col].Err = fmt.Errorf("decrypt cell %d chunk %d: got %d bytes",
+					col, row, len(data))
+				return
 			}
 			copy(out[col].Cell[row*ChunkSize:], data)
+		}
+	})
+	// Reported in column order rather than in whichever order the workers
+	// finished, so the error a caller sees does not depend on scheduling.
+	for _, err := range failures {
+		if err != nil {
+			return nil, err
 		}
 	}
 	return out, nil

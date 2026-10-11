@@ -1,0 +1,52 @@
+name: macOS verification build
+
+on:
+  push:
+    # Deliberately not pinned to one branch. It used to run only on
+    # agent/macos-browser, so a push to any other branch built and shipped
+    # nothing through the security gate. The path filter below is what limits
+    # this workflow; a branch name should not be.
+    paths:
+      - "macos/**"
+      - ".github/workflows/macos-dmg.yml"
+  pull_request:
+    paths:
+      - "macos/**"
+      - ".github/workflows/macos-dmg.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A superseded run tells nobody anything: it is testing a candidate that has
+  # already been replaced, while consuming a runner the new candidate needs.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run exact-head Swift test suite
+        run: swift test --package-path macos
+
+      - name: Build, sandbox, ad-hoc sign and verify universal DMG
+        env:
+          NOMAD_VERSION: 0.1.0-alpha.3
+          NOMAD_BUILD_NUMBER: ${{ github.run_number }}
+        run: bash macos/scripts/build_dmg.sh
+
+      - name: Upload verification artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Nomad-Browser-macOS-verification-${{ github.sha }}
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+            dist/effective-entitlements.plist
+          if-no-files-found: error
+          retention-days: 30

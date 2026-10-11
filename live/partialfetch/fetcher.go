@@ -20,6 +20,8 @@ import (
 
 	"github.com/Jtensetti/nomad-testnet/live/hop"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
+
+	"github.com/Jtensetti/nomad-testnet/live/durable"
 )
 
 const MaximumPartialBytes = 4 << 20
@@ -190,12 +192,7 @@ func writeOrCompare(path string, encoded []byte) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return err
 	}
-	dir, err := os.Open(directory)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
+	return durable.Directory(directory)
 }
 
 func ensureOutputDirectory(path string) error {

@@ -1,0 +1,13 @@
+# Never translate line endings, on any platform.
+#
+# This repository's evidence is byte-exact: conformance/wire-vectors.json is
+# sealed by a digest, COMPONENTS.sha256 pins vendored trees by content, and
+# live/epoch/testdata is compared byte-for-byte against its encoder. Git's
+# default on Windows is core.autocrlf=true, which rewrites LF to CRLF on
+# checkout -- so the same commit produced different bytes there, the epoch
+# vector comparison failed, and a second implementer verifying the corpus on
+# Windows would have computed a different digest for it.
+#
+# A blanket rule rather than a list of extensions: the point is that a checkout
+# is the commit, and an exception is a file where that stops being true.
+* -text

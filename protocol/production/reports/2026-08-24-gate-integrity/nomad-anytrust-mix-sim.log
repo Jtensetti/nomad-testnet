@@ -1,0 +1,25 @@
+=== repository: nomad-anytrust-mix-sim
+=== commit:     9391eab66d3c1be5b9a7f7bf9e9d4cc3f5805eba
+=== branch:     claude/nomad-production-ready-dxv4ql
+=== worktree:   0 modified files
+=== toolchain:  go version go1.25.13 linux/amd64
+=== date:       2026-08-25T06:20:11Z
+
+--- go build ./... ---
+exit=0
+--- go vet ./... ---
+exit=0
+--- gofmt -l ---
+exit=0
+--- go test -race -count=1 ./... ---
+?   	github.com/Jtensetti/nomad-anytrust-mix-sim/cmd/mix-sim	[no test files]
+ok  	github.com/Jtensetti/nomad-anytrust-mix-sim/mix	101.909s
+exit=0
+--- govulncheck ./... ---
+
+Your code is affected by 0 vulnerabilities.
+This scan also found 0 vulnerabilities in packages you import and 15
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+Use '-show verbose' for more details.
+exit=0

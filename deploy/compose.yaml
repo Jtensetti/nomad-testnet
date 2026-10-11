@@ -4,10 +4,26 @@ x-locked-service: &locked-service
   build:
     context: ..
   image: nomad-live:testnet
+  # A panic otherwise prints goroutine stacks whose frame arguments are raw
+  # machine words, which for these processes can be key material, and the
+  # container runtime keeps whatever a crashing service wrote. Only the Go
+  # runtime's own variable turns this off, and it is read at startup, so it
+  # has to be set here rather than in the program.
+  environment:
+    GOTRACEBACK: none
   read_only: true
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
   pids_limit: 128
+  # A core file is the complete address space, so an application-level field
+  # allowlist and GOTRACEBACK cannot make one safe: the keys are in the dump
+  # whatever the telemetry schema permits. The operator runbook asks for
+  # LimitCORE=0 and this project cannot verify an operator's host, so the
+  # shipping Compose boundary enforces the equivalent where it can.
+  ulimits:
+    core:
+      soft: 0
+      hard: 0
   tmpfs:
     - /tmp:rw,noexec,nosuid,nodev,size=32m
   restart: unless-stopped
@@ -49,6 +65,10 @@ services:
       - --tls-certificate=/operator/dkg-tls.crt
       - --tls-private-key=/operator/dkg-tls.key
     environment:
+      # A merge key replaces this mapping rather than deep-merging it, so the
+      # anchor's GOTRACEBACK is lost unless it is repeated here. These are the
+      # processes holding DKG private identities.
+      GOTRACEBACK: none
       SSL_CERT_FILE: /config/dkg-test-ca.pem
     depends_on:
       bootstrap: {condition: service_completed_successfully}
@@ -74,6 +94,10 @@ services:
       - --tls-certificate=/operator/dkg-tls.crt
       - --tls-private-key=/operator/dkg-tls.key
     environment:
+      # A merge key replaces this mapping rather than deep-merging it, so the
+      # anchor's GOTRACEBACK is lost unless it is repeated here. These are the
+      # processes holding DKG private identities.
+      GOTRACEBACK: none
       SSL_CERT_FILE: /config/dkg-test-ca.pem
     depends_on:
       bootstrap: {condition: service_completed_successfully}
@@ -99,6 +123,10 @@ services:
       - --tls-certificate=/operator/dkg-tls.crt
       - --tls-private-key=/operator/dkg-tls.key
     environment:
+      # A merge key replaces this mapping rather than deep-merging it, so the
+      # anchor's GOTRACEBACK is lost unless it is repeated here. These are the
+      # processes holding DKG private identities.
+      GOTRACEBACK: none
       SSL_CERT_FILE: /config/dkg-test-ca.pem
     depends_on:
       bootstrap: {condition: service_completed_successfully}
@@ -159,7 +187,11 @@ services:
       - raw-a:/cache
       - state-a:/state
     healthcheck:
-      test: [CMD, test, -s, /state/health.json]
+      # Not "is the file there": a node no longer stops when a local condition
+      # breaks its emission path, so a process that is up and silently
+      # dropping every cell has to be caught by asking what it actually
+      # emitted. --max-silence is deployment policy, not protocol.
+      test: [CMD, nomad-node, --check-health=/state/health.json, --max-silence=5s]
       interval: 2s
       timeout: 1s
       retries: 20
@@ -186,7 +218,11 @@ services:
       - raw-b:/cache
       - state-b:/state
     healthcheck:
-      test: [CMD, test, -s, /state/health.json]
+      # Not "is the file there": a node no longer stops when a local condition
+      # breaks its emission path, so a process that is up and silently
+      # dropping every cell has to be caught by asking what it actually
+      # emitted. --max-silence is deployment policy, not protocol.
+      test: [CMD, nomad-node, --check-health=/state/health.json, --max-silence=5s]
       interval: 2s
       timeout: 1s
       retries: 20
@@ -213,7 +249,11 @@ services:
       - raw-c:/cache
       - state-c:/state
     healthcheck:
-      test: [CMD, test, -s, /state/health.json]
+      # Not "is the file there": a node no longer stops when a local condition
+      # breaks its emission path, so a process that is up and silently
+      # dropping every cell has to be caught by asking what it actually
+      # emitted. --max-silence is deployment policy, not protocol.
+      test: [CMD, nomad-node, --check-health=/state/health.json, --max-silence=5s]
       interval: 2s
       timeout: 1s
       retries: 20

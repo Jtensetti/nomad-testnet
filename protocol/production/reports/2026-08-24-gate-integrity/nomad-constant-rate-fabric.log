@@ -1,0 +1,20 @@
+=== repository: nomad-constant-rate-fabric
+=== commit:     8c7982096c6f7bd177b2f953ef8584597aefbb40
+=== branch:     claude/nomad-production-ready-dxv4ql
+=== worktree:   0 modified files
+=== toolchain:  go version go1.25.13 linux/amd64
+=== date:       2026-08-25T06:21:58Z
+
+--- go build ./... ---
+exit=0
+--- go vet ./... ---
+exit=0
+--- gofmt -l ---
+exit=0
+--- go test -race -count=1 ./... ---
+?   	github.com/Jtensetti/nomad-constant-rate-fabric/cmd/fabric-sim	[no test files]
+ok  	github.com/Jtensetti/nomad-constant-rate-fabric/fabric	1.175s
+exit=0
+--- govulncheck ./... ---
+No vulnerabilities found.
+exit=0

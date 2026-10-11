@@ -1,0 +1,53 @@
+# systemd user unit for the Nomad Linux client.
+#
+# PrivateNetwork=yes is the load-bearing line: the service gets its own network
+# namespace with nothing but a loopback interface, so the client's inability to
+# reach the network is enforced by the kernel and does not depend on the
+# program behaving. scripts/verify-networkless.sh proves the namespace is
+# actually empty, using a probe that succeeds outside it.
+#
+# Install to ~/.config/systemd/user/ and start with:
+#   systemctl --user start nomad-browser
+#
+# NOMAD_TRUST must name the publisher keys this client will render. There is no
+# default: a client with nothing anchored would be trusting whoever wrote the
+# object directory.
+
+[Unit]
+Description=Nomad browser (verified local objects only)
+Documentation=https://github.com/Jtensetti/nomad-browser
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/nomad-browser -objects %h/.local/share/nomad/objects -trust ${NOMAD_TRUST}
+Environment=NOMAD_TRUST=
+
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/nomad
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -3,3 +3,5 @@
 coverage.txt
 __pycache__/
 runtime/
+
+/dist/

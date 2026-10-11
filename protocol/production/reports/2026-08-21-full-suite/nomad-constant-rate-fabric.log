@@ -1,0 +1,12 @@
+repo: nomad-constant-rate-fabric
+commit: 8ed80c2fc56285099ab55bcc88981ad989d1528d
+branch: claude/nomad-production-ready-dxv4ql
+dirty: 0
+go version go1.24.7 linux/amd64
+--- build ---
+BUILD_OK
+--- vet ---
+VET_OK
+--- test ---
+?   	github.com/Jtensetti/nomad-constant-rate-fabric/cmd/fabric-sim	[no test files]
+ok  	github.com/Jtensetti/nomad-constant-rate-fabric/fabric	1.184s

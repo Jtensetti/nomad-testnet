@@ -1,0 +1,12 @@
+repo: nomad-rlnc
+commit: 70fc47cccb7f0aa5263f9eb9c9621c4d5b399845
+dirty: 0
+go version go1.24.7 linux/amd64
+--- gofmt ---
+GOFMT_OK
+--- build ---
+BUILD_OK
+--- vet ---
+VET_OK
+--- test ---
+ok  	github.com/Jtensetti/nomad-rlnc/rlnc	1.279s

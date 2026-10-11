@@ -1,0 +1,19 @@
+=== repository: nomad-rlnc
+=== commit:     8491ae380f4b98ed98d42d8c3453653bb4d01443
+=== branch:     claude/nomad-production-ready-dxv4ql
+=== worktree:   0 modified files
+=== toolchain:  go version go1.25.13 linux/amd64
+=== date:       2026-08-25T06:20:00Z
+
+--- go build ./... ---
+exit=0
+--- go vet ./... ---
+exit=0
+--- gofmt -l ---
+exit=0
+--- go test -race -count=1 ./... ---
+ok  	github.com/Jtensetti/nomad-rlnc/rlnc	1.225s
+exit=0
+--- govulncheck ./... ---
+No vulnerabilities found.
+exit=0

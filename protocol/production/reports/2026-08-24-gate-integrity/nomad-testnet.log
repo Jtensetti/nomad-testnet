@@ -1,0 +1,60 @@
+=== repository: nomad-testnet
+=== commit:     eece3e576adf442c0596f44e9f2fe43d0b08de2e
+=== branch:     claude/nomad-production-ready-dxv4ql
+=== worktree:   0 modified files
+=== toolchain:  go version go1.25.13 linux/amd64
+=== date:       2026-08-25T06:22:28Z
+
+--- go build ./... ---
+exit=0
+--- go vet ./... ---
+exit=0
+--- gofmt -l ---
+exit=0
+--- go test -race -count=1 ./... ---
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-bootstrap	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-conformance	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-dkg	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-fixture-publisher	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-materializer	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-node	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-operator	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-partial-fetch	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-share	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-testnet	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/cmd/nomad-topology	[no test files]
+ok  	github.com/Jtensetti/nomad-testnet/deploy	1.017s
+ok  	github.com/Jtensetti/nomad-testnet/live/airlock	289.061s
+ok  	github.com/Jtensetti/nomad-testnet/live/availability	1.432s
+?   	github.com/Jtensetti/nomad-testnet/live/batch	[no test files]
+?   	github.com/Jtensetti/nomad-testnet/live/bundle	[no test files]
+ok  	github.com/Jtensetti/nomad-testnet/live/ceremony	1.348s
+?   	github.com/Jtensetti/nomad-testnet/live/committee	[no test files]
+ok  	github.com/Jtensetti/nomad-testnet/live/conformance	11.551s
+ok  	github.com/Jtensetti/nomad-testnet/live/deposit	141.689s
+ok  	github.com/Jtensetti/nomad-testnet/live/dkg	4.054s
+ok  	github.com/Jtensetti/nomad-testnet/live/epoch	31.727s
+?   	github.com/Jtensetti/nomad-testnet/live/fetchplan	[no test files]
+ok  	github.com/Jtensetti/nomad-testnet/live/hop	1.018s
+ok  	github.com/Jtensetti/nomad-testnet/live/materialize	123.971s
+ok  	github.com/Jtensetti/nomad-testnet/live/node	5.356s
+ok  	github.com/Jtensetti/nomad-testnet/live/partialfetch	1.102s
+ok  	github.com/Jtensetti/nomad-testnet/live/publish	1.048s
+ok  	github.com/Jtensetti/nomad-testnet/live/rawcache	1.023s
+ok  	github.com/Jtensetti/nomad-testnet/live/share	1.088s
+ok  	github.com/Jtensetti/nomad-testnet/live/strictjson	1.017s
+ok  	github.com/Jtensetti/nomad-testnet/live/telemetry	1.628s
+ok  	github.com/Jtensetti/nomad-testnet/live/topology	2.320s
+ok  	github.com/Jtensetti/nomad-testnet/live/uplink	15.707s
+ok  	github.com/Jtensetti/nomad-testnet/live/wire	1.017s
+ok  	github.com/Jtensetti/nomad-testnet/supplychain	1.021s
+ok  	github.com/Jtensetti/nomad-testnet/testnet	23.282s
+exit=0
+--- govulncheck ./... ---
+
+Your code is affected by 0 vulnerabilities.
+This scan also found 0 vulnerabilities in packages you import and 14
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+Use '-show verbose' for more details.
+exit=0

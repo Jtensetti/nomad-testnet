@@ -360,19 +360,12 @@ func IsCover(cell mix.PlainCell) bool {
 }
 
 func coverColumn(committee mix.PublicKey) (mix.WireCell, error) {
-	// mix.Encrypt requires at least two columns, so a pair is encrypted and
-	// one column taken. Each column is an independent ElGamal encryption, so
-	// the discarded one carries no relationship to the kept one.
-	empty := EmptyFragment()
-	batch, err := mix.Encrypt(committee, []mix.PlainCell{empty, empty})
-	if err != nil {
-		return mix.WireCell{}, err
-	}
-	cells, err := batch.MarshalWire()
-	if err != nil {
-		return mix.WireCell{}, err
-	}
-	return cells[0], nil
+	// One cover column is one ElGamal encryption, so it uses the single-cell
+	// path. mix.Encrypt refuses fewer than two cells because a shuffle of one
+	// element is the identity, but that minimum is a property of a mix input
+	// and a cover column is not one. mix.EncryptCell produces exactly the wire
+	// form MarshalWire produces for one column.
+	return mix.EncryptCell(committee, EmptyFragment())
 }
 
 // shuffleColumns permutes in place with a uniform Fisher-Yates draw from the

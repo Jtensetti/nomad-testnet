@@ -1,0 +1,39 @@
+{
+  "policy_version": 1,
+  "note": "Every external module any Nomad module in this repository may require, with the exact version. A requirement that is not listed here fails supplychain/dependency_test.go, so a dependency cannot arrive silently -- not as a direct require, not as a transitive one pulled in by an update. Adding a line is the review step: it is where somebody decides that this module, from this author, at this version, may run inside a process that handles a reader's query.",
+  "what_this_does_not_establish": "That a listed module is benign. Nothing here reads upstream source. What it establishes is that the set is closed and reviewed, that every member is content-addressed in go.sum, and that a change to the set is visible in a diff rather than discovered later.",
+  "allowed": [
+    {
+      "module": "go.dedis.ch/kyber/v4",
+      "version": "v4.0.2",
+      "why": "the Edwards25519 group, ElGamal and Neff shuffle the anytrust mix is built on",
+      "reviewed": "2026-08-26"
+    },
+    {
+      "module": "go.dedis.ch/fixbuf",
+      "version": "v1.0.3",
+      "why": "kyber's fixed-size buffer helper; transitive, no independent use",
+      "reviewed": "2026-08-26"
+    },
+    {
+      "module": "golang.org/x/crypto",
+      "version": "v0.48.0",
+      "why": "HKDF for uplink session derivation, and kyber's transitive requirement",
+      "reviewed": "2026-08-26"
+    },
+    {
+      "module": "golang.org/x/sys",
+      "version": "v0.47.0",
+      "why": "syscall errno values the send path classifies against; transitive for x/crypto",
+      "reviewed": "2026-08-26"
+    }
+  ],
+  "allowed_older_in_components": [
+    {
+      "module": "golang.org/x/sys",
+      "version": "v0.42.0",
+      "why": "the vendored mix component's own go.mod pins an older patch. It is not what the integration root builds -- the root's v0.47.0 wins under minimal version selection -- and it is listed rather than silently tolerated so that raising it is a deliberate edit.",
+      "reviewed": "2026-08-26"
+    }
+  ]
+}

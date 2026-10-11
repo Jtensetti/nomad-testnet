@@ -4,7 +4,7 @@
 // It exists so that the frozen specification can be checked mechanically
 // rather than read: every vector is produced by the production encoder, and
 // the accompanying schema states the layout the vector must satisfy. A second
-// implementation built from the specification alone (PROD-03) reproduces the
+// implementation built from the specification alone reproduces the
 // same bytes or it is not conformant.
 //
 // Every vector is deterministic. Key material comes from a fixed seed and no

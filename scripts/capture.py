@@ -51,10 +51,42 @@ def parse_tcpdump(text):
     return times, sizes, destinations, sources
 
 
+# The first four bytes of a libpcap or pcapng file, in both byte orders and
+# in the nanosecond variants.
+PCAP_MAGICS = {
+    b"\xa1\xb2\xc3\xd4", b"\xd4\xc3\xb2\xa1",   # libpcap, microsecond
+    b"\xa1\xb2\x3c\x4d", b"\x4d\x3c\xb2\xa1",   # libpcap, nanosecond
+    b"\x0a\x0d\x0d\x0a",                           # pcapng
+}
+
+
+def is_pcap(path):
+    """Report whether a path holds a binary capture rather than rendered text."""
+    with open(path, "rb") as handle:
+        return handle.read(4) in PCAP_MAGICS
+
+
 def read_capture(path, expression="udp"):
-    """Run tcpdump over a capture file and parse all of its output."""
+    """Parse a capture, whether it is a pcap file or already-rendered text.
+
+    Captures reach this function two ways: as pcap files from tcpdump on a
+    real interface, and as text already in tcpdump's format, which is how the
+    in-process wire campaign records what it observed. Running tcpdump over
+    the second kind fails, and the failure previously surfaced as a rejection
+    -- the rule reported that two worlds differed when in fact it had never
+    read them. The format identifies itself in its first four bytes, so the
+    decision is made on the file rather than on its name.
+    """
+    if not is_pcap(path):
+        with open(path, "r", encoding="utf-8", errors="strict") as handle:
+            return parse_tcpdump(handle.read())
     result = subprocess.run(
         ["tcpdump", "-tt", "-nn", "-r", path] + expression.split(),
-        check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
+    if result.returncode != 0:
+        raise CaptureError(
+            f"tcpdump could not read {path}: exit {result.returncode}: "
+            f"{result.stderr.strip()}"
+        )
     return parse_tcpdump(result.stdout)

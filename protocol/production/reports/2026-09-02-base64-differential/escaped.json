@@ -1,0 +1,66 @@
+{
+  "document": {
+    "version": "nomad-live-topology-v3",
+    "network_id": "differential",
+    "epoch": 1,
+    "not_before": "2026-09-02T11:20:44Z",
+    "not_after": "2026-09-02T13:20:44Z",
+    "traffic": {
+      "cell_size": 1200,
+      "cell_interval_ms": 10,
+      "max_lateness_ms": 40,
+      "queue_capacity": 64
+    },
+    "dkg": {
+      "threshold": 2,
+      "session_id": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "start_at": "2026-09-02T12:20:44Z",
+      "phase_duration_ms": 1000
+    },
+    "operators": [
+      {
+        "id": "operator-a",
+        "index": 0,
+        "endpoint": "127.0.0.1:1200",
+        "partial_endpoint": "http://127.0.0.1:1300",
+        "dkg_endpoint": "http://127.0.0.1:1400",
+        "identity_key": "B1u+39HJv5OVXvBc4hFJI+c4xk8+cJ3WO7VDwJ0dkj4=",
+        "kex_key": "BFZEXgBSF11EBD209UbWGPp6qh+jgQ1Mxl57dsl/4VQ=",
+        "dkg_identity_key": "hUURYPJhPsjZ/AtCBKM4By5QtqPh3JW+pay1U8LsDrw=",
+        "peer_plan": [
+          1
+        ],
+        "attestation": "JbgvUammiywyzVuR1SeTG+KWHo3kzgYi/lqNKcy2Zx4JVlo2CoQ5vk+kwfTX4SFv9e6fEJ69BBQa9Dsw/az8Bg=="
+      },
+      {
+        "id": "operator-b",
+        "index": 1,
+        "endpoint": "127.0.0.1:2200",
+        "partial_endpoint": "http://127.0.0.1:2300",
+        "dkg_endpoint": "http://127.0.0.1:2400",
+        "identity_key": "BmZpp1UUoqLAAj1EK0BZdm/VgQBT5IRfmjUsMHvpycY=",
+        "kex_key": "hIp/XpiI1OGl+PEjqVZidnr8wg1jiOrKD+gXRN6GUFE=",
+        "dkg_identity_key": "XMm9xwHoM+21dGoIG6u/LydNoYR5n5PwMEuExWcM14s=",
+        "peer_plan": [
+          2
+        ],
+        "attestation": "FMAferfPXjHwaP4qFG10tkfjR6uXL97NllR9Qfcc3dhfZLLE+xCvU2+imlsBXa2XxPmPHd3VEgTGbK33ASwMAg=="
+      },
+      {
+        "id": "operator-c",
+        "index": 2,
+        "endpoint": "127.0.0.1:3200",
+        "partial_endpoint": "http://127.0.0.1:3300",
+        "dkg_endpoint": "http://127.0.0.1:3400",
+        "identity_key": "DK8u0HLHBYyvJNHaWvlInXkodUIOe2J3C9Fgi7k08MQ=",
+        "kex_key": "hxdB16OGkC90S+5hI3eMcqNpLhI2eTSSAQunY1MVVho=",
+        "dkg_identity_key": "EeSjIGoQfl/sYTP/fHEc9hrXYDoWAk/G79RGyyEl8EM=",
+        "peer_plan": [
+          0
+        ],
+        "attestation": "2OyOCurc1HXDcLJ4/4Hn9KU0y6GH3gTzMKLWC55QerSohGQJV2dtZOG8WQOhl6tvTt6G/jj/9m3rfqlHEZ5PCw=="
+      }
+    ]
+  },
+  "signature": "oPs4+dqY\nIY4Q9ZfVno+CJq9bdNQGhtWTsJWJK7y6fXKGVOCLuG6r4vkE09uweKzc7H0i1MsSgaG1hgD0vNZeDQ=="
+}

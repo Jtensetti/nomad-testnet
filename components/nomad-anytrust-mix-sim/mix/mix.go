@@ -71,6 +71,19 @@ func publicPoint(s *edwards25519.SuiteEd25519, key PublicKey) (kyber.Point, erro
 	if err := p.UnmarshalBinary(key[:]); err != nil {
 		return nil, fmt.Errorf("decode public key: %w", err)
 	}
+	// UnmarshalBinary checks that the point is on the curve, not that it is in
+	// the prime-order subgroup. Encrypting to the identity yields y = m + r*0 =
+	// m, which is the plaintext in cleartext on the wire, and a small-order key
+	// leaks it almost as completely.
+	//
+	// validateThresholdCommittee has rejected this since it was written, but
+	// Encrypt never called it, so a caller holding a bare PublicKey that never
+	// passed through committee validation -- which is exactly what
+	// uplink.Session holds -- had no protection. Checking here covers every
+	// encryption entry point at once rather than each remembering separately.
+	if err := rejectSmallOrder(s, p); err != nil {
+		return nil, fmt.Errorf("encryption public key: %w", err)
+	}
 	return p, nil
 }
 
@@ -95,18 +108,21 @@ func Encrypt(pub PublicKey, cells []PlainCell) (*Batch, error) {
 		return nil, err
 	}
 	b := &Batch{x: make([][]kyber.Point, ChunkCount), y: make([][]kyber.Point, ChunkCount)}
-	stream := s.RandomStream()
-	for row := 0; row < ChunkCount; row++ {
+
+	// Rows are independent: two scalar multiplications per row per column,
+	// nothing shared. The r values stay independent and uniform; only which
+	// of them lands where changes, and nothing relies on that.
+	parallel(ChunkCount, func(l *lane, row int) {
 		b.x[row] = make([]kyber.Point, len(cells))
 		b.y[row] = make([]kyber.Point, len(cells))
+		start := row * ChunkSize
 		for col := range cells {
-			start := row * ChunkSize
-			message := s.Point().Embed(cells[col][start:start+ChunkSize], stream)
-			r := s.Scalar().Pick(stream)
-			b.x[row][col] = s.Point().Mul(r, nil)
-			b.y[row][col] = s.Point().Add(message, s.Point().Mul(r, h))
+			message := l.point().Embed(cells[col][start:start+ChunkSize], l.stream)
+			r := l.scalar().Pick(l.stream)
+			b.x[row][col] = l.point().Mul(r, nil)
+			b.y[row][col] = l.point().Add(message, l.point().Mul(r, h))
 		}
-	}
+	})
 	return b, nil
 }
 
@@ -375,4 +391,115 @@ func CommitteeMix(pub PublicKey, input *Batch, members int) (*Batch, []Round, er
 		current = output
 	}
 	return current, rounds, nil
+}
+
+// EncryptCell produces the ElGamal ciphertext for one cell, in exactly the
+// wire form MarshalWire produces for one column of a batch.
+//
+// It exists because a publisher encrypts one fragment at a time and Encrypt
+// refuses fewer than two cells. That refusal is right for Encrypt: a Batch is
+// a mix input, a shuffle of one element is the identity, and a batch of one
+// would mix nothing. It is not right for a publisher, which has one fragment
+// and needs a ciphertext, not a mix.
+//
+// The uplink worked around it by encrypting a two-column batch and discarding
+// the second column. That is not merely inelegant: the cost of encryption is
+// linear in columns, so half of every publisher's per-cell cost was work
+// thrown away -- against a 50 ms deployed cell interval it could not meet in
+// the first place.
+//
+// Measured on a 2.1 GHz Xeon, and worth reading in order, because each number
+// is the reason for the next:
+//
+//	103 ms  two-column batch, one column discarded
+//	 36 ms  single-cell path, serial
+//	 12 ms  single-cell path, rows encrypted in parallel on four cores
+//
+// The remaining 12 ms is still not mostly ElGamal. Of the 36 ms serial cost,
+// about 30 ms is kyber's Point.Embed rejection loop and under 4 ms is the two
+// scalar multiplications per row that actually encrypt. Parallelism spreads
+// that loop across cores; it does not remove it, and on one core the cost is
+// unchanged. Removing it needs a prime-order group encoding, which is a wire
+// decision rather than an optimisation. See the seal cost finding in
+// nomad-protocol's evidence index.
+//
+// The result composes: ParseWire assembles individually encrypted cells into
+// the batch the committee shuffles and decrypts, which is already how the
+// share service reassembles a batch from cached cells. Nothing about the wire
+// format changes, so a cell encrypted here is indistinguishable from a column
+// of a batch encrypted by Encrypt.
+func EncryptCell(pub PublicKey, cell PlainCell) (WireCell, error) {
+	return encryptCellWithPadding(pub, cell, rand.Reader)
+}
+
+// encryptCellWithPadding takes the padding source so tests can make output
+// deterministic. Production always uses crypto/rand.
+func encryptCellWithPadding(pub PublicKey, cell PlainCell, padding io.Reader) (WireCell, error) {
+	var out WireCell
+	if padding == nil {
+		return out, errors.New("padding source is required")
+	}
+	s := newSuite()
+	if s.Point().EmbedLen() < ChunkSize {
+		return out, errors.New("selected group cannot embed Nomad chunks")
+	}
+	h, err := publicPoint(s, pub)
+	if err != nil {
+		return out, err
+	}
+	// The eighteen rows are independent -- each is its own ElGamal encryption
+	// with its own ephemeral -- so they are encrypted in parallel.
+	//
+	// Most of the cost is not the ElGamal. Measured on a 2.1 GHz Xeon, 30 ms
+	// of a 36 ms cell is kyber's Point.Embed, whose rejection loop discards
+	// roughly sixteen scalar multiplications per chunk to find a point in the
+	// prime-order subgroup; the two multiplications per row are under 4 ms of
+	// it. A prime-order encoding would remove that loop rather than spread it.
+	//
+	// Sealing ahead of time is safe for the emission invariant: the uplink
+	// queue is pull-only and a scheduler on a public clock decides when
+	// anything leaves, so how long this took never reaches the wire.
+	type rowOutput struct {
+		encoded [2][]byte
+		err     error
+	}
+	rows := make([]rowOutput, ChunkCount)
+	parallel(ChunkCount, func(l *lane, row int) {
+		start := row * ChunkSize
+		message := l.point().Embed(cell[start:start+ChunkSize], l.stream)
+		r := l.scalar().Pick(l.stream)
+		// Same order as MarshalWire: x then y, per row.
+		for index, point := range []kyber.Point{
+			l.point().Mul(r, nil),
+			l.point().Add(message, l.point().Mul(r, h)),
+		} {
+			encoded, err := point.MarshalBinary()
+			if err != nil {
+				rows[row].err = err
+				return
+			}
+			if len(encoded) != pointSize {
+				rows[row].err = errors.New("unexpected ciphertext point size")
+				return
+			}
+			rows[row].encoded[index] = encoded
+		}
+	})
+
+	offset := 0
+	for row := range rows {
+		if rows[row].err != nil {
+			return WireCell{}, rows[row].err
+		}
+		for _, encoded := range rows[row].encoded {
+			offset += copy(out[offset:], encoded)
+		}
+	}
+	if offset != cipherSize {
+		return WireCell{}, errors.New("internal ciphertext size mismatch")
+	}
+	if _, err := io.ReadFull(padding, out[offset:]); err != nil {
+		return WireCell{}, fmt.Errorf("wire padding: %w", err)
+	}
+	return out, nil
 }

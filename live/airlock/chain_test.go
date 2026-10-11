@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -366,7 +367,17 @@ func TestPermutationIsUniform(t *testing.T) {
 	schedule.BatchSize = 4
 	schedule.MaxDepositsPerSession = 4
 
-	const trials = 24
+	// Two sample sizes. The per-push run does enough trials to catch a chain
+	// that has stopped permuting at all -- the regression that matters on
+	// every commit -- and skips the uniformity bound, which needs more trials
+	// than a per-push budget affords and is a statistical measurement rather
+	// than a correctness check. The campaign workflow runs the full count.
+	trials := 6
+	measureUniformity := false
+	if os.Getenv("NOMAD_TIMING_CAMPAIGN") == "1" {
+		trials = 24
+		measureUniformity = true
+	}
 	// landings[i][j] counts how often the deposit marked i+1 came out at
 	// released position j.
 	landings := make([][]int, schedule.BatchSize)
@@ -401,6 +412,12 @@ func TestPermutationIsUniform(t *testing.T) {
 			t.Errorf("the deposit marked %d landed in %d distinct positions over %d trials "+
 				"(histogram %v); the chain is not permuting", marker+1, distinct, trials, row)
 		}
+	}
+
+	if !measureUniformity {
+		t.Logf("permutation is non-vacuous over %d trials; set NOMAD_TIMING_CAMPAIGN=1 "+
+			"for the uniformity measurement", trials)
+		return
 	}
 
 	// And the landings must look uniform rather than merely varied. With

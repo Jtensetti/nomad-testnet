@@ -196,8 +196,15 @@ func TestDepositIDsAreScopedToTheirSession(t *testing.T) {
 	if DepositID(alice, 7) == DepositID(alice, 8) {
 		t.Error("one session derives the same deposit ID for two sequences")
 	}
-	if DepositID(alice, 7) != DepositID(alice, 7) {
-		t.Error("derivation is not deterministic")
+	// Re-derive from a freshly built session so a derivation that carried
+	// state between calls would show up as drift, not just be folded away.
+	want := DepositID(alice, 7)
+	for repeat := 0; repeat < 4; repeat++ {
+		var again [32]byte
+		again[0] = 1
+		if DepositID(again, 7) != want {
+			t.Errorf("derivation %d differs from the first", repeat)
+		}
 	}
 
 	committee, _ := testCommittee(t)

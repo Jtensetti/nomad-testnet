@@ -30,7 +30,7 @@ func NewDecoder(k, symbolSize, originalSize int) (*Decoder, error) {
 	}, nil
 }
 
-func (d *Decoder) Rank() int { return d.rank }
+func (d *Decoder) Rank() int   { return d.rank }
 func (d *Decoder) Ready() bool { return d.rank == d.k }
 
 func (d *Decoder) Add(symbol Symbol) (bool, error) {
@@ -45,15 +45,22 @@ func (d *Decoder) Add(symbol Symbol) (bool, error) {
 	copy(row, symbol.Coeff)
 	copy(row[d.k:], symbol.Data)
 
+	// Reduce against every existing pivot before choosing this row's own.
+	// Pivots are not always discovered in column order -- a row's entry at
+	// the next missing column can cancel to zero during reduction, landing
+	// its pivot later -- and a row inserted before being reduced against a
+	// later pivot keeps a residue there. The basis then reports full rank
+	// and Decode returns a mixture of source symbols as if it were one.
+	for col := 0; col < d.k; col++ {
+		if row[col] != 0 && d.basis[col] != nil {
+			addScaled(row, d.basis[col], row[col])
+		}
+	}
+
 	for col := 0; col < d.k; col++ {
 		if row[col] == 0 {
 			continue
 		}
-		if d.basis[col] != nil {
-			addScaled(row, d.basis[col], row[col])
-			continue
-		}
-
 		scale(row, inv(row[col]))
 		for pivot, existing := range d.basis {
 			if existing != nil && existing[col] != 0 {

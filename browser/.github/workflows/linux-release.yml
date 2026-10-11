@@ -1,0 +1,98 @@
+name: linux-release
+on:
+  # This has run zero times. Two reasons, and both had to be fixed.
+  #
+  # The tag pattern matched nothing this project creates: releases are tagged
+  # `nomad-browser-macos-v<version>` by macos-notarized-release.yml, and no
+  # `v*` tag has ever existed. And `workflow_dispatch` answers 404 for a
+  # workflow that is not on the default branch, which this is not -- so there
+  # was no way to run it at all.
+  #
+  # So the reproducible Linux build, the tarball, the SBOM and the provenance
+  # for the Linux client had never been produced by anything. The networkless
+  # check is the one part that was already covered: ci.yml runs it on every
+  # push.
+  #
+  # `push`, filtered to what goes into the tarball, so the build is exercised
+  # from the branch the code is on. It publishes nothing -- the artifacts are
+  # uploaded to the run -- so there is nothing here a push should not trigger.
+  push:
+    paths:
+      - "cmd/nomad-browser/**"
+      - "linux/**"
+      - "scripts/verify-networkless.sh"
+      - "scripts/generate-sbom.sh"
+      - "scripts/generate-provenance.sh"
+      - ".github/workflows/linux-release.yml"
+      - "go.mod"
+      - "go.sum"
+    tags: ['nomad-browser-linux-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tarball:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: {go-version: '1.25.x'}
+
+      - name: Verify pinned component snapshots
+        run: sha256sum --check --quiet COMPONENTS.sha256
+
+      - name: Verify the client cannot reach the network
+        run: ./scripts/verify-networkless.sh
+
+      - name: Build reproducibly for amd64 and arm64
+        run: |
+          # -trimpath and an empty build id keep the binary a function of the
+          # source rather than of the path it was built in, which is what makes
+          # the digests below reproducible off this runner.
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -ldflags='-s -w -buildid=' \
+              -o "dist/nomad-browser-linux-$arch" ./cmd/nomad-browser
+          done
+
+      - name: Assemble the tarball
+        run: |
+          staging="$(mktemp -d)"
+          for arch in amd64 arm64; do
+            install -Dm755 "dist/nomad-browser-linux-$arch" \
+              "$staging/nomad-browser-$arch/bin/nomad-browser"
+            install -Dm644 linux/nomad-browser.service \
+              "$staging/nomad-browser-$arch/lib/systemd/user/nomad-browser.service"
+            install -Dm755 linux/run-sandboxed.sh \
+              "$staging/nomad-browser-$arch/bin/run-sandboxed.sh"
+            install -Dm644 linux/README.md "$staging/nomad-browser-$arch/README.md"
+            install -Dm644 LICENSE "$staging/nomad-browser-$arch/LICENSE"
+            tar -C "$staging" --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime='UTC 2020-01-01' \
+              -czf "dist/nomad-browser-linux-$arch.tar.gz" "nomad-browser-$arch"
+          done
+          (cd dist && sha256sum nomad-browser-linux-*.tar.gz > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Generate SBOM
+        run: ./scripts/generate-sbom.sh dist/sbom.cdx.json
+
+      - name: Generate provenance for the SBOM
+        run: |
+          # Attests rather than signs, and stamps itself unsigned outside a
+          # protected identity, so this cannot be mistaken for the signed
+          # provenance PROD-25 asks for.
+          ./scripts/generate-provenance.sh dist/sbom.cdx.json dist/provenance.intoto.jsonl
+          test -s dist/provenance.intoto.jsonl
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nomad-browser-linux
+          path: |
+            dist/nomad-browser-linux-*.tar.gz
+            dist/SHA256SUMS
+            dist/sbom.cdx.json
+            dist/provenance.intoto.jsonl

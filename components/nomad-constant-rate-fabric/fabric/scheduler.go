@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,6 +27,20 @@ type Config struct {
 	// MaxLateness is a public operational limit. The scheduler fails instead of
 	// emitting a catch-up burst after this limit is exceeded.
 	MaxLateness time.Duration
+	// DeadlineSpin is how long before each deadline the scheduler stops
+	// sleeping and busies itself until the deadline arrives.
+	//
+	// A timer set for one interval fires somewhere inside the millisecond
+	// after it, and where inside depends on what else the process is doing.
+	// Sending immediately after the wake would put that ambient state on every
+	// packet's timestamp, and a node with private work to do is not ambiently
+	// identical to one without. Spinning the last stretch makes the send
+	// instant a function of the deadline rather than of the wake.
+	//
+	// The spin burns a core for its window every interval, unconditionally,
+	// whatever the queue holds. Zero disables it and restores the sleep-only
+	// behaviour, at the cost of leaving that signal in place.
+	DeadlineSpin time.Duration
 }
 
 func (c Config) Validate() error {
@@ -43,7 +59,33 @@ func (c Config) Validate() error {
 	if c.MaxLateness < 0 {
 		return errors.New("maximum lateness must not be negative")
 	}
+	if c.DeadlineSpin < 0 {
+		return errors.New("deadline spin must not be negative")
+	}
+	if c.DeadlineSpin >= c.CellInterval() {
+		return errors.New("deadline spin must be shorter than the cell interval")
+	}
 	return nil
+}
+
+// DeadlineSpinFor is the spin window for a given public cell interval, so
+// every sender derives it the same way from a value the signed topology
+// already publishes.
+//
+// Two milliseconds covers the observed wake error with room over it; the
+// quarter-interval cap keeps a very short cadence from spending most of a core
+// spinning. It is a function of a public number and nothing else: a sender
+// choosing its spin from load or queue depth would put private state back into
+// the wake instant.
+func DeadlineSpinFor(interval time.Duration) time.Duration {
+	const nominal = 2 * time.Millisecond
+	if interval <= 0 {
+		return 0
+	}
+	if quarter := interval / 4; quarter < nominal {
+		return quarter
+	}
+	return nominal
 }
 
 // CellInterval is the target spacing between externally visible cells.
@@ -59,12 +101,26 @@ type Sink interface {
 }
 
 type Scheduler struct {
-	cfg    Config
-	source Source
-	sink   Sink
+	cfg     Config
+	source  Source
+	sink    Sink
+	dropped atomic.Uint64
 }
 
 var ErrDeadlineMissed = errors.New("fixed-cadence deadline missed")
+
+// ErrCellDropped is how a Source or Sink says that this one cell could not be
+// produced or delivered for a local reason: a transient socket error, an
+// exhausted socket buffer, a full disk under a local state write. The
+// scheduler counts it and continues on the same absolute schedule. The cell is
+// lost -- never retried, never re-emitted later, never followed by a catch-up
+// -- because losing work is the only response to a local condition that does
+// not turn that condition into an externally observable event.
+//
+// Returning it is deliberate and narrow. Any other error still stops the
+// scheduler, so a real misconfiguration fails closed rather than running
+// forever emitting nothing. Callers that wrap it must use %w.
+var ErrCellDropped = errors.New("sink dropped one cell")
 
 func NewScheduler(cfg Config, source Source, sink Sink) (*Scheduler, error) {
 	if err := cfg.Validate(); err != nil {
@@ -110,38 +166,89 @@ func (s *Scheduler) run(ctx context.Context, count int) error {
 	if allowed == 0 {
 		allowed = interval
 	}
+	// The cell is built before the deadline it is sent at, so the deadline
+	// path holds nothing but the send. Building it after waking would put the
+	// construction cost on the packet's timestamp, and that cost differs
+	// depending on whether the queue had work.
+	//
+	// Send itself still runs on the deadline path. It writes a fixed-size cell
+	// to a destination the public plan chose, so its cost does not depend on
+	// private state.
+	cell, cellErr := s.source.NextCell(ctx)
 	next := time.Now().Add(interval)
 	for emitted := 0; count < 0 || emitted < count; emitted++ {
-		if err := waitUntil(ctx, next); err != nil {
+		if err := waitUntil(ctx, next, s.cfg.DeadlineSpin); err != nil {
 			return err
 		}
 		if late := time.Since(next); late > allowed {
 			return fmt.Errorf("%w by %s", ErrDeadlineMissed, late)
 		}
-		if err := s.EmitOne(ctx); err != nil {
-			return err
+		// A source that could not produce a cell costs this slot and nothing
+		// else, exactly as it did when the failure happened here rather than
+		// an interval ago. The error is carried to the slot it belongs to so
+		// that a dropped cell is still one lost emission, never a shifted one.
+		err := cellErr
+		if err == nil {
+			err = s.sink.Send(ctx, cell)
+		}
+		if err != nil {
+			if !errors.Is(err, ErrCellDropped) {
+				return err
+			}
+			s.dropped.Add(1)
 		}
 		next = next.Add(interval)
 		if !time.Now().Before(next) {
 			return ErrDeadlineMissed
 		}
+		// Only when another slot is coming. A finite run that prefetched past
+		// its last emission would take a cell off the queue and discard it,
+		// so RunCells(n) would consume n+1 cells to emit n.
+		if count < 0 || emitted+1 < count {
+			cell, cellErr = s.source.NextCell(ctx)
+		}
 	}
 	return nil
 }
 
-func waitUntil(ctx context.Context, deadline time.Time) error {
-	delay := time.Until(deadline)
-	if delay <= 0 {
-		return nil
+// Dropped is the number of scheduled emissions this scheduler lost to
+// ErrCellDropped. It is local diagnostic state for whoever owns the scheduler,
+// and it never feeds back into scheduling.
+//
+// It is not what an operator reads: a Sink that wants a drop count published
+// keeps its own, because the Sink knows which peer and which cause, and the
+// scheduler only knows that one emission did not happen. nomad-testnet's node
+// does exactly that and publishes send_dropped from the sink.
+func (s *Scheduler) Dropped() uint64 {
+	if s == nil {
+		return 0
 	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
+	return s.dropped.Load()
+}
+
+// waitUntil sleeps until spin before the deadline, then yields in a loop until
+// the deadline itself, so the return instant is a property of the deadline
+// rather than of the timer that woke it.
+//
+// runtime.Gosched rather than a tight loop, so a single-processor host still
+// makes progress. Cancellation is checked on every pass.
+func waitUntil(ctx context.Context, deadline time.Time, spin time.Duration) error {
+	if delay := time.Until(deadline) - spin; delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
+	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		runtime.Gosched()
+	}
+	return nil
 }
 
 // EpochTrace returns the planned byte count per accounting epoch. It is a

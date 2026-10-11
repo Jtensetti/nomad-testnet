@@ -1,0 +1,7 @@
+=== engine fork egress inventories
+== firefox-nomad fbc1b2b2e8a1727a2da059ae6e9263437f95aa7d
+egress inventory: 31 surfaces, every anchor present in this checkout
+exit=0
+== chromium-nomad 37cfdd900e4bf873356eba9e9f4c9e745a6ce3cf
+egress inventory: 18 surfaces, every anchor present in this checkout
+exit=0

@@ -31,21 +31,40 @@ func TestAuthenticatedHeaderPreservesCiphertextAndRejectsTamper(t *testing.T) {
 	if err := Seal(&cell, metadata, 0, 42, key, context); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := Verify(cell, 0, key, context)
+	// The sealed cell is not the plaintext cell. If it were, the payload
+	// would be readable on the wire, which is the whole point of version 2.
+	if Ciphertext(cell) == original {
+		t.Fatal("Seal left the payload in the clear")
+	}
+	sealed := cell
+
+	opened := sealed
+	verified, err := Open(&opened, 0, key, context)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verified.Sequence != 42 || verified.Stream != stream || Ciphertext(cell) != original || len(cell) != fabric.CellSize {
+	if verified.Sequence != 42 || verified.Stream != stream || Ciphertext(opened) != original ||
+		len(opened) != fabric.CellSize {
 		t.Fatal("authenticated hop changed ciphertext or metadata")
 	}
-	tampered := cell
+
+	tampered := sealed
 	tampered[31] ^= 1
-	if _, err := Verify(tampered, 0, key, context); err == nil {
+	if _, err := Open(&tampered, 0, key, context); err == nil {
 		t.Fatal("tampered ciphertext was accepted")
 	}
+	// A refused cell must come back untouched, so that a caller ignoring the
+	// error holds ciphertext rather than half-decrypted plaintext.
+	expectedTamper := sealed
+	expectedTamper[31] ^= 1
+	if tampered != expectedTamper {
+		t.Fatal("a cell that failed authentication was decrypted anyway")
+	}
+
 	wrongReceiver := context
 	wrongReceiver.Receiver = 2
-	if _, err := Verify(cell, 0, key, wrongReceiver); err == nil {
+	other := sealed
+	if _, err := Open(&other, 0, key, wrongReceiver); err == nil {
 		t.Fatal("cell was accepted for a different receiver")
 	}
 }

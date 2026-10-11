@@ -1,0 +1,2136 @@
+{
+  "format": 1,
+  "package": "Nomad evaluation kit",
+  "assembled_on": "2026-09-07",
+  "runtime": {
+    "repository": "Jtensetti/nomad-testnet",
+    "commit": "e495cb33f86200033700d06cae8b23e6072b2e07",
+    "path": "."
+  },
+  "snapshots": [
+    {
+      "repository": "Jtensetti/Nomad-browser",
+      "commit": "d751fd660863a6cf20490985aa2087a02556a8c3",
+      "path": "browser",
+      "license": "NOMAD RESTRICTED SOURCE LICENSE 1.0",
+      "files": [
+        {
+          "path": ".gitattributes",
+          "sha256": "f19c5389a431dd17e883ddbcd13c85a7f752e0b0b74537a694a71992d11b178a",
+          "executable": false
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "sha256": "93a87bbc3ed6b89783facb46a6d9af6247e6eee815a1fde9ea92785ba8cbaa60",
+          "executable": false
+        },
+        {
+          "path": ".github/workflows/linux-release.yml",
+          "sha256": "1d0664c304a6ffc48c6858ba8a8d4963d5a06e107a495a6f16a46fb9203c6e1f",
+          "executable": false
+        },
+        {
+          "path": ".github/workflows/macos-dmg.yml",
+          "sha256": "86823e2bf7ae4526c0e63a299c14aa602603606eaaee8f8a794ae56334543116",
+          "executable": false
+        },
+        {
+          "path": ".github/workflows/macos-notarized-release.yml",
+          "sha256": "e354c5b8bff5f70fa5408b8c4c819508a576c8a0bfc9c4b476d95b6856fd8ae0",
+          "executable": false
+        },
+        {
+          "path": ".gitignore",
+          "sha256": "1752d5ee0f3583c3aceeddf887d730ba502644466be9f52ee77457308d463486",
+          "executable": false
+        },
+        {
+          "path": "COMPONENTS.lock",
+          "sha256": "fa86ef86eb3624b10954f260f4bc83669f9699d2538229150c4431b19c9ba189",
+          "executable": false
+        },
+        {
+          "path": "COMPONENTS.sha256",
+          "sha256": "b878b94dfde433571068dd7c8990c859921b2fa623f5960d3b33422d3373d4dd",
+          "executable": false
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "bf422cf81e694f43d7ac6142baa0855bf8f2d16b456a907962bb11613acc92a4",
+          "executable": false
+        },
+        {
+          "path": "README.md",
+          "sha256": "ab285b4f6c4a31827d503f3addca1a7bbc1a1e0121b7cf03d81a54985dfa90df",
+          "executable": false
+        },
+        {
+          "path": "adapter/adapter.go",
+          "sha256": "9fc9f90b7715952a854697904ff11784f67dae6e1449e1bc9223dbe34930b3cb",
+          "executable": false
+        },
+        {
+          "path": "adapter/adapter_test.go",
+          "sha256": "4257f78576435a4c9dd777f2d5de85186c6c2b4ba349b7c936088191f89fb4e8",
+          "executable": false
+        },
+        {
+          "path": "adapter/bundle.go",
+          "sha256": "404befb3db19ae82399d576b9484c3050f82ababd4c18acee3494e9d66749abe",
+          "executable": false
+        },
+        {
+          "path": "adapter/fallback_test.go",
+          "sha256": "63ade02c666e6e24047d14edc500c9ae231d9dbe77b2ac53dc9f8334a9875c98",
+          "executable": false
+        },
+        {
+          "path": "architecture_test.go",
+          "sha256": "0f87620659586bf913ecfb39665639ae80a1a83b3d98627ebcfdd4d391124ed5",
+          "executable": false
+        },
+        {
+          "path": "bundle_test.go",
+          "sha256": "843f4dbec2766ec865cecee5cad9913aab9e9eb66f79b29d95e4ecee67ac1859",
+          "executable": false
+        },
+        {
+          "path": "capture_test.go",
+          "sha256": "cf1580503191204f23869e7faa6d246a350185fe11e864a0f82fa1b8ef6f4b57",
+          "executable": false
+        },
+        {
+          "path": "cmd/nomad-browser/main.go",
+          "sha256": "64d74ae1fb87570b16be282aaf336e0aa7361a5d53da3d65575e67798f881223",
+          "executable": false
+        },
+        {
+          "path": "cmd/nomad-browser/main_test.go",
+          "sha256": "f7895c2102b16fc1906176f1be734769ab3e133c4b1d2308fd9fa6e1ef60447d",
+          "executable": false
+        },
+        {
+          "path": "cmd/nomad-browser/rescan_test.go",
+          "sha256": "261faadedcadeae8b2bb2837c4b4559edff6aa2d0d212eddffbd35a2c25c436e",
+          "executable": false
+        },
+        {
+          "path": "cmd/nomad-browser-verify/main.go",
+          "sha256": "44f1fb498026df9eca3b80ff0a31a8f6b7b0c559349f459fd7bc1d58e3cba22b",
+          "executable": false
+        },
+        {
+          "path": "cmd/nomad-browser-verify/verify_test.go",
+          "sha256": "d963756efe4da959e30ec6b3cdc19c805a3ad9938ac9194f64385c331de4348e",
+          "executable": false
+        },
+        {
+          "path": "cmd/nomad-model/main.go",
+          "sha256": "f16951085cd77a31077a83029c7661cd722117ebb3219d7fa1da620d1cb42c8f",
+          "executable": false
+        },
+        {
+          "path": "cmd/nomad-model/main_test.go",
+          "sha256": "3b450e8ab743527d7a520418c45cc53c05972c4d3d7c4686dc65891ec894f2b9",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-local-reconstruction/LICENSE",
+          "sha256": "ab5606d54720738bc9809f5acd2b66954251c1c4e54bd119a0af69286aea4302",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-local-reconstruction/go.mod",
+          "sha256": "d65121115badae3be3d58eacaa5d84054badf2eb0c58713e1fe91ed9a33a0461",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-local-reconstruction/reconstruct/manifest.go",
+          "sha256": "367a25ffe92d0f7d4be6949c5805a4099df79d332262712844658731395ecc55",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-local-reconstruction/reconstruct/manifest_test.go",
+          "sha256": "07fd437e7509084d99e78da81dd6f32610c3adace6502679a9baddc23cdbb241",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-local-reconstruction/reconstruct/reconstruct.go",
+          "sha256": "abdd6b580de6a1f8ffc83e7852bef9f01637a1825c090343cbafafdd3973ed71",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-local-reconstruction/reconstruct/reconstruct_test.go",
+          "sha256": "f7f03653071369d8975ce87487634837a92ab015055c9ce6dc54718572a5a71b",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-selection-firewall/LICENSE",
+          "sha256": "ab5606d54720738bc9809f5acd2b66954251c1c4e54bd119a0af69286aea4302",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-selection-firewall/firewall/firewall.go",
+          "sha256": "5252f0fe67bc3f3ac23da0b48d6710019044ade12fb6c65554cccf815b001e29",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-selection-firewall/firewall/firewall_test.go",
+          "sha256": "951b843fbf0c31c74503c4fcf7625a654071237c5343f738f512451ba4194f62",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-selection-firewall/go.mod",
+          "sha256": "3bff6ff3e630cf91172556cb3ebcd4ff6e6e0bb25767393c9d7dc2c628eea60c",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/LICENSE",
+          "sha256": "ab5606d54720738bc9809f5acd2b66954251c1c4e54bd119a0af69286aea4302",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/architecture_test.go",
+          "sha256": "ab5326b43c38cbd36992174375facbf6a81ec24c8fa3a8e967a89cb9e7307b19",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/attest.go",
+          "sha256": "f3fd7d4511b5296a6fc9f17b6b44fe8d6dbc7ec80f07bb9651844118794f4d67",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/attest_test.go",
+          "sha256": "63335b1a856dc3f9c041dbe688db7acd0162f4501006a1dd08967b40a3af56d4",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/embed.go",
+          "sha256": "b7273a8c11df19133c1cba1ac3b34ab8450e089be33243d96d02144aeaa22715",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/embed_test.go",
+          "sha256": "511dc3fb7b30d72337620d9d0b866200fe6f73f7f1d076da0b3f257c453a0b7b",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/loopback/egress_test.go",
+          "sha256": "84482f462622dc3c574d2cd5d37e9c935d360ab676805093f9ec7adc5eaeb5ab",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/loopback/embedder.go",
+          "sha256": "a11e4e9e9f84a078f7e1ffe457650546dfafde4e7acb879440e22375b6805303",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/loopback/embedder_test.go",
+          "sha256": "ac2fc66545d7c8b70cce65db0c0bb349133d40c72fb364512b7a38a8e7aa634b",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/loopback/seal.go",
+          "sha256": "b4c4b8ae107f84c79a85694c31b1a9f374c41db304a7b7aa1838f37c439c5ff9",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/loopback/seal_unit_test.go",
+          "sha256": "67fb067cc5634a65a7f6fe188b187812848ef10781a005affe35646ee5399cf6",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/loopback/sealed_test.go",
+          "sha256": "df5d533fee28e887c1bcf5e1cc626225bf557f1d463955908234c25ae8a1f4cf",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/loopback/service.go",
+          "sha256": "e94a9d7657e0d185b30fc26f80d5b86b9898d16b8fe5ce56d31dd3eb0d662cd0",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/model/adapter.go",
+          "sha256": "9a0cd7756788c5ee2c6997e5997083b2894a629ba943fe6b46e9f917bcff8ed8",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/model/adapter_test.go",
+          "sha256": "8398874b6fc2d260ade976f8aa676fec592308baf7474459a1b3e42725ed75ce",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/model/catalogue.go",
+          "sha256": "40cdcfce1c421f293fbe8e9a60cb4f8aab2a47c06de380dcf80584fb54701f3f",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/model/fingerprint.go",
+          "sha256": "db6e49023da5e2cc05d152efa97774ae6ef03f43f542b5f5b857f7a908a8b219",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/model/fingerprint_test.go",
+          "sha256": "c1967b86c1d3e05167c2c4bb379ae8e66fbcaf82928c0cfa187b2e35ad39ae96",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/model/manifest.go",
+          "sha256": "808755f05a9a51996e27b5a94062674f9faeade59836c3d681cc83ba29b52006",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/model/registry.go",
+          "sha256": "1dcee2496f15d615e12484d5da6eec061890150ce8fc9248f638920db9d159e0",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/basin/model/registry_test.go",
+          "sha256": "57c66f906312fdb26d7b7bea07769b18126766cc57681644346c823a2f735eaa",
+          "executable": false
+        },
+        {
+          "path": "components/nomad-semantic-basins/go.mod",
+          "sha256": "afabd99fdc965a8873c7c5d35b9e0d4646884b5ff2a18c480079e6d4a8050e02",
+          "executable": false
+        },
+        {
+          "path": "conformance/reference/crosscheck_egress.py",
+          "sha256": "bcc204fc8b07bc7a81551d4ffcbf02e274d574f453e60f0449975f9a9b1dd0cd",
+          "executable": true
+        },
+        {
+          "path": "conformance/reference/nomadegress.py",
+          "sha256": "84551d2e7dde6e9c863903be7fea3112eb094e06e5d8ab419efaf255f6d6a95b",
+          "executable": false
+        },
+        {
+          "path": "docs/DATA_RETENTION.md",
+          "sha256": "67df5cb4d68a9696b132fa4abd582ff6603e501616e4d89e12fa0f6498c53f94",
+          "executable": false
+        },
+        {
+          "path": "docs/RELEASE_PROCESS.md",
+          "sha256": "27f66dc8228bbb4c45aea5f50a2fd19f235c0361ff80ec45ab43d730ce109d2a",
+          "executable": false
+        },
+        {
+          "path": "docs/REPRODUCIBILITY.md",
+          "sha256": "4ec1d77fac535d1253a6f343b8cdaf3137af0a7850e26b93d3de8e7ac815dbf8",
+          "executable": false
+        },
+        {
+          "path": "docs/UPDATING.md",
+          "sha256": "04361367bc25f1463398a167c34f45c5c90b8dce0c936266094f2b07e5b0aa4e",
+          "executable": false
+        },
+        {
+          "path": "docs/VULNERABILITY_POLICY.md",
+          "sha256": "3b92b4d4cd00a361a84bd17c59e9acb1bf3bb2ecf2e211726bd76bdef00a1f6c",
+          "executable": false
+        },
+        {
+          "path": "egress/decisions_test.go",
+          "sha256": "7c8162f111cf75e24c787b90c2d2ca4c39f65707ddf7f37a6c327e0f5ab2e2c2",
+          "executable": false
+        },
+        {
+          "path": "egress/policy.go",
+          "sha256": "0f55cb22445e7043700fdd9fd7149be1e7140099a00b067f2560704711aadcd5",
+          "executable": false
+        },
+        {
+          "path": "egress/policy_test.go",
+          "sha256": "97758a0e7b3d9c8b4936b2cf1bf528cd53c9dfe80d8ac5fd6fe9cddefdbd6f03",
+          "executable": false
+        },
+        {
+          "path": "egress/resource.go",
+          "sha256": "3addb69842966c71dc81ece907c47626b82536a1842ffa8e8cce1e14566d1583",
+          "executable": false
+        },
+        {
+          "path": "egress/resource_test.go",
+          "sha256": "6ee4b33a8c488077c319f75a1173af3460ce3385d3c43ce5b151af44f362d485",
+          "executable": false
+        },
+        {
+          "path": "egress/testdata/url-decisions.json",
+          "sha256": "1d74d7c9c0fbc5820906c3a2b25c00ecad68b476f6b925f299ab9ffdcb59afb2",
+          "executable": false
+        },
+        {
+          "path": "go.mod",
+          "sha256": "4b3af16e89b5acb1621e92b6322995892b80a55fcd54daf578107fa19253da8f",
+          "executable": false
+        },
+        {
+          "path": "internal/demotrust/demotrust.go",
+          "sha256": "b9e7687f9d7b7ac6c98a0ce553d310ce4e78e42a411a7d5fcff9058167b7a44d",
+          "executable": false
+        },
+        {
+          "path": "internal/demotrust/demotrust_test.go",
+          "sha256": "4c3938cba980921f8d4d478d276e0f547d271c241ae925c58c4dfa3751e84cdd",
+          "executable": false
+        },
+        {
+          "path": "linux/README.md",
+          "sha256": "ccc42e567cd9483ca69f78c84d1877531cff4df68ebee1c7e86cd467a3c3008b",
+          "executable": false
+        },
+        {
+          "path": "linux/nomad-browser.service",
+          "sha256": "2918a870014cf7bffb9b7bfced99d78e52ebdfe449a0da2fa661b0d5b10f317b",
+          "executable": false
+        },
+        {
+          "path": "linux/run-sandboxed.sh",
+          "sha256": "3299694597bbcb24a4319ca379fff7fd0110f9b34fe3082c0c7af5dace0e5363",
+          "executable": true
+        },
+        {
+          "path": "localcache/cache.go",
+          "sha256": "209484fd23dcf52c0d00caae7b6ff57aedaa5675180c67c25578118f1ab455ba",
+          "executable": false
+        },
+        {
+          "path": "localcache/cache_test.go",
+          "sha256": "51e5a8d7fd684dd7029a2de083ca45c8b9745605d95de056a4e68cc6ab23498e",
+          "executable": false
+        },
+        {
+          "path": "macos/Info.plist",
+          "sha256": "bf9b1e8794c56ed08100cb1b753eddccfb0015e902c68824d1bd834e1c3eda83",
+          "executable": false
+        },
+        {
+          "path": "macos/NOTARIZATION.md",
+          "sha256": "6f25ada28b0f271ea1d1e414542cb57471dffa354f44ff44c61b3dd0cb9ba7ee",
+          "executable": false
+        },
+        {
+          "path": "macos/NomadBrowser.entitlements",
+          "sha256": "1dc73d1f42afa2ac063201a5c294fd5018f8893b3b600234d1e363fc04439571",
+          "executable": false
+        },
+        {
+          "path": "macos/Package.swift",
+          "sha256": "a9c7d2c5095734dafdf35de5e00c323d6621d9813691557fe9d4cb2d6a0ccb41",
+          "executable": false
+        },
+        {
+          "path": "macos/RELEASE_NOTES.md",
+          "sha256": "0e058d85a8d304de3a177a0960b43b4488231fbd8c4607846946c0689c9689ff",
+          "executable": false
+        },
+        {
+          "path": "macos/SECURITY.md",
+          "sha256": "887c3cc7837760cbe3f517550948321a0b91e29e90e426fc08224796b8617af5",
+          "executable": false
+        },
+        {
+          "path": "macos/Sources/NomadBrowser/ContentView.swift",
+          "sha256": "d9bb0132aeb12180948991694d285a1f9d60478852466dc01aefcabe1cdd4c58",
+          "executable": false
+        },
+        {
+          "path": "macos/Sources/NomadBrowser/Models.swift",
+          "sha256": "02facfee311dd702fe135fe445f20fcd767120ec9cd0ec65c2234ed87198c091",
+          "executable": false
+        },
+        {
+          "path": "macos/Sources/NomadBrowser/NomadBrowserApp.swift",
+          "sha256": "e100fcdabb65b143269ad46975c59e625370beeffb4eda48b612ddf453071979",
+          "executable": false
+        },
+        {
+          "path": "macos/Sources/NomadBrowser/NomadStore.swift",
+          "sha256": "d9eea67cceb8bd5a9022af8f75e976f2eba12dfccebe23269f9082c808538a7d",
+          "executable": false
+        },
+        {
+          "path": "macos/Sources/NomadBrowser/Resources/demo-catalog.json",
+          "sha256": "7d13edae76543fabc3e71784b2dfe59a72e0ff4b4091480bcba01d58830f2ce2",
+          "executable": false
+        },
+        {
+          "path": "macos/Sources/NomadBrowser/SearchEngine.swift",
+          "sha256": "614f6e6265d851d7d3d84159e0ad731b3430dae7b70403cda1066a5ae4f7536e",
+          "executable": false
+        },
+        {
+          "path": "macos/Sources/NomadBrowser/SharedCache.swift",
+          "sha256": "527f4b56202e0c9e2a1f953c4d4cfd2ca5f3fa06f40aa76b17dfe56908fd4365",
+          "executable": false
+        },
+        {
+          "path": "macos/Sources/NomadBrowser/SiteIdentity.swift",
+          "sha256": "0f77533b4886470721f65452b510008e11f912eb453b2d3019650596184d0d4b",
+          "executable": false
+        },
+        {
+          "path": "macos/Sources/NomadBrowser/StrictJSON.swift",
+          "sha256": "812e26119ffa10137c0b041f35b1a9b03271966827d7f5ef63f60d2090b2f785",
+          "executable": false
+        },
+        {
+          "path": "macos/Tests/NomadBrowserTests/NomadBrowserTests.swift",
+          "sha256": "c2cfa5b01aeda0ef7b7586c51e0e52f302ce82e0ab63a9cfb2d17b76dd18fea4",
+          "executable": false
+        },
+        {
+          "path": "macos/Tests/NomadBrowserTests/SiteIdentityTests.swift",
+          "sha256": "ed985248879d2c3592c9a7f4c737653d0ddcd35eae9d6452bfada7b6f71f8465",
+          "executable": false
+        },
+        {
+          "path": "macos/Tests/NomadBrowserTests/StrictJSONTests.swift",
+          "sha256": "236a172020fa6c38efa3348cf837731c61d0fbef1497c46fc0b7a72daceaf591",
+          "executable": false
+        },
+        {
+          "path": "macos/scripts/build_dmg.sh",
+          "sha256": "e641d43c9ce1601a76763d11a6f0d662cffa1cf5959a36f42d252b9c2c574f9f",
+          "executable": true
+        },
+        {
+          "path": "macos/scripts/build_notarized_dmg.sh",
+          "sha256": "1b1b469e19cfb9edf08aa7121ad3bfcf90ff1be1f6a16f87d4a094772ea1de00",
+          "executable": true
+        },
+        {
+          "path": "macos/scripts/make_icon.swift",
+          "sha256": "3f38296730a1d7907b693689efcaaa35fc37e367b0a1a49e88b65cf45276e80c",
+          "executable": false
+        },
+        {
+          "path": "macos/scripts/security_gate.sh",
+          "sha256": "e6aa2adaf47276903cd4b43df9b06eb89b3f858e1b5366d15588cf906b19e0a3",
+          "executable": true
+        },
+        {
+          "path": "macos/scripts/uninstall.sh",
+          "sha256": "d93e3add006558c2a506c6fb870cb2390a8da471ed1dc68ee0e0bada61bd44d7",
+          "executable": true
+        },
+        {
+          "path": "objectstore/conformance_test.go",
+          "sha256": "f4cb87ddbf4e9364c319a2a5a7e859e3834435566de10b86943570e725560cb4",
+          "executable": false
+        },
+        {
+          "path": "objectstore/object.go",
+          "sha256": "e3a63c6895e14b4221d75723b29be3af9100cf1f1057c8e487623adbdbf80de7",
+          "executable": false
+        },
+        {
+          "path": "objectstore/object_test.go",
+          "sha256": "3a472b7ed7aae85f2c2174df4e6bcaaa199b0d447d9a5292599d9645592b8eb8",
+          "executable": false
+        },
+        {
+          "path": "objectstore/store.go",
+          "sha256": "50fbb469eb01fae714d232f51eb9da349517d9c0834a0e8c7531cce067e9e5ab",
+          "executable": false
+        },
+        {
+          "path": "objectstore/store_test.go",
+          "sha256": "208866ed49bb410908cd86c9e0c53e9e5ebfee837f6187f59d0a06819a1ad44f",
+          "executable": false
+        },
+        {
+          "path": "planner/planner.go",
+          "sha256": "87de2d6e4e48acc1cf9eea38031a013bc16d9d1763344f781d1912161a54f0a1",
+          "executable": false
+        },
+        {
+          "path": "planner/planner_test.go",
+          "sha256": "444458aa27150c52d8903bfad1286314e4e5865eee3b078b631e289122663e38",
+          "executable": false
+        },
+        {
+          "path": "readonly_test.go",
+          "sha256": "911cc3ba72ea2f982085ff8cd23913fc45d723070ef3eed3a462450e077020e1",
+          "executable": false
+        },
+        {
+          "path": "runtime_boundary_test.go",
+          "sha256": "9867feb0de74a168425bfe4cdd0f035bf10b364bc22d2a325c1895f0db467868",
+          "executable": false
+        },
+        {
+          "path": "scripts/check-reproducible.sh",
+          "sha256": "486eab9418fd8ae7c73a563608b2e3ed759cf660ba23675a6ef0cdfbc742dcb2",
+          "executable": true
+        },
+        {
+          "path": "scripts/compare-builds.sh",
+          "sha256": "e66f4f0e1620554e3c807cf8d29aa6b2a369f43904f392452257b0527c00fc6f",
+          "executable": true
+        },
+        {
+          "path": "scripts/generate-provenance.sh",
+          "sha256": "300f47ebae5934303e442373f4de8b9e6d67cfddd9f065c9c6b5d55083074ce9",
+          "executable": true
+        },
+        {
+          "path": "scripts/generate-sbom.sh",
+          "sha256": "60d7a2e35a2d5a040254533756023b35d5d894fe47c3632ce894a7adb5675f2d",
+          "executable": true
+        },
+        {
+          "path": "scripts/repin-components.py",
+          "sha256": "90f5d0f657b0f0c24b39cf19af19e0ed166b2eb2f44ba6f76b47cee7506d254f",
+          "executable": true
+        },
+        {
+          "path": "scripts/run-staticcheck.sh",
+          "sha256": "d49e10c6b32ac27fdc7a17dc632b3f63a9753e5bdaad978df19c63f74e1d9d6e",
+          "executable": true
+        },
+        {
+          "path": "scripts/scan-vulnerabilities.sh",
+          "sha256": "9c9fc094821d13925dede17d97c389793d230410820c1278e74415865f178e12",
+          "executable": true
+        },
+        {
+          "path": "scripts/test-scan-vulnerabilities.sh",
+          "sha256": "5c1c5376e164082828089a7cde114b288a6c23ce52f9851be7c7c30f03509c65",
+          "executable": true
+        },
+        {
+          "path": "scripts/verify-networkless.sh",
+          "sha256": "0e963d58e46345b7b48a1481f3c29e343315bbd1b467cd4985308d450b9a4350",
+          "executable": true
+        },
+        {
+          "path": "search/fingerprint.go",
+          "sha256": "70fc2a621c8f837cfcd25407e221af2bab59cbfd3d00f708b2d3167c73e52066",
+          "executable": false
+        },
+        {
+          "path": "search/index.go",
+          "sha256": "596b7f26536607f74db45c30d938ae827c1ad72c588b5865ca5ca089fdaaa9e1",
+          "executable": false
+        },
+        {
+          "path": "search/index_test.go",
+          "sha256": "f91efb13c2a376f583203ee9de39854b48c026a4199be47f55938a4efb0241c0",
+          "executable": false
+        },
+        {
+          "path": "search/manager.go",
+          "sha256": "8fdffc4cb74c76a5ef924855c6e4ecf0998eda186c995360c72cc5459c73fa52",
+          "executable": false
+        },
+        {
+          "path": "search/manager_test.go",
+          "sha256": "5fe0d431b49b049ebe45e7532f7b1687b21086fef7addbb279f3ad889993f459",
+          "executable": false
+        },
+        {
+          "path": "selector/selector.go",
+          "sha256": "26967de1069603749557c5782a69583f63f791109699bc2668cd1a1b6ebcf92c",
+          "executable": false
+        },
+        {
+          "path": "selector/selector_test.go",
+          "sha256": "c92cabe6fab8dba480c9994743c93d6f2042f2a370641e5dc4e11b535ecec680",
+          "executable": false
+        },
+        {
+          "path": "snapshot_test.go",
+          "sha256": "1b8bd78eaed41f96731faf3e7227e0af93fa0e1447ab7c6b285bd8d9f4edd211",
+          "executable": false
+        },
+        {
+          "path": "uninstall_test.go",
+          "sha256": "8d7abf8ab6d4afee34f597c4f3b97f369db5161495d70950c6f76dd65aefa009",
+          "executable": false
+        },
+        {
+          "path": "update/linux_release_test.go",
+          "sha256": "56c1f839cb536518cf7ad57ded94dc0f7aba8b667e52e666d10ed3a303833d82",
+          "executable": false
+        },
+        {
+          "path": "update/update.go",
+          "sha256": "8ca8dbb370800e6753a16dc1a214e359b2acc93cd545370ac6e9324ed778cbdd",
+          "executable": false
+        },
+        {
+          "path": "update/update_test.go",
+          "sha256": "5f88a51ae360cfafcc770a5ceb2edfd873c79fb459742447abed9d33af88a93f",
+          "executable": false
+        }
+      ]
+    },
+    {
+      "repository": "Jtensetti/nomad-protocol",
+      "commit": "8d274cb521dd7591e0bba93c19c5b096ce2e7f19",
+      "path": "protocol",
+      "license": "MIT License",
+      "files": [
+        {
+          "path": ".claude/skills/agent-efficient-ci/SKILL.md",
+          "sha256": "91aea4a41680555341a5a43c44d31d234c3dcf3e14ce69c6992d975348c55bfb",
+          "executable": false
+        },
+        {
+          "path": ".claude/skills/gh-fix-ci/SKILL.md",
+          "sha256": "b71f6a156505735b2f85d3d13567eb454be32ec13719107423cb8c9a2c8eb1ab",
+          "executable": false
+        },
+        {
+          "path": ".claude/skills/headroom/SKILL.md",
+          "sha256": "653b6553a2be4feb74aa691f2aba512f788b207f92d6db985d818af3ef661adb",
+          "executable": false
+        },
+        {
+          "path": ".claude/skills/pre-commit/SKILL.md",
+          "sha256": "528fa9a71e67f3aeb09cb5dd59514f272d8950398921252d31d8ad4afe528dd9",
+          "executable": false
+        },
+        {
+          "path": ".claude/skills/systematic-debugging/SKILL.md",
+          "sha256": "3086dbe2a4bf571b6c74ee46fc707000d692529401e4922b50fb5f500c563d41",
+          "executable": false
+        },
+        {
+          "path": ".claude/skills/tldr-code/SKILL.md",
+          "sha256": "adf42e339bdc0bd6138cada74c369b98d510e787d46d979933e9c4c7bec027cb",
+          "executable": false
+        },
+        {
+          "path": ".gitattributes",
+          "sha256": "f19c5389a431dd17e883ddbcd13c85a7f752e0b0b74537a694a71992d11b178a",
+          "executable": false
+        },
+        {
+          "path": ".github/workflows/docs.yml",
+          "sha256": "c2c53353c97df4b6a157d89aa743987af940ebcc55f9648ea52b3875d090dbb0",
+          "executable": false
+        },
+        {
+          "path": ".gitignore",
+          "sha256": "da7f27add04123a7af90e7e8e451cb3f978e9ac9416cc415aa2467b6f3b81af5",
+          "executable": false
+        },
+        {
+          "path": "CLAUDE.md",
+          "sha256": "bf3e7a459a2b0c8d0b4f5cbb6501cacf047b55e0054e69bd15c0fc7b1d8170f6",
+          "executable": false
+        },
+        {
+          "path": "CONTRIBUTING.md",
+          "sha256": "775a4bc286895ed511c2a8581c9ba7bf431b86b8d97f73d483b88c06c5319323",
+          "executable": false
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "ab5606d54720738bc9809f5acd2b66954251c1c4e54bd119a0af69286aea4302",
+          "executable": false
+        },
+        {
+          "path": "PRODUCTION_STATUS.md",
+          "sha256": "b725811f8b62a07c4d9f19c4f614ce3349b499bb66206eb3f216e9582d302fdc",
+          "executable": false
+        },
+        {
+          "path": "README.md",
+          "sha256": "78c15fcc2392e8a75a600833a5cbfd32b42e8b3885fb931027586574adc9afa2",
+          "executable": false
+        },
+        {
+          "path": "SECURITY.md",
+          "sha256": "fcf6f97d56418b75da270274c7ec29e028474d217e6f29881acf7fabe96c78ab",
+          "executable": false
+        },
+        {
+          "path": "docs/ADMISSION_AND_RATE_CONTROL.md",
+          "sha256": "b14ebd304bfb2e5382b1d058a443f72ba7f8a946bed5b8788baed1cc02c52b6c",
+          "executable": false
+        },
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "sha256": "260932035eba741a5962e13d28bff58ab969916dfc355db712d1d451b56b7af1",
+          "executable": false
+        },
+        {
+          "path": "docs/ARCHITECTURE_MAP.md",
+          "sha256": "6ea6066a6685df2f51c570c845e02d2c781e09ab4449fd15c796c83087f8ac58",
+          "executable": false
+        },
+        {
+          "path": "docs/DEFINITION_OF_DONE.md",
+          "sha256": "0423186a8eaa111b0e3d2948e06cd56f3ea6f2fdb83f8e2c648e56eb77e31f8b",
+          "executable": false
+        },
+        {
+          "path": "docs/EPOCH_LIFECYCLE.md",
+          "sha256": "001e5fbb1ddacf399f9a2fdeafa9aa5aac7a98fe2f3617b69ae053ce0ae5cac2",
+          "executable": false
+        },
+        {
+          "path": "docs/GOVERNANCE_TRANSITIONS.md",
+          "sha256": "f889ac98e4a37764551319d97a1ec6a0c99f7f86fb490b43cdae131bc285959d",
+          "executable": false
+        },
+        {
+          "path": "docs/IMPLEMENTATION_STATUS.md",
+          "sha256": "a2485420ae0a22f703458b061075447101d840afeb703c838a219981a840c4b7",
+          "executable": false
+        },
+        {
+          "path": "docs/POLLUTION_AND_RESOURCES.md",
+          "sha256": "4e38e51fa8dd9c3302d2b7aa2d125bb197011489898b786a055de9b1806caad2",
+          "executable": false
+        },
+        {
+          "path": "docs/PRODUCTION_DEFINITION_OF_DONE.md",
+          "sha256": "7c4a9108d0c113a141271df5c19bd463401bedef78d7271a2120e67ed0801553",
+          "executable": false
+        },
+        {
+          "path": "docs/PROTOCOL.md",
+          "sha256": "23807a48f171b4585935b321844bc18863bdfe0a33d70ae788d829260a2640cd",
+          "executable": false
+        },
+        {
+          "path": "docs/PUBLICATION_AIRLOCK.md",
+          "sha256": "26319ab07162037de11b1a58df77fffcc03317a84a88dd68f49f3138d1e69176",
+          "executable": false
+        },
+        {
+          "path": "docs/PUBLICATION_INGRESS.md",
+          "sha256": "14890b8a153f65e2a900bbf68b3858f9a22be45917cb99c9b3cce6057dcdae2e",
+          "executable": false
+        },
+        {
+          "path": "docs/SECURITY_PROPERTIES.md",
+          "sha256": "73fd5574538b12a8204d2e3b7c824485e1336c7c8297bfdc763c91625de85f2e",
+          "executable": false
+        },
+        {
+          "path": "docs/SITE_IDENTITY.md",
+          "sha256": "24cedb205c4cecffd6980a771940798f37cecd1fed2268919081aaf779c2aab7",
+          "executable": false
+        },
+        {
+          "path": "docs/STATE_MACHINES.md",
+          "sha256": "d697275c2678b6582d5423b8d018b6b38b76bf6d6fa74a532f0d308a169ab26a",
+          "executable": false
+        },
+        {
+          "path": "docs/THREAT_MODEL.md",
+          "sha256": "623c7345f778fc6b9e24b4ed28db5ec899bf2eaaefdc2c3c217709642888835e",
+          "executable": false
+        },
+        {
+          "path": "production/CLAIM_TEST_MATRIX.md",
+          "sha256": "b86e454394715f5e3964cb91359231a811d96edbb9f5f0b1855014a6b0a4235e",
+          "executable": false
+        },
+        {
+          "path": "production/DECISIONS.md",
+          "sha256": "cca7102f1462d069b32356f39676a4fb4a770eb20426118ede6ffb9015fa2010",
+          "executable": false
+        },
+        {
+          "path": "production/EVIDENCE_INDEX.md",
+          "sha256": "b6d05bfb2d110dee022a65f53ffdeaf9a00ab93a2f1ac6492fb3f33a0834ab52",
+          "executable": false
+        },
+        {
+          "path": "production/EXECUTION_PLAN.md",
+          "sha256": "fab466ff138bf4fc8b9fa3b74f8c3ececbde5379a2a7f01cc218fce98b867a54",
+          "executable": false
+        },
+        {
+          "path": "production/EXTERNAL_BLOCKERS.md",
+          "sha256": "1f03fa8d663e13323c095b32171ee78e1f026eb8788db8543d52cb4bf09b252b",
+          "executable": false
+        },
+        {
+          "path": "production/GATE_TRIAGE.md",
+          "sha256": "b9cbea2ee0b107eaaacf326f3863ca72af21c81626305e9d9ea060cd44120c03",
+          "executable": false
+        },
+        {
+          "path": "production/GOAL.md",
+          "sha256": "9a1ffebcf97a451e62fe53336815c19450bdaac19b01a2f5c0db9490557bdbd8",
+          "executable": false
+        },
+        {
+          "path": "production/PREREGISTRATION.md",
+          "sha256": "1110d1ff791a6d26557b6e2c9ea8e29de202b056907e03e60a5e57c7a137b659",
+          "executable": false
+        },
+        {
+          "path": "production/REVIEW_PACKET.md",
+          "sha256": "3daab67b09c106a30de2b5bbc9de32e56e057cb901bc11252b05d5e0a7a341fe",
+          "executable": false
+        },
+        {
+          "path": "production/audit/FROZEN_TARGET.md",
+          "sha256": "03636d1d7c124b0f6ac49a62df3005d4ea4f5fe99c8499604c5875d9fe6a9b77",
+          "executable": false
+        },
+        {
+          "path": "production/audit/README.md",
+          "sha256": "532c9ee575bfde79bc72dca3b3cd2aeacdae889b68a37a2c28c02d00085bc931",
+          "executable": false
+        },
+        {
+          "path": "production/claude-progress.md",
+          "sha256": "1afef83935a914a664ad9150eb949834e9c55ae3386b3492696ff7d4ffac51ab",
+          "executable": false
+        },
+        {
+          "path": "production/readiness.json",
+          "sha256": "7433c4674464ad36435029b483f2771c957f1451583731cb1046e370a9db2ef7",
+          "executable": false
+        },
+        {
+          "path": "production/removed-tests.txt",
+          "sha256": "04f0b3368d5b858144f13458888122b91850a75570dc8b69eaca651db396e4de",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-full-suite/Nomad-browser.log",
+          "sha256": "4386e96d5747b54b9772021b0e0137c8c498249ba3224e1f1654a806e2df8b94",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-full-suite/README.md",
+          "sha256": "9228ca95513b0296402514ac50d7d4590affa49cb66132d9863bcdd0b03288f6",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-full-suite/SHA256SUMS",
+          "sha256": "d94af6a281847e11bf4cf8ff0b0e98cfbfa47210a74297190f8020c94b610c1a",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-full-suite/nomad-anytrust-mix-sim.log",
+          "sha256": "1638d4ac8df3acb0f9643fef5aa79ebf2e53794df460eeab094565fb75832b11",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-full-suite/nomad-constant-rate-fabric.log",
+          "sha256": "ff79102c226ccc01e8827816e0cdc3907785182316ea372c9599cec0a69118b9",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-full-suite/nomad-local-reconstruction.log",
+          "sha256": "0067e1d6ecc395ee460015cc2f0dd4f21c4a375f1af27053dfc439e40ff243c9",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-full-suite/nomad-protocol.log",
+          "sha256": "48da858de758dcd5a660202045139d3160736e0732695956f80983277404299e",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-full-suite/nomad-rlnc.log",
+          "sha256": "693ece682f1fcb2245167ea3252096a4602285459f4c229f00d609a452a72a50",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-full-suite/nomad-selection-firewall.log",
+          "sha256": "39b322e9712d737b5b699c8fcc5d15344806d0d8bd05c7f64248555b3d563a87",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-full-suite/nomad-semantic-basins.log",
+          "sha256": "d4a5a5cd5596455771b2b7b70cf6a7a35f3fd688f79bbe91623f34911bb060f4",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-full-suite/nomad-testnet.log",
+          "sha256": "31be7e00fc7db3e1dd9450b0329ef2f49130a637a4b5427b1b69d7509fdf1593",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-pollution-resistance/Nomad-browser.log",
+          "sha256": "d7d73cb419bcbf4e3de3fcecb7b105463392357f771f768c0839b7a31409f8ad",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-pollution-resistance/README.md",
+          "sha256": "885c2afb73aff01914b65d6a4d0a40f30b3de103913eeecf14ce8a3104199620",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-pollution-resistance/SHA256SUMS",
+          "sha256": "efc48b2c0aeda4a14fe42de46e2ee3411c5fcfe530ba98527a7a60d41e01d5bb",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-pollution-resistance/nomad-anytrust-mix-sim.log",
+          "sha256": "2b3771d3c80e377dc0fe35f7afabe67e93fc754bd2acab2afbcea7b89436c6e6",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-pollution-resistance/nomad-constant-rate-fabric.log",
+          "sha256": "b4b248ed43af9942b21e9fbff8506a6d801d6ddffb1ae04a7d6b9d83c3c11d8f",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-pollution-resistance/nomad-local-reconstruction.log",
+          "sha256": "1752b05c424185925af6c0b750846a033f53ca523c8f1dab101604131438ff79",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-pollution-resistance/nomad-protocol.log",
+          "sha256": "9559e895c819298ff0445fd4638d4c1b4bed2424c9f1b725f1265ff5cc288fab",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-pollution-resistance/nomad-rlnc.log",
+          "sha256": "c36034791122c73bca8db97e811c04d964e2e26fe0b1a38580f21b88089ee9ed",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-pollution-resistance/nomad-selection-firewall.log",
+          "sha256": "eee6e691b9e82992fcb12a48ba16e7047699201618cadf4d70dcacb1def2bc2d",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-pollution-resistance/nomad-semantic-basins.log",
+          "sha256": "202ef4f3b3329640698e8860ac99ef34f7e8d8751b5e8ddfd540fc747767c06f",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-pollution-resistance/nomad-testnet.log",
+          "sha256": "42b3ae7174e8216c4831c19a5d72a8b198301f0d756ffeea583ffe40d80291a0",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-protocol-freeze/Nomad-browser.log",
+          "sha256": "327bc6bfd40a0ba54669d90e7e9414d38bcceb812456456089153c24d5668718",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-protocol-freeze/README.md",
+          "sha256": "20f6c64eab20f11b57852f36cb24ad8525d9ab805098bf6e23c192355444f6fd",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-protocol-freeze/SHA256SUMS",
+          "sha256": "e5de6b4330343d6b8ef9f06c40e84382c2fc957f2bc877aa3da6b7ce0d053704",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-protocol-freeze/nomad-anytrust-mix-sim.log",
+          "sha256": "4d79d6921a6a92737098909af75ecf599f8907c107190cb7e351df1adb3bdf14",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-protocol-freeze/nomad-constant-rate-fabric.log",
+          "sha256": "1459cca4f9132971f164760864aab1793db3d56245837f85d5fdc086ca4cb141",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-protocol-freeze/nomad-local-reconstruction.log",
+          "sha256": "ca85af2aa2881532ad9cc441bd4f24ac354d27f9c5c1451857171d2307e3c298",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-protocol-freeze/nomad-protocol.log",
+          "sha256": "3512e60a93d1fe3dfad2e71c5e84593c9751ae6f12a9a0bf3646cd597ebdef55",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-protocol-freeze/nomad-rlnc.log",
+          "sha256": "db1f1c7b221433c6ab97348505261e59e2499ff3c7d30252d62e37886bb6348a",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-protocol-freeze/nomad-selection-firewall.log",
+          "sha256": "c95c3a17bcd8ea7ebb3e659740c84c9875fd7a2a649d21ef33fe32ac5290ac94",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-protocol-freeze/nomad-semantic-basins.log",
+          "sha256": "3a69daa69818af26b4a0ee753f8ccba59a52f551b13b59fc5fefd781273547c8",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-21-protocol-freeze/nomad-testnet.log",
+          "sha256": "9897330b329004cd5981814efd0bf9343a9a79079c7d17558c1e9d7f77ac961d",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-24-gate-integrity/Nomad-browser.log",
+          "sha256": "0cffccbe3e6861de5b07c7cee3f448780fc7f878c535b79686b8b3c664c21604",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-24-gate-integrity/README.md",
+          "sha256": "7ae78ed2716698e1b7ec637d1b6e59ba63035c2dae8deaecc1290e31410d81ef",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-24-gate-integrity/SHA256SUMS",
+          "sha256": "50ae87b619da8e14fe8606fa0ec8ade5e15713aa44df483e6997fc7aa532d1e8",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-24-gate-integrity/engine-forks.log",
+          "sha256": "e4e041b412b37f9cdc68203d2ce8d99cbf1e29ef8069768855a1a827c068edf4",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-24-gate-integrity/nomad-anytrust-mix-sim.log",
+          "sha256": "b9d23c7c7debe537fa1a8571da5ba3facd03ddad0610f8857002d035d53cf634",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-24-gate-integrity/nomad-constant-rate-fabric.log",
+          "sha256": "1f64793d31485c5df05f1da8212233643029494e6c35eb37a230087141b49e93",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-24-gate-integrity/nomad-local-reconstruction.log",
+          "sha256": "4033877fe17407160a79e867fac939490c5bc183e630fe9bd24751009ef7b6f2",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-24-gate-integrity/nomad-protocol.log",
+          "sha256": "2ac4ee04f1f6cd64635bcb0c68a1c6d3369fdefcd358d0a1669e135112bf0ca5",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-24-gate-integrity/nomad-rlnc.log",
+          "sha256": "e1c9f9aa1e51cf349cccd2b9c3256cb03888f8ad2b16136e24bae156d0f2c5a8",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-24-gate-integrity/nomad-selection-firewall.log",
+          "sha256": "69e2de84793e6f8331d101518e93f354d5ebb121bd49a1fc10775d7de63ffdc0",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-24-gate-integrity/nomad-semantic-basins.log",
+          "sha256": "50338a59be15687702b7ce11d6b43b34f2e4d1dd3d38371ae9d282069d751ea6",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-24-gate-integrity/nomad-testnet-gates.log",
+          "sha256": "fe0589ef0a220237c5186d46ec7b48c3184bbc8f1474cfbd41bcd243af501afb",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-08-24-gate-integrity/nomad-testnet.log",
+          "sha256": "e8a8a4e3d44a416ae08ae6a991007bb77dbe3bda0fd81b2d1103a57bae117537",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-base64-differential/README.md",
+          "sha256": "3b024a92053b0ba0ce2d518e967128a1fbbd9f7c45041d64886d6ffd309b37ef",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-base64-differential/SHA256SUMS",
+          "sha256": "74e5f43f397c9278d234d4e6bedebc89f8295e6394774382852bb8741cce3dd4",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-base64-differential/authority.b64",
+          "sha256": "57e9fcca425098f5c5b677f535a8c8b2989b5e0af42c8b4015ade4c5336e89ad",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-base64-differential/canonical.json",
+          "sha256": "26d9977f3b4b90f27ffe0dac7baaac414455235b46a0fedd2ce09d2c294154ce",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-base64-differential/escaped.json",
+          "sha256": "1a98726e0328441dbb92d7f1e5406967316b4681a5fdb52e3e702c8dce3ab2a8",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-shaper-distribution-probe/README.md",
+          "sha256": "9bf1ca8aa87e583113d03f1e6d5a2acc84ccb862d0717c3673ef3dc6b65c1743",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-shaper-distribution-probe/SHA256SUMS",
+          "sha256": "202ea22cf1725ee433b7b8e198528644abede222c6d47234ed2df593c2a58acf",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-shaper-distribution-probe/run-01-idle.txt",
+          "sha256": "d06244fd82aaa61f50bd0679ddd81ca0dbf59b86c824978689bfaf9f4a51c1ae",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-shaper-distribution-probe/run-02-active.txt",
+          "sha256": "b84e6f2e9234b205a38d47168853345ae551e159c051534297c9a79a2c55c3ca",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-shaper-distribution-probe/run-03-active.txt",
+          "sha256": "baf288c62b4c9b83ddb39cb823cbe5e292af31c781a5b5a6fc0887c6ff36ede4",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-shaper-distribution-probe/run-04-idle.txt",
+          "sha256": "9faadc13ab219783ce3bb63a49d93f042e2a4acf0286ddac05bc7ed87e2f34b8",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-shaper-distribution-probe/run-05-active.txt",
+          "sha256": "55d6ffd8841856739501adde7d697d68599e19a05ee330bbfc1c7e8140b523ee",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-shaper-distribution-probe/run-06-idle.txt",
+          "sha256": "6a4da4f33fc88ea46ee6892e8a721a8e1aeccb7ab99428f458dac918586f75cf",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-shaper-distribution-probe/run-07-idle.txt",
+          "sha256": "55b0457abf33970cfa9fedf0a58a1779b648af4f4ec65b69d84f6a0a7f2222b5",
+          "executable": false
+        },
+        {
+          "path": "production/reports/2026-09-02-shaper-distribution-probe/run-08-active.txt",
+          "sha256": "9a67443abee9fb8c58365094d02daa42f66e2136be19d0fe2c52e117ed592d4b",
+          "executable": false
+        },
+        {
+          "path": "production/reviews/2026-08-27-internal-security-review.md",
+          "sha256": "a79cb43ada94542959992d6d9dd57c53ece52d32ce2def7f0ea822f59a20f672",
+          "executable": false
+        },
+        {
+          "path": "production/sprints/C1.md",
+          "sha256": "9956cd20a948e30d0669f805a59980f0a89cf3e2765f81e39e3164853f85bcbb",
+          "executable": false
+        },
+        {
+          "path": "production/sprints/D1.md",
+          "sha256": "f79f815ee5629e58d9fed82e5b1972054c77f07a21c26b2c8fc0dd1a0b81c501",
+          "executable": false
+        },
+        {
+          "path": "production/workstreams.json",
+          "sha256": "fb6cc272b507269c96f46423c7c8c3e5b351d431fb867e16d86a2e947de53074",
+          "executable": false
+        },
+        {
+          "path": "scripts/check-cited-tests.py",
+          "sha256": "33eef02cfe0522acaf2f0ef385872fe889959f007fc9488bd328a80877f29d18",
+          "executable": true
+        },
+        {
+          "path": "scripts/check-workflows.py",
+          "sha256": "da680f8d2120224018aca2a088182a78eaf20eb86293136461e3ed18b34dbec8",
+          "executable": true
+        },
+        {
+          "path": "scripts/check_docs.py",
+          "sha256": "977d0f203e2a842c9c9a3861adb6e53de03ae7969cf4d3e89357888bcd3a07df",
+          "executable": true
+        },
+        {
+          "path": "scripts/toc.py",
+          "sha256": "89f068a424bb938334e1151854da6873589183205abd1725649267aea9746b35",
+          "executable": true
+        }
+      ]
+    },
+    {
+      "repository": "Jtensetti/nomad-local-reconstruction",
+      "commit": "58889a023a86498b9cfe5f21985c2874e542a7b6",
+      "path": "sdk/nomad-local-reconstruction",
+      "license": "MIT License",
+      "files": [
+        {
+          "path": ".gitattributes",
+          "sha256": "f19c5389a431dd17e883ddbcd13c85a7f752e0b0b74537a694a71992d11b178a",
+          "executable": false
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "sha256": "a5ce583af50512bae6938f5184f834c0f220607aa8e9e138c818b24a29eeb190",
+          "executable": false
+        },
+        {
+          "path": ".gitignore",
+          "sha256": "da267d46b31478d2bca30e18c3dc8772150e133491f68292b1ffa68e9d273c8d",
+          "executable": false
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "ab5606d54720738bc9809f5acd2b66954251c1c4e54bd119a0af69286aea4302",
+          "executable": false
+        },
+        {
+          "path": "README.md",
+          "sha256": "d9f6d8cdde113ff5ab47d6b0b40f385becd058bc6312e101977e198f61658959",
+          "executable": false
+        },
+        {
+          "path": "conformance/reference/crosscheck_sitelog.py",
+          "sha256": "559f1670b3af768c62079d356301c62b14040afa29b8f9f41dfc1d5e11c85a6e",
+          "executable": true
+        },
+        {
+          "path": "conformance/reference/ed25519ref.py",
+          "sha256": "8686b4dd740272e785b04f34e0c06c3cded6da79efd3605df17c9aa1c5e81831",
+          "executable": false
+        },
+        {
+          "path": "conformance/reference/nomadsitelog.py",
+          "sha256": "5982cdfbe07e141bdee40d845beed93c835f1272787ea5d140c29076ebf6cb94",
+          "executable": false
+        },
+        {
+          "path": "go.mod",
+          "sha256": "d65121115badae3be3d58eacaa5d84054badf2eb0c58713e1fe91ed9a33a0461",
+          "executable": false
+        },
+        {
+          "path": "internal/strictjson/strictjson.go",
+          "sha256": "87b89c4716275cc6486454977d3faffd59bfc170c1602a3d6e6685a0793c165c",
+          "executable": false
+        },
+        {
+          "path": "internal/strictjson/strictjson_test.go",
+          "sha256": "7f58b6a3ae4024fc45660ef9cbf1a30d6586d4c656308cd0cc128d51fa2a48b5",
+          "executable": false
+        },
+        {
+          "path": "reconstruct/manifest.go",
+          "sha256": "367a25ffe92d0f7d4be6949c5805a4099df79d332262712844658731395ecc55",
+          "executable": false
+        },
+        {
+          "path": "reconstruct/manifest_test.go",
+          "sha256": "07fd437e7509084d99e78da81dd6f32610c3adace6502679a9baddc23cdbb241",
+          "executable": false
+        },
+        {
+          "path": "reconstruct/modulegraph_test.go",
+          "sha256": "37f175c701708f5633d1bff55f77a33e771c8b9d062f77d39f82c5ea365b194b",
+          "executable": false
+        },
+        {
+          "path": "reconstruct/reconstruct.go",
+          "sha256": "abdd6b580de6a1f8ffc83e7852bef9f01637a1825c090343cbafafdd3973ed71",
+          "executable": false
+        },
+        {
+          "path": "reconstruct/reconstruct_test.go",
+          "sha256": "f7f03653071369d8975ce87487634837a92ab015055c9ce6dc54718572a5a71b",
+          "executable": false
+        },
+        {
+          "path": "scripts/run-staticcheck.sh",
+          "sha256": "d49e10c6b32ac27fdc7a17dc632b3f63a9753e5bdaad978df19c63f74e1d9d6e",
+          "executable": true
+        },
+        {
+          "path": "scripts/scan-vulnerabilities.sh",
+          "sha256": "9c9fc094821d13925dede17d97c389793d230410820c1278e74415865f178e12",
+          "executable": true
+        },
+        {
+          "path": "scripts/test-scan-vulnerabilities.sh",
+          "sha256": "5c1c5376e164082828089a7cde114b288a6c23ce52f9851be7c7c30f03509c65",
+          "executable": true
+        },
+        {
+          "path": "site/attack_test.go",
+          "sha256": "b4ef07d82568909646b9d308fb54575941f14195e8b18c4061e1628d869a551f",
+          "executable": false
+        },
+        {
+          "path": "site/chain.go",
+          "sha256": "fdbb92f553946550b659a6d129b95c7069a8b7dde37bcbd8d9405339b6b82ddc",
+          "executable": false
+        },
+        {
+          "path": "site/crossimpl_test.go",
+          "sha256": "4320148c1dcfa51ac597fbc2c019ae8dbbf7bed0c9033478086fcdd425e899c7",
+          "executable": false
+        },
+        {
+          "path": "site/descriptor.go",
+          "sha256": "bfecc279a50b61c6104f991f6c8cf697ccc1d48940dccecd73ce0222c3f3581b",
+          "executable": false
+        },
+        {
+          "path": "site/distribution.go",
+          "sha256": "614713899f3b076d384b6da6f951779b2dafc7875015f533fd912f487d85043a",
+          "executable": false
+        },
+        {
+          "path": "site/distribution_test.go",
+          "sha256": "44fcf4080a4e79355ab8c14c15d20e3b3f0f3bdd660d66b7a2d1a78ebf91f719",
+          "executable": false
+        },
+        {
+          "path": "site/drill_test.go",
+          "sha256": "c4c64ce5149c536c5930893898f21666f74bebb316b5d81ed8fb7ef689b9c467",
+          "executable": false
+        },
+        {
+          "path": "site/encoding.go",
+          "sha256": "d5a18964c9e4e28e2871cf469b03806ed534c1eeb6911c7cb3f52f26fdd2860b",
+          "executable": false
+        },
+        {
+          "path": "site/logvectors.go",
+          "sha256": "61cf7f7cb1c2be8905e56187d31fc43b590c20f347e1803e1ad9edaf6f9566fb",
+          "executable": false
+        },
+        {
+          "path": "site/logvectors_test.go",
+          "sha256": "0fa5b26b1914396e1679bcecf2eb05613873188b67527172c6c5b7509c6c6b54",
+          "executable": false
+        },
+        {
+          "path": "site/publication.go",
+          "sha256": "64270b51b83a9c88d3fe71d6d5878c72f0732187909883ecc5cc6a561aae320f",
+          "executable": false
+        },
+        {
+          "path": "site/site_test.go",
+          "sha256": "3b709e94f16b50a396461639918506aae0b20e886aa8955e0f4aa8f0c37d96b4",
+          "executable": false
+        },
+        {
+          "path": "site/testdata/site-identity-vectors.json",
+          "sha256": "e41bb2d9d4cafb837e43b0a194cae4984882745dbef0b7ea772b6896fd2597e1",
+          "executable": false
+        },
+        {
+          "path": "site/testdata/site-log-corpus.json",
+          "sha256": "fd85f8025476119db2cc0bbd5739e35265070b170e3a35d77e8763f3fbb66a8b",
+          "executable": false
+        },
+        {
+          "path": "site/transparency/checkpoint.go",
+          "sha256": "653c606f1d15f3ecc28ca38e90b6b08700528669201458ba14be64107a8965a9",
+          "executable": false
+        },
+        {
+          "path": "site/transparency/monitor.go",
+          "sha256": "c88bbfc1682353e9226fd6da317437bfa2c31add0e83b826efa6be291f3d1b13",
+          "executable": false
+        },
+        {
+          "path": "site/transparency/monitor_test.go",
+          "sha256": "77cea20b7a4101229d5b7427e0ca24bd38cf30ce671b7e690902e02c4ce43329",
+          "executable": false
+        },
+        {
+          "path": "site/transparency/tree.go",
+          "sha256": "1edb4b00d1ed74ed930aada34b37cbf898d8b683a3bd358ca1103e55ad46fe97",
+          "executable": false
+        },
+        {
+          "path": "site/transparency/tree_test.go",
+          "sha256": "70f733b9985d2469027738b9b09cd4fdb0fd70d2ac85c8696e503131757c5374",
+          "executable": false
+        },
+        {
+          "path": "site/transparency/witness.go",
+          "sha256": "371d18467ab0289c392d51c61dbe2f1dedcd6730308ebd164bebc7e1d6d3aaf7",
+          "executable": false
+        },
+        {
+          "path": "site/transparency/witness_test.go",
+          "sha256": "7f8961a5bd72ca7f349fd9514189deebd715c665b66b97bee565cf0223019a55",
+          "executable": false
+        },
+        {
+          "path": "site/vectors.go",
+          "sha256": "59fdb9d0ab64ef02fb54ca3282f6a19e1399595d543b18631bf958801b4a3df4",
+          "executable": false
+        },
+        {
+          "path": "site/vectors_test.go",
+          "sha256": "a17a17da808c461f29ffba0af0140153553f0c96129061cd0ec20969b841440c",
+          "executable": false
+        }
+      ]
+    },
+    {
+      "repository": "Jtensetti/nomad-anytrust-mix-sim",
+      "commit": "3a750e6909f21ce08bee32d8425c5666f0a4a3f0",
+      "path": "sdk/nomad-anytrust-mix-sim",
+      "license": "MIT License",
+      "files": [
+        {
+          "path": ".gitattributes",
+          "sha256": "f19c5389a431dd17e883ddbcd13c85a7f752e0b0b74537a694a71992d11b178a",
+          "executable": false
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "sha256": "dc495d140ea614c350bfbccbf01539794d84ab5b8c53aa888f12e354a29ae1d3",
+          "executable": false
+        },
+        {
+          "path": ".gitignore",
+          "sha256": "da7f27add04123a7af90e7e8e451cb3f978e9ac9416cc415aa2467b6f3b81af5",
+          "executable": false
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "ab5606d54720738bc9809f5acd2b66954251c1c4e54bd119a0af69286aea4302",
+          "executable": false
+        },
+        {
+          "path": "README.md",
+          "sha256": "6cadc3b83ff4ae49842aad36ddf6cfbaa4b90887df318e752559b5fb5aa072c7",
+          "executable": false
+        },
+        {
+          "path": "cmd/mix-sim/main.go",
+          "sha256": "7bfb66b7a60e30261dedbff40536277ca8e03a7e34f1fd52ff6d452ec3081a91",
+          "executable": false
+        },
+        {
+          "path": "cmd/nomad-mix-verify/main.go",
+          "sha256": "181bc177412b919d82e66d645c90d113b4d2d648dea97ca4a5e7e5eb9e73b2cd",
+          "executable": false
+        },
+        {
+          "path": "cmd/nomad-mix-verify/verify_e2e_test.go",
+          "sha256": "3cfe369579cad1411645f448565f65224dcb8703d6017584d5da7b19ebcd924b",
+          "executable": false
+        },
+        {
+          "path": "go.mod",
+          "sha256": "20cec57690d167dfbd11112b30c00ce15101ac1b740eadc1969c90047a0ebbd0",
+          "executable": false
+        },
+        {
+          "path": "go.sum",
+          "sha256": "a317f9e7daa771aeb1efb006c809de20c8b403ae5ebe31adfa464cc56c9764ce",
+          "executable": false
+        },
+        {
+          "path": "mix/accountability_test.go",
+          "sha256": "f989e917dfa988817640af50ee022b17f43ad9439c2ed3e6bc161c2afcd56172",
+          "executable": false
+        },
+        {
+          "path": "mix/availability.go",
+          "sha256": "a8167905cc49a6ba2014b62f01e71b1bdfe5366333057a3fc90ab2537661cdd7",
+          "executable": false
+        },
+        {
+          "path": "mix/availability_test.go",
+          "sha256": "51ffa4b5c189d6043b3ec1e59ba03100279c60dd3646ec2cd330b3ccc7c861c4",
+          "executable": false
+        },
+        {
+          "path": "mix/binding_vectors_test.go",
+          "sha256": "cd9eec702b4c9457d7471285d49654256384a6294a625cf72fb85f4709d0e898",
+          "executable": false
+        },
+        {
+          "path": "mix/blame.go",
+          "sha256": "0c6fca2845e2e9ab94ecf077c6e516e2c2342ae5633bbb785403132782754b87",
+          "executable": false
+        },
+        {
+          "path": "mix/blame_test.go",
+          "sha256": "aa57654b9428d542ccd80a957260c1525781ce338805ddb7c720fb26451c496f",
+          "executable": false
+        },
+        {
+          "path": "mix/dkg.go",
+          "sha256": "e594d9647a0f3396ba35ee5dbffd3c593861b1eb6b418c02cf3b2f9460ed4450",
+          "executable": false
+        },
+        {
+          "path": "mix/dkg_protocol.go",
+          "sha256": "7adad10fa25d09bf25e493bc1f8a5117c9d8a0fe8890706e30bd0f4502e41301",
+          "executable": false
+        },
+        {
+          "path": "mix/dkg_protocol_test.go",
+          "sha256": "36d6a233c32df39af5d38ccf379f5aece0847e6d5751f9eb04e05be9912c9689",
+          "executable": false
+        },
+        {
+          "path": "mix/dkg_test.go",
+          "sha256": "623aae7cc8b2686dcdd5a7dca74b1099ede9c000da0eb42be42ecfa734e7bfe2",
+          "executable": false
+        },
+        {
+          "path": "mix/encryptcell_test.go",
+          "sha256": "1937ab73b200cd0c603222ad610706b5bbd073a8eb560862b5e9945030be90a0",
+          "executable": false
+        },
+        {
+          "path": "mix/hardening_test.go",
+          "sha256": "da150650e34a40740a37484fad1f4d01a77da340c0c71c04f0db1d3cd411c729",
+          "executable": false
+        },
+        {
+          "path": "mix/hotpath_bench_test.go",
+          "sha256": "aa5d6b96790e75d5d1d0e9c8be03d93349cc71de573f0ac0bf76d35e2e3b81e3",
+          "executable": false
+        },
+        {
+          "path": "mix/livefault_test.go",
+          "sha256": "3607b9f1f261fd32da5e27721ef0d96efa2395a1f5d56058269a23c19150d5a6",
+          "executable": false
+        },
+        {
+          "path": "mix/mix.go",
+          "sha256": "876006f6865e948a135e91e1f90a20b69bfac21328086294161bf13b381d64d5",
+          "executable": false
+        },
+        {
+          "path": "mix/mix_test.go",
+          "sha256": "41281a8ca4d4dbf486827a2948ae8b7270cb09b9e1aca26bd7ed2075ebad3a2e",
+          "executable": false
+        },
+        {
+          "path": "mix/modulegraph_test.go",
+          "sha256": "deb43ca748065717c03002272e246145ea41afd62510740db153dbc157f8ec06",
+          "executable": false
+        },
+        {
+          "path": "mix/parallel.go",
+          "sha256": "9e66d735a1a4f0043948897573cbcb34610a7193e9318e3dc29af22598797a2d",
+          "executable": false
+        },
+        {
+          "path": "mix/parallel_test.go",
+          "sha256": "da147dc5fe7e9686779a5bf47e8fee8a871e92f32b3409993c5995e853cc43af",
+          "executable": false
+        },
+        {
+          "path": "mix/partialorder_test.go",
+          "sha256": "9bfbb148add706b00cb0c2d38aa88720e0532251196d6f50d74c441afc859035",
+          "executable": false
+        },
+        {
+          "path": "mix/production_test.go",
+          "sha256": "ca858d0e2f7134ed3f7f304b8696b2337ca62dd0d1739c97ad0e91856259669b",
+          "executable": false
+        },
+        {
+          "path": "mix/threshold.go",
+          "sha256": "95a65cf2ad6d8c21c027f99439b480c0f14f8268e555d6e1e70fcfb2bb42590c",
+          "executable": false
+        },
+        {
+          "path": "mix/transcript.go",
+          "sha256": "bbf827067f3e0b76a5c87b6bce55d97a7898e2d7f13b35242bfac1439e9a0f4d",
+          "executable": false
+        },
+        {
+          "path": "mix/transcript_export.go",
+          "sha256": "2171da24b9576e92e06fd816d716590038afac6c10102ad4cd336a52431840b6",
+          "executable": false
+        },
+        {
+          "path": "mix/transcript_export_test.go",
+          "sha256": "ebc41c4bd33b6e268bea26ed90c0c417903d466aaa092e65314040613e2fcda7",
+          "executable": false
+        },
+        {
+          "path": "scripts/run-staticcheck.sh",
+          "sha256": "d49e10c6b32ac27fdc7a17dc632b3f63a9753e5bdaad978df19c63f74e1d9d6e",
+          "executable": true
+        },
+        {
+          "path": "scripts/scan-vulnerabilities.sh",
+          "sha256": "9c9fc094821d13925dede17d97c389793d230410820c1278e74415865f178e12",
+          "executable": true
+        },
+        {
+          "path": "scripts/test-scan-vulnerabilities.sh",
+          "sha256": "5c1c5376e164082828089a7cde114b288a6c23ce52f9851be7c7c30f03509c65",
+          "executable": true
+        }
+      ]
+    },
+    {
+      "repository": "Jtensetti/nomad-constant-rate-fabric",
+      "commit": "1883e780b3f9bab21cc7bb6a448781662ce6c390",
+      "path": "sdk/nomad-constant-rate-fabric",
+      "license": "NOMAD RESTRICTED SOURCE LICENSE 1.0",
+      "files": [
+        {
+          "path": ".gitattributes",
+          "sha256": "f19c5389a431dd17e883ddbcd13c85a7f752e0b0b74537a694a71992d11b178a",
+          "executable": false
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "sha256": "99b0d95ba84e49691f9ef7ab2adafe0aec6c4980c3978632dc2a08d45f4aab58",
+          "executable": false
+        },
+        {
+          "path": ".gitignore",
+          "sha256": "da7f27add04123a7af90e7e8e451cb3f978e9ac9416cc415aa2467b6f3b81af5",
+          "executable": false
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "bf422cf81e694f43d7ac6142baa0855bf8f2d16b456a907962bb11613acc92a4",
+          "executable": false
+        },
+        {
+          "path": "README.md",
+          "sha256": "18286e25588119ffbbc4d6759046fe6d0664fa22cbaf6dec63653a68344267f7",
+          "executable": false
+        },
+        {
+          "path": "cmd/fabric-sim/main.go",
+          "sha256": "eb5b920864e5774fe1d68baf12b4271ef7e0eb52a8890f287bf0864fbb6abcf3",
+          "executable": false
+        },
+        {
+          "path": "fabric/cell.go",
+          "sha256": "ed5a8622bbceaf98eec5845fac6b7f1cf4f8cc0650e0963abc76258cb418127a",
+          "executable": false
+        },
+        {
+          "path": "fabric/cell_test.go",
+          "sha256": "7fff9c933866c261b71bc9139c550ab467d87d80bce006226df74c385521951b",
+          "executable": false
+        },
+        {
+          "path": "fabric/deadline_test.go",
+          "sha256": "09f43ab6199b87ec66784cc136b949b1c3290ef3cd06d089a65ae95d9cc98ddc",
+          "executable": false
+        },
+        {
+          "path": "fabric/modulegraph_test.go",
+          "sha256": "b64d82771a7fc102556f7aadb5491ef03cfd03273fd5db855800343a60cc9a11",
+          "executable": false
+        },
+        {
+          "path": "fabric/queue_test.go",
+          "sha256": "080cc31b2aa4e2c51d0168ce43cad24bdee3600d1a32334ffcb07153ed3765c5",
+          "executable": false
+        },
+        {
+          "path": "fabric/scheduler.go",
+          "sha256": "36480f7c894c9a74bee57604bfd403afff906e3c4aff863251ca2ab9ecadf325",
+          "executable": false
+        },
+        {
+          "path": "fabric/scheduler_test.go",
+          "sha256": "999245bc2bdfded9e4fd8e0ec8c09cdcd158270bf76cca179c4f556b92396a3f",
+          "executable": false
+        },
+        {
+          "path": "fabric/sinkfailure_test.go",
+          "sha256": "eaf749232558e6ac38597e4fd966f031278efb9ea160b2c6053a53bd48ce1af8",
+          "executable": false
+        },
+        {
+          "path": "fabric/udp.go",
+          "sha256": "7770b2dbce47e60758fa76427fe3b496ce871b226e6ffed4efe8eb15b8e32954",
+          "executable": false
+        },
+        {
+          "path": "go.mod",
+          "sha256": "ebdc2a79306e87422941cb1e7011edec4cefbfb4420482329f2716adbbf32cb1",
+          "executable": false
+        },
+        {
+          "path": "scripts/run-staticcheck.sh",
+          "sha256": "d49e10c6b32ac27fdc7a17dc632b3f63a9753e5bdaad978df19c63f74e1d9d6e",
+          "executable": true
+        },
+        {
+          "path": "scripts/scan-vulnerabilities.sh",
+          "sha256": "9c9fc094821d13925dede17d97c389793d230410820c1278e74415865f178e12",
+          "executable": true
+        },
+        {
+          "path": "scripts/test-scan-vulnerabilities.sh",
+          "sha256": "5c1c5376e164082828089a7cde114b288a6c23ce52f9851be7c7c30f03509c65",
+          "executable": true
+        }
+      ]
+    },
+    {
+      "repository": "Jtensetti/nomad-rlnc",
+      "commit": "fff491f2f6e4e97d0839c203a3c8e1c2cf02de0f",
+      "path": "sdk/nomad-rlnc",
+      "license": "MIT License",
+      "files": [
+        {
+          "path": ".gitattributes",
+          "sha256": "f19c5389a431dd17e883ddbcd13c85a7f752e0b0b74537a694a71992d11b178a",
+          "executable": false
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "sha256": "99b0d95ba84e49691f9ef7ab2adafe0aec6c4980c3978632dc2a08d45f4aab58",
+          "executable": false
+        },
+        {
+          "path": ".github/workflows/fuzz.yml",
+          "sha256": "8e89214a76a3d51b54ae7586e79055a4f03d825a672e13483d610f60cbd1620f",
+          "executable": false
+        },
+        {
+          "path": ".gitignore",
+          "sha256": "da7f27add04123a7af90e7e8e451cb3f978e9ac9416cc415aa2467b6f3b81af5",
+          "executable": false
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "ab5606d54720738bc9809f5acd2b66954251c1c4e54bd119a0af69286aea4302",
+          "executable": false
+        },
+        {
+          "path": "README.md",
+          "sha256": "fa6621a0c1c733e191950489be9e53f88c23ccd4d41ecc49a7e68ab662999b34",
+          "executable": false
+        },
+        {
+          "path": "go.mod",
+          "sha256": "ff580073250177e6e4dc829a95d6c8f6d68f8045c90df08fa1f109612fbb7b1b",
+          "executable": false
+        },
+        {
+          "path": "rlnc/bounded.go",
+          "sha256": "3c24ccd58c4bb4cf08429536723f1261863dfd29c8876598066838e2959612ba",
+          "executable": false
+        },
+        {
+          "path": "rlnc/bounded_test.go",
+          "sha256": "04cf2aedfebeb5745151966ce86692f0b9267537b6e12912d63a817a48481ca6",
+          "executable": false
+        },
+        {
+          "path": "rlnc/byzantine_test.go",
+          "sha256": "5a1ce0d88f9cf55bc0677beb4a34418c341ece49be9c21430aa95a85c308cdce",
+          "executable": false
+        },
+        {
+          "path": "rlnc/decoder.go",
+          "sha256": "2058baad1811fa942ee9bda52c0594bfc0da617609340923524290d8a9139294",
+          "executable": false
+        },
+        {
+          "path": "rlnc/fuzz_test.go",
+          "sha256": "3c925f0fc09279bce12751b3f4a6fd22c51b1ebed6b9c4727fdcb8fba88f33e9",
+          "executable": false
+        },
+        {
+          "path": "rlnc/gf256.go",
+          "sha256": "268dbd6b9b6cd8faf3d21a85c304c7450141a88ce2837538a2577c462f68d586",
+          "executable": false
+        },
+        {
+          "path": "rlnc/modulegraph_test.go",
+          "sha256": "183d8eb8d8419ee2d6ecc1d4b37aec47fde2e8f71d74073c33e325f6dc6d1682",
+          "executable": false
+        },
+        {
+          "path": "rlnc/packet.go",
+          "sha256": "74be7e429ac2c1d14e944dce303cc1cc46c136ddbdbeebf6f3ee04ddc3db46e3",
+          "executable": false
+        },
+        {
+          "path": "rlnc/packet_test.go",
+          "sha256": "af373fb0c0c6f91f334d0993a1b6bd7f927cad5786228fd8ff4bd0b598cf9149",
+          "executable": false
+        },
+        {
+          "path": "rlnc/pivot_order_test.go",
+          "sha256": "283ac1b1223f1abc7fadf474087f1e0ab36da2e328cf0e9c5ea4740f5dc702ee",
+          "executable": false
+        },
+        {
+          "path": "rlnc/rlnc.go",
+          "sha256": "429c6166ef3158cfccb70044bdb40b81bbc5467e0d780e70dc3f07806e22aa35",
+          "executable": false
+        },
+        {
+          "path": "rlnc/rlnc_test.go",
+          "sha256": "2e386e9d3eb0afcf2f5a03c03bfe79c7ebc6f246720e64a42e733235eecc939d",
+          "executable": false
+        },
+        {
+          "path": "scripts/run-staticcheck.sh",
+          "sha256": "d49e10c6b32ac27fdc7a17dc632b3f63a9753e5bdaad978df19c63f74e1d9d6e",
+          "executable": true
+        },
+        {
+          "path": "scripts/scan-vulnerabilities.sh",
+          "sha256": "9c9fc094821d13925dede17d97c389793d230410820c1278e74415865f178e12",
+          "executable": true
+        },
+        {
+          "path": "scripts/test-scan-vulnerabilities.sh",
+          "sha256": "5c1c5376e164082828089a7cde114b288a6c23ce52f9851be7c7c30f03509c65",
+          "executable": true
+        }
+      ]
+    },
+    {
+      "repository": "Jtensetti/nomad-semantic-basins",
+      "commit": "e3b477f0ccee64faf9ea55d373b7eaecc7c1c44e",
+      "path": "sdk/nomad-semantic-basins",
+      "license": "MIT License",
+      "files": [
+        {
+          "path": ".gitattributes",
+          "sha256": "f19c5389a431dd17e883ddbcd13c85a7f752e0b0b74537a694a71992d11b178a",
+          "executable": false
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "sha256": "741b252d8eda6eedb64e93a681086024346de06b629a3860b736a871e0184be2",
+          "executable": false
+        },
+        {
+          "path": ".gitignore",
+          "sha256": "da7f27add04123a7af90e7e8e451cb3f978e9ac9416cc415aa2467b6f3b81af5",
+          "executable": false
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "ab5606d54720738bc9809f5acd2b66954251c1c4e54bd119a0af69286aea4302",
+          "executable": false
+        },
+        {
+          "path": "README.md",
+          "sha256": "3d899328730c70979437166ad26190c81298ec98cd20af33a0e97d1571f6602a",
+          "executable": false
+        },
+        {
+          "path": "basin/architecture_test.go",
+          "sha256": "ab5326b43c38cbd36992174375facbf6a81ec24c8fa3a8e967a89cb9e7307b19",
+          "executable": false
+        },
+        {
+          "path": "basin/attest.go",
+          "sha256": "f3fd7d4511b5296a6fc9f17b6b44fe8d6dbc7ec80f07bb9651844118794f4d67",
+          "executable": false
+        },
+        {
+          "path": "basin/attest_test.go",
+          "sha256": "63335b1a856dc3f9c041dbe688db7acd0162f4501006a1dd08967b40a3af56d4",
+          "executable": false
+        },
+        {
+          "path": "basin/embed.go",
+          "sha256": "b7273a8c11df19133c1cba1ac3b34ab8450e089be33243d96d02144aeaa22715",
+          "executable": false
+        },
+        {
+          "path": "basin/embed_test.go",
+          "sha256": "511dc3fb7b30d72337620d9d0b866200fe6f73f7f1d076da0b3f257c453a0b7b",
+          "executable": false
+        },
+        {
+          "path": "basin/loopback/egress_test.go",
+          "sha256": "84482f462622dc3c574d2cd5d37e9c935d360ab676805093f9ec7adc5eaeb5ab",
+          "executable": false
+        },
+        {
+          "path": "basin/loopback/embedder.go",
+          "sha256": "a11e4e9e9f84a078f7e1ffe457650546dfafde4e7acb879440e22375b6805303",
+          "executable": false
+        },
+        {
+          "path": "basin/loopback/embedder_test.go",
+          "sha256": "ac2fc66545d7c8b70cce65db0c0bb349133d40c72fb364512b7a38a8e7aa634b",
+          "executable": false
+        },
+        {
+          "path": "basin/loopback/seal.go",
+          "sha256": "b4c4b8ae107f84c79a85694c31b1a9f374c41db304a7b7aa1838f37c439c5ff9",
+          "executable": false
+        },
+        {
+          "path": "basin/loopback/seal_unit_test.go",
+          "sha256": "67fb067cc5634a65a7f6fe188b187812848ef10781a005affe35646ee5399cf6",
+          "executable": false
+        },
+        {
+          "path": "basin/loopback/sealed_test.go",
+          "sha256": "df5d533fee28e887c1bcf5e1cc626225bf557f1d463955908234c25ae8a1f4cf",
+          "executable": false
+        },
+        {
+          "path": "basin/loopback/service.go",
+          "sha256": "e94a9d7657e0d185b30fc26f80d5b86b9898d16b8fe5ce56d31dd3eb0d662cd0",
+          "executable": false
+        },
+        {
+          "path": "basin/model/adapter.go",
+          "sha256": "9a0cd7756788c5ee2c6997e5997083b2894a629ba943fe6b46e9f917bcff8ed8",
+          "executable": false
+        },
+        {
+          "path": "basin/model/adapter_test.go",
+          "sha256": "8398874b6fc2d260ade976f8aa676fec592308baf7474459a1b3e42725ed75ce",
+          "executable": false
+        },
+        {
+          "path": "basin/model/catalogue.go",
+          "sha256": "40cdcfce1c421f293fbe8e9a60cb4f8aab2a47c06de380dcf80584fb54701f3f",
+          "executable": false
+        },
+        {
+          "path": "basin/model/fingerprint.go",
+          "sha256": "db6e49023da5e2cc05d152efa97774ae6ef03f43f542b5f5b857f7a908a8b219",
+          "executable": false
+        },
+        {
+          "path": "basin/model/fingerprint_test.go",
+          "sha256": "c1967b86c1d3e05167c2c4bb379ae8e66fbcaf82928c0cfa187b2e35ad39ae96",
+          "executable": false
+        },
+        {
+          "path": "basin/model/manifest.go",
+          "sha256": "808755f05a9a51996e27b5a94062674f9faeade59836c3d681cc83ba29b52006",
+          "executable": false
+        },
+        {
+          "path": "basin/model/registry.go",
+          "sha256": "1dcee2496f15d615e12484d5da6eec061890150ce8fc9248f638920db9d159e0",
+          "executable": false
+        },
+        {
+          "path": "basin/model/registry_test.go",
+          "sha256": "57c66f906312fdb26d7b7bea07769b18126766cc57681644346c823a2f735eaa",
+          "executable": false
+        },
+        {
+          "path": "basin/modulegraph_test.go",
+          "sha256": "e0ee8d0dc584ca1002ff6107d0d3d2877f9d5d5b8644a48d12c17eed7feba67b",
+          "executable": false
+        },
+        {
+          "path": "cmd/basin/main.go",
+          "sha256": "8d3d674ce72591c1c0b150c4c7908aee3c6df349472558a3c1bcbc317c275660",
+          "executable": false
+        },
+        {
+          "path": "cmd/nomad-embed-service/main.go",
+          "sha256": "6b3e87f559c0b04cf10c1c6d026388686c8ef3859b478636f1ecf37c57feeddb",
+          "executable": false
+        },
+        {
+          "path": "cmd/nomad-embed-service/main_test.go",
+          "sha256": "03e6900704750f5074b1c1432fd44ca7766c28a71bdc49db6c36b8eccf8a3bdf",
+          "executable": false
+        },
+        {
+          "path": "deploy/nomad-embed-service.service",
+          "sha256": "ea973b3876e4a3db10b3c948465f2fa82c3c9424982fdaae9cecae47aa687650",
+          "executable": false
+        },
+        {
+          "path": "deploy/unit_test.go",
+          "sha256": "8a98cd0cccb46874a0e4d9b7dd0b398b3b954eed0090f2a440c683a3ff866ef7",
+          "executable": false
+        },
+        {
+          "path": "go.mod",
+          "sha256": "afabd99fdc965a8873c7c5d35b9e0d4646884b5ff2a18c480079e6d4a8050e02",
+          "executable": false
+        },
+        {
+          "path": "scripts/run-staticcheck.sh",
+          "sha256": "d49e10c6b32ac27fdc7a17dc632b3f63a9753e5bdaad978df19c63f74e1d9d6e",
+          "executable": true
+        },
+        {
+          "path": "scripts/scan-vulnerabilities.sh",
+          "sha256": "9c9fc094821d13925dede17d97c389793d230410820c1278e74415865f178e12",
+          "executable": true
+        },
+        {
+          "path": "scripts/test-scan-vulnerabilities.sh",
+          "sha256": "5c1c5376e164082828089a7cde114b288a6c23ce52f9851be7c7c30f03509c65",
+          "executable": true
+        }
+      ]
+    },
+    {
+      "repository": "Jtensetti/nomad-selection-firewall",
+      "commit": "a1ed9cdb9199dfca35f67d28f733bdb016f6102e",
+      "path": "sdk/nomad-selection-firewall",
+      "license": "MIT License",
+      "files": [
+        {
+          "path": ".gitattributes",
+          "sha256": "f19c5389a431dd17e883ddbcd13c85a7f752e0b0b74537a694a71992d11b178a",
+          "executable": false
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "sha256": "99b0d95ba84e49691f9ef7ab2adafe0aec6c4980c3978632dc2a08d45f4aab58",
+          "executable": false
+        },
+        {
+          "path": ".gitignore",
+          "sha256": "da7f27add04123a7af90e7e8e451cb3f978e9ac9416cc415aa2467b6f3b81af5",
+          "executable": false
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "ab5606d54720738bc9809f5acd2b66954251c1c4e54bd119a0af69286aea4302",
+          "executable": false
+        },
+        {
+          "path": "README.md",
+          "sha256": "37f20981bf55e9ad3f06c5f010f9be07fe96dd3963e7b046664efaf12e5cb634",
+          "executable": false
+        },
+        {
+          "path": "firewall/firewall.go",
+          "sha256": "5252f0fe67bc3f3ac23da0b48d6710019044ade12fb6c65554cccf815b001e29",
+          "executable": false
+        },
+        {
+          "path": "firewall/firewall_test.go",
+          "sha256": "951b843fbf0c31c74503c4fcf7625a654071237c5343f738f512451ba4194f62",
+          "executable": false
+        },
+        {
+          "path": "firewall/modulegraph_test.go",
+          "sha256": "78cef85bd45c3b15dba7a52a6f1b6e018986a11ca2f5fed73dcef9934098ffb2",
+          "executable": false
+        },
+        {
+          "path": "go.mod",
+          "sha256": "3bff6ff3e630cf91172556cb3ebcd4ff6e6e0bb25767393c9d7dc2c628eea60c",
+          "executable": false
+        },
+        {
+          "path": "scripts/run-staticcheck.sh",
+          "sha256": "d49e10c6b32ac27fdc7a17dc632b3f63a9753e5bdaad978df19c63f74e1d9d6e",
+          "executable": true
+        },
+        {
+          "path": "scripts/scan-vulnerabilities.sh",
+          "sha256": "9c9fc094821d13925dede17d97c389793d230410820c1278e74415865f178e12",
+          "executable": true
+        },
+        {
+          "path": "scripts/test-scan-vulnerabilities.sh",
+          "sha256": "5c1c5376e164082828089a7cde114b288a6c23ce52f9851be7c7c30f03509c65",
+          "executable": true
+        }
+      ]
+    }
+  ]
+}

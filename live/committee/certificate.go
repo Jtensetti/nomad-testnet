@@ -16,6 +16,7 @@ import (
 	"sort"
 
 	"github.com/Jtensetti/nomad-anytrust-mix-sim/mix"
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 	"github.com/Jtensetti/nomad-testnet/live/topology"
 )
 
@@ -261,7 +262,7 @@ func attestationMessage(digest [32]byte) []byte {
 }
 
 func decodeBase64(encoded string, size int) ([]byte, error) {
-	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	decoded, err := strictjson.DecodeBase64(encoded)
 	if err != nil || (size >= 0 && len(decoded) != size) {
 		return nil, errors.New("invalid base64 or length")
 	}

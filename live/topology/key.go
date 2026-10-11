@@ -3,10 +3,11 @@ package topology
 import (
 	"bytes"
 	"crypto/ed25519"
-	"encoding/base64"
 	"errors"
 	"os"
 	"runtime"
+
+	"github.com/Jtensetti/nomad-testnet/live/strictjson"
 )
 
 func LoadAuthorityKey(path string) (ed25519.PublicKey, error) {
@@ -21,7 +22,7 @@ func LoadAuthorityKey(path string) (ed25519.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	decoded, err := base64.StdEncoding.Strict().DecodeString(string(bytes.TrimSpace(encoded)))
+	decoded, err := strictjson.DecodeBase64(string(bytes.TrimSpace(encoded)))
 	if err != nil || len(decoded) != ed25519.PublicKeySize {
 		return nil, errors.New("authority key must contain one strict-base64 Ed25519 public key")
 	}
@@ -43,7 +44,7 @@ func LoadAuthorityPrivateKey(path string) (ed25519.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	decoded, err := base64.StdEncoding.Strict().DecodeString(string(bytes.TrimSpace(encoded)))
+	decoded, err := strictjson.DecodeBase64(string(bytes.TrimSpace(encoded)))
 	if err != nil || len(decoded) != ed25519.PrivateKeySize {
 		return nil, errors.New("authority private key must contain one strict-base64 Ed25519 private key")
 	}

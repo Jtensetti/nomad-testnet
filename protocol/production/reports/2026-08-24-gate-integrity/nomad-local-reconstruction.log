@@ -1,0 +1,20 @@
+=== repository: nomad-local-reconstruction
+=== commit:     3f87f8f4cfb0b27f2a0f2d60c556efefacbd9d2e
+=== branch:     claude/nomad-production-ready-dxv4ql
+=== worktree:   0 modified files
+=== toolchain:  go version go1.25.13 linux/amd64
+=== date:       2026-08-25T06:22:03Z
+
+--- go build ./... ---
+exit=0
+--- go vet ./... ---
+exit=0
+--- gofmt -l ---
+exit=0
+--- go test -race -count=1 ./... ---
+ok  	github.com/Jtensetti/nomad-local-reconstruction/reconstruct	1.079s
+ok  	github.com/Jtensetti/nomad-local-reconstruction/site	1.517s
+exit=0
+--- govulncheck ./... ---
+No vulnerabilities found.
+exit=0

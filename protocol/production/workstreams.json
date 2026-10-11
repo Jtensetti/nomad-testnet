@@ -1,0 +1,982 @@
+{
+ "schema_version": 1,
+ "updated": "2026-09-02",
+ "status_values": [
+  "NOT_STARTED",
+  "PARTIAL",
+  "BLOCKED",
+  "VERIFIED"
+ ],
+ "note": "Requirement registry for production/GOAL.md. VERIFIED requires the four-part DONE rule (implementation, failure behavior, adversarial evidence, claim boundary). PROD gate statuses live in production/readiness.json; the prod_map below only assigns ownership.",
+ "workstreams": {
+  "C": {
+   "title": "Epoch and key lifecycle",
+   "phase": 1,
+   "repos": [
+    "nomad-testnet",
+    "nomad-anytrust-mix-sim",
+    "nomad-protocol"
+   ],
+   "requirements": [
+    {
+     "id": "C-01",
+     "summary": "canonical versioned EpochDescriptor (network, epoch, validity window, operator set, threshold, traffic class, committee key, topology digest, previous-epoch digest, protocol version, attestations)",
+     "status": "PARTIAL",
+     "note": "implemented and independently reviewed (evaluator found 5 must-fix defects incl. a confirmed single-operator quorum forgery; all fixed with regressions in nomad-testnet 318845a); awaiting integration and boundary evidence"
+    },
+    {
+     "id": "C-02",
+     "summary": "public epoch-descriptor test vectors",
+     "status": "PARTIAL",
+     "note": "implemented and independently reviewed (evaluator found 5 must-fix defects incl. a confirmed single-operator quorum forgery; all fixed with regressions in nomad-testnet 318845a); awaiting integration and boundary evidence"
+    },
+    {
+     "id": "C-03",
+     "summary": "all security-sensitive protocol objects context-bound (network, version, epoch, committee, batch, round, sender, role, purpose); no cross-epoch transplants",
+     "status": "PARTIAL",
+     "note": "audited 2026-08-20: DKG packets, committee IDs, shuffle proofs/receipts, partial decryptions and hop keys bind epoch+committee correctly; lifecycle objects now bind approver identity, role and epoch (318845a); revocation/erasure statements still unimplemented"
+    },
+    {
+     "id": "C-04",
+     "summary": "automatic next-epoch DKG while epoch N active",
+     "status": "PARTIAL",
+     "note": "rotation planner implemented as a pure function of chain, clock and public policy, with a determinism test proving no private input path (nomad-testnet live/epoch); protocol-level only, no live/WAN integration or independent review"
+    },
+    {
+     "id": "C-05",
+     "summary": "activation only at public predetermined boundary, independent of private behavior",
+     "status": "PARTIAL",
+     "note": "implemented and independently reviewed (evaluator found 5 must-fix defects incl. a confirmed single-operator quorum forgery; all fixed with regressions in nomad-testnet 318845a); awaiting integration and boundary evidence"
+    },
+    {
+     "id": "C-06",
+     "summary": "retired epoch shares rejected",
+     "status": "PARTIAL",
+     "note": "share service refuses threshold work outside the serving window and requires an explicit guard; TopologyWindowGuard for current deployments, Chain.ServesEpoch for chain-carrying ones; protocol-level only, no live/WAN integration or independent review"
+    },
+    {
+     "id": "C-07",
+     "summary": "stale proof/share/session replay rejected",
+     "status": "PARTIAL",
+     "note": "cross-epoch binding audited as strong; descriptor-level rollback and retirement now implemented (2f2e3a6); retired-share refusal at the share service still missing"
+    },
+    {
+     "id": "C-08",
+     "summary": "key-erasure procedure implemented, documented, tested with evidence",
+     "status": "PARTIAL",
+     "note": "EraseEpochMaterial overwrites, syncs and unlinks, and emits a signed statement carrying mandatory limitations text; canonical encoding rejects a statement that understates them; protocol-level only, no live/WAN integration or independent review"
+    },
+    {
+     "id": "C-09",
+     "summary": "operator replacement via signed protocol transition (membership-transition primitive defined here, DEC-006; B consumes it)",
+     "status": "PARTIAL",
+     "note": "membership transition implemented and drilled (approval quorum of the previous committee; a revoked operator cannot approve its own replacement); protocol-level only, no live/WAN integration or independent review"
+    },
+    {
+     "id": "C-10",
+     "summary": "compromise recovery flow (credential compromise, lost operator, emergency transition)",
+     "status": "PARTIAL",
+     "note": "compromise recovery drilled end to end: peer-quorum revocation, emergency transition, retired-epoch refusal, erasure; protocol-level only, no live/WAN integration or independent review"
+    },
+    {
+     "id": "C-11",
+     "summary": "signing-identity revocation",
+     "status": "PARTIAL",
+     "note": "revocation statements with self and peer-quorum authorization, persisted store feeding chain admission; protocol-level only, no live/WAN integration or independent review"
+    },
+    {
+     "id": "C-12",
+     "summary": "split-brain activation fails closed",
+     "status": "PARTIAL",
+     "note": "implemented and independently reviewed (evaluator found 5 must-fix defects incl. a confirmed single-operator quorum forgery; all fixed with regressions in nomad-testnet 318845a); awaiting integration and boundary evidence"
+    },
+    {
+     "id": "C-13",
+     "summary": "two valid conflicting descriptors for one epoch cannot both silently activate",
+     "status": "PARTIAL",
+     "note": "implemented and independently reviewed (evaluator found 5 must-fix defects incl. a confirmed single-operator quorum forgery; all fixed with regressions in nomad-testnet 318845a); awaiting integration and boundary evidence"
+    },
+    {
+     "id": "C-14",
+     "summary": "interrupted DKG never resumes from unsafe ambiguous state",
+     "status": "PARTIAL",
+     "note": "DKG journal refuses to resume an interrupted session; the rotation planner supplies the public retry ladder and escalation offset; protocol-level only, no live/WAN integration or independent review"
+    },
+    {
+     "id": "C-15",
+     "summary": "forward-secrecy adversarial experiment",
+     "status": "PARTIAL",
+     "note": "forward-secrecy experiment: captured epoch ciphertext, control decryption before erasure, then the complete post-erasure state of every operator yields no usable share; protocol-level only, no live/WAN integration or independent review"
+    },
+    {
+     "id": "C-16",
+     "summary": "recovery drill documented and executed in test environment",
+     "status": "PARTIAL",
+     "note": "deploy/RECOVERY_RUNBOOK.md with TestRecoveryDrill executing procedures 1-5 on a five-operator 3-of-5 network; protocol-level only, no live/WAN integration or independent review"
+    },
+    {
+     "id": "C-17",
+     "summary": "CI regression tests for the epoch lifecycle",
+     "status": "PARTIAL",
+     "note": "epoch package in the Selection Firewall CI graph plus a transitive no-network-capability gate on the publication API; protocol-level only, no live/WAN integration or independent review"
+    }
+   ]
+  },
+  "D": {
+   "title": "SiteID and publisher identity",
+   "phase": 1,
+   "repos": [
+    "nomad-local-reconstruction",
+    "Nomad-browser",
+    "nomad-protocol"
+   ],
+   "requirements": [
+    {
+     "id": "D-01",
+     "summary": "canonical versioned SiteDescriptor (SiteID, sequence, signing keys, recovery policy, validity, previous-descriptor commitment, transition signatures, revocation)",
+     "status": "PARTIAL",
+     "note": "implemented, independently reviewed (4 HIGH exploits found and fixed with regressions), vectors published; awaiting browser integration and re-review"
+    },
+    {
+     "id": "D-02",
+     "summary": "domain-separated deterministic SiteID derivation from defined genesis; public vectors",
+     "status": "PARTIAL",
+     "note": "implemented, independently reviewed (4 HIGH exploits found and fixed with regressions), vectors published; awaiting browser integration and re-review"
+    },
+    {
+     "id": "D-03",
+     "summary": "cross-platform identical derivation; parser differential tests",
+     "status": "PARTIAL",
+     "note": "canonical binary encoding, published derivation vectors and strict-parser differential tests landed (d572673); a second independent implementation remains external (EB-5)"
+    },
+    {
+     "id": "D-04",
+     "summary": "rotation authorized by previous valid chain; rollback to superseded descriptor prevented",
+     "status": "PARTIAL",
+     "note": "implemented, independently reviewed (4 HIGH exploits found and fixed with regressions), vectors published; awaiting browser integration and re-review"
+    },
+    {
+     "id": "D-05",
+     "summary": "expiry and revocation",
+     "status": "PARTIAL",
+     "note": "implemented, independently reviewed (4 HIGH exploits found and fixed with regressions), vectors published; awaiting browser integration and re-review"
+    },
+    {
+     "id": "D-06",
+     "summary": "offline recovery keys; recovery stricter than rotation",
+     "status": "PARTIAL",
+     "note": "implemented, independently reviewed (4 HIGH exploits found and fixed with regressions), vectors published; awaiting browser integration and re-review"
+    },
+    {
+     "id": "D-07",
+     "summary": "split-view/equivocation detection model implemented",
+     "status": "PARTIAL",
+     "note": "descriptor distribution implemented: RFC 6962 append-only log, signed checkpoints with origin binding, inclusion + consistency proofs, freshness window, transferable split-view proof; an unwitnessed chain cannot reach PUBLISHER_VERIFIED by construction; recovery drill step 6 now bounds the propagation window in both following profiles; second implementation and published corpus; mutation-verified. Still self-reviewed"
+    },
+    {
+     "id": "D-08",
+     "summary": "malformed descriptors fail closed",
+     "status": "PARTIAL",
+     "note": "implemented, independently reviewed (4 HIGH exploits found and fixed with regressions), vectors published; awaiting browser integration and re-review"
+    },
+    {
+     "id": "D-09",
+     "summary": "browser distinguishes object integrity, publisher identity verified/unknown/revoked",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "D-10",
+     "summary": "SiteID resolution introduces no query-dependent network behavior",
+     "status": "PARTIAL",
+     "note": "resolution is a pure function; distribution adds no read-dependent traffic by construction -- inclusion proofs travel with the publication and checkpoint refresh takes no read-derived argument -- but this is structural, with no wire capture"
+    },
+    {
+     "id": "D-11",
+     "summary": "genesis/first-key trust policy explicitly defined",
+     "status": "PARTIAL",
+     "note": "implemented, independently reviewed (4 HIGH exploits found and fixed with regressions), vectors published; awaiting browser integration and re-review"
+    },
+    {
+     "id": "D-12",
+     "summary": "adversarial tests: theft, stale descriptor, fork, rollback, replay, invalid recovery, conflicting chains",
+     "status": "PARTIAL",
+     "note": "implemented, independently reviewed (4 HIGH exploits found and fixed with regressions), vectors published; awaiting browser integration and re-review"
+    }
+   ]
+  },
+  "A": {
+   "title": "Publication airlock",
+   "phase": 1,
+   "repos": [
+    "nomad-testnet",
+    "nomad-selection-firewall",
+    "nomad-anytrust-mix-sim",
+    "nomad-protocol"
+   ],
+   "requirements": [
+    {
+     "id": "A-01",
+     "summary": "Publish API purely local, no network capability, enforced architecturally",
+     "status": "PARTIAL",
+     "note": "local-only Submit implemented with an architectural no-network-capability test in nomad-testnet live/publish (4dcefd7); process-boundary evidence pending"
+    },
+    {
+     "id": "A-02",
+     "summary": "bounded persistent crash-safe idempotent publication queue, encrypted at rest",
+     "status": "PARTIAL",
+     "note": "bounded, crash-safe, idempotent, encrypted-at-rest queue implemented (4dcefd7)"
+    },
+    {
+     "id": "A-03",
+     "summary": "publication fragments ride pre-existing fixed-size fixed-cadence cells; queue state cannot change schedule",
+     "status": "PARTIAL",
+     "note": "the airlock has no transitive path to a socket, scheduler or peer selection (in-package architectural test plus a CI dependency gate), so queue state cannot reach the cell schedule; a running publisher client riding real cells does not exist yet"
+    },
+    {
+     "id": "A-04",
+     "summary": "publish/no-publish observable schedule equivalence under threat model",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "A-05",
+     "summary": "anytrust mix + threshold deposit boundary; single entry operator cannot link ingress to released plaintext",
+     "status": "PARTIAL",
+     "note": "deposit/seal/authenticated-shuffle-chain/per-column-threshold-release implemented; all four Sev1 and all three Sev2 findings from the adversarial review are fixed with a regression each, deposit IDs are derived from the session so one depositor cannot name another's slot, a full epoch drops silently rather than reporting occupancy, and the unlinkability measurement was rebuilt to check permutation uniformity. Still in-process only (A-15) and with no wire capture"
+    },
+    {
+     "id": "A-06",
+     "summary": "activity-independent public release epochs; no release on private queue completion",
+     "status": "PARTIAL",
+     "note": "release timing is a pure function of four public schedule parameters and an epoch number; Seal refuses to run before the boundary at every occupancy from empty to full. Not yet carried in the signed epoch descriptor"
+    },
+    {
+     "id": "A-07",
+     "summary": "timeout/loss/restart/retry create no extra private-dependent traffic",
+     "status": "PARTIAL",
+     "note": "the publisher no longer emits work outside the public deposit window, so a shut window costs a deferred fragment rather than a destroyed one and adds no wire event either way (nomad-testnet live/deposit window gate, DEC-022); a client resend is now explicitly forbidden rather than relied on -- the uplink sequence is cleartext and strictly increasing, so a retransmission tells the entry operator the publisher had work refused, and re-sealing under the same sequence is an AES-GCM nonce reuse, refused by Drain.Emit before sealing; loss from a full epoch or a dropped datagram remains undetectable by design and is not claimed; no wire capture under failure"
+    },
+    {
+     "id": "A-08",
+     "summary": "duplicate deposits idempotent",
+     "status": "VERIFIED",
+     "note": "idempotent by deposit ID with a constant-time comparison and a conflicting payload refused rather than overwritten; a duplicate consumes no extra slot, tested including across a simulated operator restart. This is duplicate suppression for a datagram the network duplicated, NOT a client retry mechanism: a client-initiated retransmission repeats a cleartext sequence on the wire and is forbidden (DEC-022). Note the ID namespace itself is unauthenticated (open finding under A-05)"
+    },
+    {
+     "id": "A-09",
+     "summary": "selective dropping is not a trivial publication oracle; analysis documented",
+     "status": "PARTIAL",
+     "note": "a full epoch is silent and per-session slot quotas bound one client's share, so capacity refusal is not an occupancy oracle; selective dropping by a malicious entry operator is still unanalysed, and fair access under Sybil depends on admission control that does not exist (G-05..G-09)"
+    },
+    {
+     "id": "A-10",
+     "summary": "reconstructed object still requires exact hash/signature/SiteID verification",
+     "status": "PARTIAL",
+     "note": "the airlock provides unlinkability only; released fragments still face the existing exact-object and SiteID verification path, which is stated in the specification but not yet wired end to end"
+    },
+    {
+     "id": "A-11",
+     "summary": "no ordinary-network fallback",
+     "status": "PARTIAL",
+     "note": "no fallback path exists in the airlock: twelve chain deviations, an unauthenticated chain, a non-re-randomising round and cross-epoch replay all fail the epoch closed, with no partial-chain or degraded mode"
+    },
+    {
+     "id": "A-12",
+     "summary": "blind capture experiment: idle, one, many, failed publication, restart, loss; preregistered tolerances (single harness shared with E, DEC-009)",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "A-13",
+     "summary": "remaining leakage/assumptions documented",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "A-14",
+     "summary": "client constant-rate uplink traffic class (new protocol surface: publisher-facing cells to entry operators; participation-visibility analysis; ingress spike feeds descriptor uplink_profile)",
+     "status": "PARTIAL",
+     "note": "ingress spike complete: the operator cell profile was measured to leak work-vs-cover perfectly by two classifiers, and an uplink profile that defeats both is implemented and tested (4dcefd7, docs/PUBLICATION_INGRESS.md); cadence parameters and a running client remain"
+    },
+    {
+     "id": "A-15",
+     "summary": "online distributed mix path: per-operator shuffle/decrypt services with authenticated inter-operator sessions (fixture bootstrap holding all identities is not reusable)",
+     "status": "NOT_STARTED"
+    }
+   ]
+  },
+  "B": {
+   "title": "Truly independent operators",
+   "phase": 2,
+   "repos": [
+    "nomad-testnet",
+    "nomad-protocol"
+   ],
+   "requirements": [
+    {
+     "id": "B-01",
+     "summary": "five operator identities in supported topology",
+     "status": "PARTIAL",
+     "note": "three-operator fixture proven; five-operator profile untested"
+    },
+    {
+     "id": "B-02",
+     "summary": "independent local private-key generation per operator",
+     "status": "PARTIAL",
+     "note": "software-level separation proven single-admin"
+    },
+    {
+     "id": "B-03",
+     "summary": "no central machine holds all threshold shares or creates all identities",
+     "status": "PARTIAL",
+     "note": "process separation proven; single-host fixture violates machine separation"
+    },
+    {
+     "id": "B-04",
+     "summary": "real WAN DKG across hosts",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "B-05",
+     "summary": "required canonical topology validation by every operator",
+     "status": "PARTIAL",
+     "note": "implemented in fixture"
+    },
+    {
+     "id": "B-06",
+     "summary": "one compromised operator cannot decrypt alone",
+     "status": "PARTIAL",
+     "note": "threshold decryption exists; verify t-of-n semantics under rotation"
+    },
+    {
+     "id": "B-07",
+     "summary": "one compromised operator cannot alter membership alone (governance as protocol)",
+     "status": "PARTIAL",
+     "note": "governance transitions consume the membership-transition primitive from Workstream C (approval quorum of the previous committee, revocation with peer quorum); protocol-level, drilled, not deployed"
+    },
+    {
+     "id": "B-08",
+     "summary": "operator disappearance: private reader activity does not influence peer replacement",
+     "status": "PARTIAL",
+     "note": "three worlds against a two-peer rotation, observed at the peer that stays up: both peers up and idle, one peer gone and idle, one peer gone and busy. The survivor receives exactly its half in all three, the node counts every scheduled emission as sent including those addressed into the void, and the idle and busy outage worlds are identical. Two mutants confirm the assertions bite (a collapsed rotation, and cover not emitted). Loopback and one host: not WAN evidence, and peer *replacement* -- a new signed topology -- is governance work covered by C-09 rather than exercised here (nomad-testnet a4cdb09)"
+    },
+    {
+     "id": "B-09",
+     "summary": "regional outage test",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "B-10",
+     "summary": "documented independent deployment artifacts + operator onboarding package",
+     "status": "PARTIAL",
+     "note": "deploy/OPERATOR_ONBOARDING.md is a complete external-administrator package; nomad-operator covers init/inspect/attest/verify/erase; RECOVERY_RUNBOOK.md plus TestRecoveryDrill cover failures. Recruiting the administrators is all that remains (EB-2)"
+    },
+    {
+     "id": "B-11",
+     "summary": "evidence of actual administrative separation (>=3 independent admins, >=3 regions)",
+     "status": "BLOCKED",
+     "blocker": "requires genuinely independent operator administrators; see EXTERNAL_BLOCKERS.md",
+     "note": "blocked on EB-2. Everything up to the boundary exists: deploy/OPERATOR_ONBOARDING.md is a complete external-administrator package and nomad-operator covers init, inspect, attest, verify and erase. What is missing cannot be built -- three or more people who do not work for this project, in three or more regions, each holding their own keys"
+    },
+    {
+     "id": "B-12",
+     "summary": "IPv4/IPv6 operator testing",
+     "status": "PARTIAL",
+     "note": "the document layer is done and adversarially tested (nomad-testnet ea4e4b5): IPv6, IPv4 and mixed operator sets are admitted, malformed and bracketed non-addresses are refused, and one socket address in two spellings is one operator -- including an IPv4 address against its IPv4-mapped IPv6 form, which look nothing alike. The endpoint grammar and canonical form are frozen in conformance/COMPATIBILITY.md so a second implementation does not have to guess which topologies are admissible. No live IPv6 run: this container has no IPv6 stack at all (socket(AF_INET6) returns EAFNOSUPPORT), so dual-stack behaviour on the wire is untested and needs the same WAN infrastructure as B-04 and B-09"
+    },
+    {
+     "id": "B-13",
+     "summary": "active-adversary accountability (PROD-07): signed blame/availability reports identifying faulty committee members, built on DKG journals and mix receipts; fault-injection campaign",
+     "status": "PARTIAL",
+     "note": "both halves of accountability now exist. Soundness: mix.AttributeFault names the mixer that signed an unsound round and mix.VerifyFaultReport lets a third party re-derive it. Availability: signed non-receipts bound to a deadline the public timetable fixes, a quorum of distinct certified observers, and a refutation that names the observers the transcript contradicts; four mutants killed by four distinct tests. live/availability holds the privacy boundary (every operator judged every deadline, graph limited to mix and topology, enforced in CI). Not yet run against a live committee where an operator actually stops, and what a deployment does with a report is governance work that is not built"
+    }
+   ]
+  },
+  "G": {
+   "title": "Pollution, Sybil and DoS resistance",
+   "phase": 2,
+   "repos": [
+    "nomad-rlnc",
+    "nomad-testnet",
+    "nomad-constant-rate-fabric"
+   ],
+   "requirements": [
+    {
+     "id": "G-01",
+     "summary": "cheap pollution validation before decoder admission (established construction)",
+     "status": "VERIFIED",
+     "note": "per-source-symbol commitments carried under the authority signature in batch descriptor v3; the materializer's decoder verifies systematic symbols before admission. Dense coded symbols are not verifiable over GF(2^8) and that limitation is documented rather than papered over. Adversarial tests at the descriptor and decoder boundaries; PROD-12 MET."
+    },
+    {
+     "id": "G-02",
+     "summary": "per-generation bounds: symbols, bytes, rank attempts, CPU budget, memory, lifetime, malformed/duplicate handling",
+     "status": "VERIFIED",
+     "note": "symbol, byte, rank-attempt, elimination-work, memory and lifetime budgets enforced per generation, duplicates deduplicated before any budget is charged; on the shipping path since the materializer stopped constructing the raw decoder. Asserted in the library campaign and by FuzzBoundedDecoderStaysWithinBudget (134,125 executions)."
+    },
+    {
+     "id": "G-03",
+     "summary": "Byzantine pollution campaign incl. 100% malicious symbols; no OOM/unbounded CPU",
+     "status": "VERIFIED",
+     "note": "two campaigns: the library one at 50/90/100% malicious over 100k attempts with every budget asserted, and a materializer-boundary one over 72 trials from 0-100% pollution producing 39 exact reconstructions, 33 denials and 0 accepted corruptions"
+    },
+    {
+     "id": "G-04",
+     "summary": "bounded cache disk, queues, batches, peer state",
+     "status": "PARTIAL",
+     "note": "bounded immutable caches exist in testnet; full audit missing"
+    },
+    {
+     "id": "G-05",
+     "summary": "explicit documented admission/rate model",
+     "status": "PARTIAL",
+     "note": "docs/ADMISSION_AND_RATE_CONTROL.md documents the model, and topology admission is now adversarially tested (six downgrade cases, rollback watermark, equivocation). The economic half needs deployment parameters that do not exist yet; fair allocation under Sybil is bounded per session but not allocated fairly."
+    },
+    {
+     "id": "G-06",
+     "summary": "authenticated production operator membership",
+     "status": "PARTIAL",
+     "note": "signed enrollment exists in fixture"
+    },
+    {
+     "id": "G-07",
+     "summary": "large-scale identity/Sybil simulation",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "G-08",
+     "summary": "eclipse tests",
+     "status": "VERIFIED",
+     "note": "eclipse is structurally impossible rather than merely resisted: no peer discovery exists anywhere, the peer set is a function of the signed topology, and it is byte-identical after a flood from unnamed addresses and after correctly sealed cells arrive from the wrong socket"
+    },
+    {
+     "id": "G-09",
+     "summary": "amplification measured and bounded",
+     "status": "VERIFIED",
+     "note": "amplification 0.00030-0.00079 outbound/inbound across four flood types, up to 396 MB in for 118 KB out, with cadence unaffected and a check that the flood is not a private-state oracle"
+    },
+    {
+     "id": "G-10",
+     "summary": "malicious peer cannot trigger catch-up traffic",
+     "status": "PARTIAL",
+     "note": "scheduler forbids catch-up; adversarial-peer test missing"
+    },
+    {
+     "id": "G-11",
+     "summary": "backpressure does not change private-sensitive cadence",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "G-12",
+     "summary": "disk-full and OOM pressure tests",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "G-13",
+     "summary": "eviction/repair maintenance private-state-independent",
+     "status": "PARTIAL",
+     "note": "CI dependency gates prove network/cache packages cannot import private selection code (structural evidence); wire-level comparison missing"
+    }
+   ]
+  },
+  "E": {
+   "title": "Real WAN and adversarial testing",
+   "phase": 3,
+   "repos": [
+    "nomad-testnet",
+    "nomad-constant-rate-fabric"
+   ],
+   "requirements": [
+    {
+     "id": "E-01",
+     "summary": ">=3 real WAN regions/failure domains",
+     "status": "PARTIAL",
+     "blocker": "requires cloud infrastructure/payment; see EXTERNAL_BLOCKERS.md",
+     "note": "six WAN campaigns run 2026-08-21 on three Scaleway regions (fr-par-1 FR, nl-ams-1 NL, pl-waw-1 PL) in a signed ring; harness nomad-testnet scripts/wan/. Runs 5 and 6 are controlled and synchronised: 18 comparisons, no treatment pair rejected, the single rejection falling on a control pair. Three geographic failure domains but one provider, one account and one administrator, so this is not independent operation and does not support PROD-05 or PROD-21. See EVIDENCE_INDEX."
+    },
+    {
+     "id": "E-02",
+     "summary": "captures from real interfaces with kernel timestamps",
+     "status": "PARTIAL",
+     "note": "runs 5 and 6 (nomad-wan-20260821-134230, -141027) captured with tcpdump on the hosts' own interfaces with kernel timestamps, 300s per world, 18 captures with recorded SHA-256 digests; earlier runs 1-4 are recorded with their defects rather than discarded"
+    },
+    {
+     "id": "E-03",
+     "summary": "loss/latency/jitter/congestion/duplication/reordering matrix (netem)",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "E-04",
+     "summary": "suspend/resume, clock drift, CPU starvation, process stall, disk pressure campaigns",
+     "status": "PARTIAL",
+     "note": "CPU-starvation and disk-pressure campaigns run against the production node in CI (live/node campaign_test.go); suspend/resume, clock drift and process stall not started"
+    },
+    {
+     "id": "E-05",
+     "summary": "NAT rebinding, IPv4-only, IPv6-only, dual stack, partition",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "E-06",
+     "summary": "two-world blind classification with separate evaluator",
+     "status": "PARTIAL",
+     "note": "campaign now runs two idle series per host as a negative control, with world order rotated so exactly one host is active per position; the control is what made run 5's operator-a result readable as noise floor rather than as a finding. Blind classification with a separate evaluator is still not done."
+    },
+    {
+     "id": "E-07",
+     "summary": "preregistered features/metrics/tolerances before results",
+     "status": "VERIFIED",
+     "note": "PREREGISTRATION.md v1 fixes features, metrics and tolerances; scripts/two-world-analysis.py applies them mechanically with thresholds as module constants rather than options; self-tests assert both directions and run in CI"
+    },
+    {
+     "id": "E-08",
+     "summary": "no private-event catch-up burst under congestion/suspension on the wire",
+     "status": "PARTIAL",
+     "note": "FINDING: with the position confound removed and a KS statistic added, the campaign measures a reproducible idle-vs-active difference in emission timing (1-p = 0.993 against a 0.517 control spread). The burst ceiling still holds outright. Most likely private-side CPU/disk contention with the in-process emitter; agent/operator-shaper-process is the structural fix and has not been measured. Blocks PROD-10/PROD-11 rather than supporting them"
+    },
+    {
+     "id": "E-09",
+     "summary": "72-hour per-platform capture harness validated; real run executed where environment permits",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "E-10",
+     "summary": "long-horizon intersection analysis",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "E-11",
+     "summary": "immutable reports and capture digests",
+     "status": "PARTIAL",
+     "note": "WAN run 5 capture digests recorded in EVIDENCE_INDEX; campaign reproducible from scripts/wan/run-campaign.sh, decided by scripts/wan/wan-verdict.py over the same two-world-analysis.py and exit statuses CI uses"
+    },
+    {
+     "id": "E-12",
+     "summary": "measured availability/durability targets with multi-region churn/partition repair traces (PROD-13)",
+     "status": "NOT_STARTED"
+    }
+   ]
+  },
+  "F": {
+   "title": "Browser/materializer production boundary",
+   "phase": 4,
+   "repos": [
+    "Nomad-browser",
+    "nomad-testnet",
+    "firefox-nomad",
+    "chromium-nomad"
+   ],
+   "requirements": [
+    {
+     "id": "F-01",
+     "summary": "release browser has no network client/server entitlement; prohibited frameworks not linked",
+     "status": "PARTIAL",
+     "note": "entitlement and prohibited-framework gates now run on every push on any platform (Nomad-browser/bundle_test.go): entitlements as an allowlist with a written reason per key, Info.plist checked for URL/document types and ATS exceptions, and the Swift symbol scan ported out of the macOS-only shell gate and checked against itself. Previously the only check needed PlistBuddy and swift and its workflow was pinned to `branches: [agent/macos-browser]`, so it ran on no other branch; that pin is removed. The release-binary link audit is still missing: these read source and plists, not a built binary's load commands"
+    },
+    {
+     "id": "F-02",
+     "summary": "browser reads only verified materialized objects; atomic write-verify-rename handoff",
+     "status": "PARTIAL",
+     "note": "the materializer's side is done and adversarially tested: atomic publish with no surviving temporary, immutability, symlink-at-target refusal, name escape and permissions, all against the real path. The browser's side of the handoff is Swift that reads the objects directory with bounded, size-checked reads; it has never been exercised against a real materializer on macOS, so the handoff is tested from one end only"
+    },
+    {
+     "id": "F-03",
+     "summary": "materializer cannot read browser query state; query cannot trigger IPC",
+     "status": "PARTIAL",
+     "note": "structural: the materializer's import graph holds no query, basin or selection package and CI fails if it gains one, and the browser reads files rather than calling anything. What is not evidenced is the negative at runtime -- no capture shows that a query produces no IPC, because there is no IPC to capture and no macOS run to capture it on"
+    },
+    {
+     "id": "F-04",
+     "summary": "cache discovery via public periodic process independent of queries",
+     "status": "PARTIAL",
+     "note": "the Linux client rescans its object directory on a fixed interval that nothing private touches -- no command, query, empty result or failure changes when the next one happens -- and Index.Sync makes the index match the scan without re-embedding content-addressed objects it already holds. Measured across three worlds (searching continuously, idle, idle holding nothing), since two would have left the corpus untested: an interval derived from how much the last scan found survived the two-world version. Four mutations killed. EVIDENCE_INDEX F-13. Before this the Linux client scanned once at startup and never again, and the Swift client's timer -- still unchanged -- is evidenced by a comment rather than a test."
+    },
+    {
+     "id": "F-05",
+     "summary": "Apple-provisioned App Group or independently reviewed IPC",
+     "status": "BLOCKED",
+     "blocker": "requires Apple Developer provisioning; see EXTERNAL_BLOCKERS.md",
+     "note": "blocked on EB-1. The current design needs no App Group -- the browser reads a directory the materializer writes -- so this is only reachable if a future design introduces IPC. Recorded as blocked rather than closed because an Apple-provisioned App Group is the only reviewed option if it does"
+    },
+    {
+     "id": "F-06",
+     "summary": "partial write cannot render; symlink/path traversal/tamper/oversize rejected",
+     "status": "PARTIAL",
+     "note": "adversarial filesystem tests against the real materializer path: atomic publish with no surviving temporary, immutability, symlink-at-target refusal, symlinked/non-directory output refusal, name escape, permissions (nomad-testnet live/materialize)"
+    },
+    {
+     "id": "F-07",
+     "summary": "failed load never opens Safari/HTTP fallback",
+     "status": "PARTIAL",
+     "note": "no fallback code path plus the negative test: thirteen ways a load can fail each end in a local 4xx with an empty body, no redirect header and an intact CSP, and the adapter's transitive graph holds no socket. Not yet exercised against a running release binary"
+    },
+    {
+     "id": "F-08",
+     "summary": "DNS capture shows zero browser-originated DNS; packet capture shows zero ordinary networking",
+     "status": "PARTIAL",
+     "note": "measured 2026-09-01 (Nomad-browser f96e650, capture_test.go): the client loads and searches the corpus inside a network namespace with loopback up, and the packets that namespace's interfaces carried come to zero, against a control run carrying 64 in the same namespace. DNS included, since a DNS query is a packet. A tcpdump capture was tried first and abandoned: in a user namespace it reported '48 packets received by filter, 0 packets captured' on roughly two runs in three, and every one of those zeros is indistinguishable from this criterion's own claim. /proc/net/dev has no attach to race and needs no privilege. Three controls: all three namespace mechanisms carry 64; a client made to emit is caught; a counter stubbed to zero is caught by the control. PARTIAL rather than VERIFIED because it measures the Go client on Linux only -- the macOS client and the engine forks are not covered, and per DEC-013 the forks are parked."
+    },
+    {
+     "id": "F-09",
+     "summary": "actual signed release binary tested",
+     "status": "BLOCKED",
+     "blocker": "requires Developer ID credentials for signed binary; ad-hoc binary capture achievable",
+     "note": "blocked on EB-1. Everything up to the boundary exists: the build produces an ad-hoc signed DMG and macos/scripts/security_gate.sh gates it, and bundle_test.go now checks the entitlements on every push regardless of platform. A Developer ID signed, notarized, stapled binary needs Apple credentials"
+    },
+    {
+     "id": "F-10",
+     "summary": "independent browser-security assessment",
+     "status": "BLOCKED",
+     "blocker": "external assessor; see EXTERNAL_BLOCKERS.md",
+     "note": "blocked on EB-4. No browser-security assessment can be self-approved, and a subagent review is QA rather than independence"
+    },
+    {
+     "id": "F-11",
+     "summary": "engine forks route all renderer/service paths through the verified-local contract",
+     "status": "PARTIAL",
+     "note": "PARKED by DEC-013: Nomad-browser is the browser, and nothing further will be invested in the engine forks for now. No engine code is modified in either, so this stays PARTIAL rather than becoming MET or being deleted -- the criterion still describes work a full deployment would want, and 'not done and not being pursued' is the honest status. What exists for whoever picks it up: tools/nomad/egress-inventory.json in each fork, naming the interception boundary and every network-capable surface with what the integration owes it (31 Gecko, firefox-nomad fbc1b2b2e8; 18 Blink, chromium-nomad 37cfdd900e), with a verifier that keeps the anchors from rotting"
+    },
+    {
+     "id": "F-12",
+     "summary": "semantic service sandbox: authenticated IPC, no network capability, bounded inputs, reproducible model hash attestation, attempted-egress capture (PROD-24)",
+     "status": "PARTIAL",
+     "note": "the embedding service is done as far as code reaches: the query is sealed to a shared service key rather than posted to whoever holds the loopback port (bd3c5cc), and egress is measured rather than promised -- the client, shim and model server complete an embedding inside a network namespace with no route off the host, with a capture inside it naming loopback at both ends of all 21 packets (a9c468c). What remains is a sandbox whose escape has been attempted; the systemd profile is pinned by directive presence and has never been run"
+    }
+   ]
+  },
+  "H": {
+   "title": "Notarization and release engineering",
+   "phase": 4,
+   "repos": [
+    "Nomad-browser",
+    "nomad-testnet"
+   ],
+   "requirements": [
+    {
+     "id": "H-01",
+     "summary": "Developer ID signing, notarization Accepted, stapled ticket, Gatekeeper pass",
+     "status": "BLOCKED",
+     "blocker": "Apple credentials; protected fail-closed workflow already exists",
+     "note": "blocked on EB-1. macos/scripts/build_notarized_dmg.sh and the notarized-release workflow are written and wait only on credentials; nothing here can produce a Developer ID signature, a notarization ticket or a Gatekeeper pass"
+    },
+    {
+     "id": "H-02",
+     "summary": "installer digest published immutably",
+     "status": "PARTIAL",
+     "note": "ad-hoc alpha digests published"
+    },
+    {
+     "id": "H-03",
+     "summary": "two independent builders, reproducibility evidence or normalized comparison",
+     "status": "PARTIAL",
+     "note": "determinism is now measured rather than assumed: check-reproducible.sh builds the Go release binaries twice from two source copies at different path lengths and requires byte-identical results across three targets, on every push. compare-builds.sh reports where two trees differ and still fails closed. Independence is the half that remains: a second builder on their own machine is not something this project can establish about itself (EB-2). The .dmg is explicitly out of scope -- codesign and hdiutil embed timestamps (Nomad-browser 7ad564b)"
+    },
+    {
+     "id": "H-04",
+     "summary": "machine-readable SBOM per release with licenses",
+     "status": "PARTIAL",
+     "note": "scripts/generate-sbom.sh emits CycloneDX from the real module graph plus pinned components, deterministically per commit; wired into CI"
+    },
+    {
+     "id": "H-05",
+     "summary": "signed SLSA-style provenance",
+     "status": "PARTIAL",
+     "note": "scripts/generate-provenance.sh emits SLSA-shaped in-toto provenance binding artifact digest, commit, builder, toolchain and dependency state, and is now actually run in CI -- it existed and no workflow invoked it, so no provenance was produced anywhere. It attests but does not sign, and stamps itself unsigned outside a protected identity, so an unsigned document cannot be mistaken for a signed one. Signing waits on EB-7"
+    },
+    {
+     "id": "H-06",
+     "summary": "pinned/reviewed dependencies",
+     "status": "PARTIAL",
+     "note": "COMPONENTS.lock digests exist"
+    },
+    {
+     "id": "H-07",
+     "summary": "vulnerability scanning gate + severity/response policy",
+     "status": "PARTIAL",
+     "note": "the gate now runs in all nine Go repositories and on all nine vendored component modules. It previously ran in one -- Nomad-browser -- and that one was failing: 20 reachable standard-library vulnerabilities, because every repository pinned Go 1.23 after it stopped receiving backported security fixes. All are on 1.25 and scan clean by exit code. docs/VULNERABILITY_POLICY.md carries severity, response and explicit non-coverage; nothing checks for malicious dependencies, which is a different question"
+    },
+    {
+     "id": "H-08",
+     "summary": "authenticated updater, anti-rollback, fail closed, recovery; architecturally unable to grant the networkless browser web capability (separate constrained component); update-check cadence private-state-independent",
+     "status": "PARTIAL",
+     "note": "Nomad-browser/update verifies a release the user already has and downloads nothing: an updater that fetches is a network client inside the binary that is supposed to have none, so the division is enforced by a dependency test rather than intended. Rollback (including a pre-release of the installed version), equivocation (two signed artefacts for one version, refused rather than resolved) and substitution are each refused by name. Fails closed throughout: unknown manifest version refused rather than downgraded, untrusted signer refused although internally consistent, unreadable watermark refuses the install rather than being read as absent. cmd/nomad-browser-verify has no compiled-in release key and says so (EB-7). No installer integration, so this is a manual step (Nomad-browser 9121eca) The verifier binary itself is now tested: run and trustedKeys were at zero coverage while the update package under them was well covered, and the untested branch -- a build with no compiled-in release key refusing rather than proceeding with an empty trust set -- is the one every current build takes. Anti-rollback and dry-run are asserted end to end through the binary, three mutations killed. EVIDENCE_INDEX F-20."
+    },
+    {
+     "id": "H-09",
+     "summary": "OS-backed key storage (Keychain), no plaintext secrets",
+     "status": "PARTIAL",
+     "note": "the client-side plaintext secret is closed and the OS-backed half is not. publish.Options.Key is a required KeySource with no default: Passphrase derives the queue key with Argon2id from a passphrase and a per-queue salt, leaving nothing on the disk that opens the queue, and UnprotectedKeyFile is the previous co-located key file named for what it is. Both directions are measured -- every file in a passphrase queue tried as the key opens nothing, and the unprotected key file does open a fragment -- and a wrong passphrase fails at Open rather than surfacing as an empty queue. The passphrase reaches cmd/nomad-publish on a file descriptor, not argv or the environment. EVIDENCE_INDEX F-12. Still missing: Keychain or an equivalent OS keystore, and the operator-side secrets (threshold shares, operator identity, authority key) remain plaintext files at 0600. The trusted release public key is a build constant, which is where a public key belongs; its private half still has no documented custody. The operator-side file boundary is now tested rather than merely implemented: the permission, regular-file and size checks on the operator secrets, the authority private key and the threshold share were at zero coverage across the repository and nine mutations over them are now killed, including a check written as an equality that would refuse a 0400 mounted secret. EVIDENCE_INDEX F-16. The secrets themselves are still plaintext files."
+    },
+    {
+     "id": "H-10",
+     "summary": "clean uninstall/private-data removal test; OS retention documented",
+     "status": "PARTIAL",
+     "note": "macos/scripts/uninstall.sh removes the sandbox container (which under the sandbox holds every path the app can write) plus unsandboxed development locations, refuses to run while the app is open, and supports --dry-run. docs/DATA_RETENTION.md documents what macOS keeps anyway -- crash reports carrying raw stack words, snapshots, Spotlight, unified log, swap -- with the command for each. uninstall_test.go cross-checks the script against the Swift sources, Info.plist and the document, each verified by introducing the drift it catches. Never executed against a real installed bundle (Nomad-browser 77d632c) The Linux client needs no cleanup script because it writes nothing: TestTheLinuxClientWritesNothingToDisk walks every package it links and fails on any standard-library call that creates or modifies a path, with a control pointing the detector at a package that does write. linux/README.md documents removal on that basis and what the OS keeps regardless. EVIDENCE_INDEX F-22. The macOS half is unchanged, including that its script has never run against a real installed bundle."
+    },
+    {
+     "id": "H-11",
+     "summary": "allowlisted log/telemetry schemas; crash dump privacy audit",
+     "status": "PARTIAL",
+     "note": "the browser emits nothing of its own: no os_log, NSLog or print anywhere in the Swift sources, enforced by the scan in bundle_test.go, and egress.Policy refuses telemetry and crash-reporting as named capabilities. The crash-dump privacy question is answered honestly in docs/DATA_RETENTION.md rather than claimed away: macOS writes .ips reports outside the container with thread stacks as raw machine words, the app cannot prevent them, and upload is the user's setting. nomad-testnet's per-field telemetry allowlist has no browser-side equivalent because the browser has no telemetry schema at all"
+    },
+    {
+     "id": "H-12",
+     "summary": "immutable commit-addressed release evidence",
+     "status": "PARTIAL",
+     "note": "release artifacts are commit-addressed and the CI release job publishes a gated prerelease with packet, DKG, ceremony and process evidence attached. What is missing is immutability that does not depend on this project: the digests live in a GitHub release the same account can delete or replace, so nothing yet pins them somewhere a maintainer cannot rewrite"
+    }
+   ]
+  },
+  "M": {
+   "title": "Stabilization: freeze, traceability, second implementation, operations",
+   "phase": 5,
+   "repos": [
+    "nomad-protocol",
+    "nomad-testnet"
+   ],
+   "requirements": [
+    {
+     "id": "M-01",
+     "summary": "frozen versioned protocol specification: every wire message, state transition, error, timeout, limit, downgrade rule; conformance schema, golden vectors, compatibility matrix, signed specification tag (PROD-01)",
+     "status": "PARTIAL",
+     "note": "docs/PROTOCOL.md records the v0.1 research profile; no conformance schema, vectors or freeze"
+    },
+    {
+     "id": "M-02",
+     "summary": "claim-to-test traceability complete for the reviewed threat model (PROD-02)",
+     "status": "PARTIAL",
+     "note": "THREAT_MODEL.md + CLAIM_TEST_MATRIX.md exist; matrix has known empty boundary rows"
+    },
+    {
+     "id": "M-03",
+     "summary": "second-implementation enablement package: spec + vectors + transcript corpus sufficient to build an interoperating implementation without shared code (PROD-03; the implementation itself is EB-5)",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "M-04",
+     "summary": "SLOs, 30-day soak (wall-clock bound; clock starts by end of Phase 3), disaster-recovery and incident exercises, runbooks (PROD-28)",
+     "status": "NOT_STARTED"
+    }
+   ]
+  },
+  "I": {
+   "title": "Independent external assessment",
+   "phase": 6,
+   "repos": [
+    "nomad-protocol"
+   ],
+   "requirements": [
+    {
+     "id": "I-01",
+     "summary": "frozen review target + complete audit package (spec, threat model, matrix, vectors, builds, SBOM, provenance, captures, limitations)",
+     "status": "NOT_STARTED"
+    },
+    {
+     "id": "I-02",
+     "summary": "independent cryptographic assessment",
+     "status": "BLOCKED",
+     "blocker": "external assessor",
+     "note": "blocked on EB-4. Cannot be self-approved."
+    },
+    {
+     "id": "I-03",
+     "summary": "independent systems assessment",
+     "status": "BLOCKED",
+     "blocker": "external assessor",
+     "note": "blocked on EB-4. Cannot be self-approved."
+    },
+    {
+     "id": "I-04",
+     "summary": "independent browser assessment",
+     "status": "BLOCKED",
+     "blocker": "external assessor",
+     "note": "blocked on EB-4. Cannot be self-approved."
+    },
+    {
+     "id": "I-05",
+     "summary": "independent privacy/traffic-analysis assessment",
+     "status": "BLOCKED",
+     "blocker": "external assessor",
+     "note": "blocked on EB-4. Cannot be self-approved."
+    },
+    {
+     "id": "I-06",
+     "summary": "independent red team after remediation",
+     "status": "BLOCKED",
+     "blocker": "external red team",
+     "note": "blocked on EB-4. A red team that reviews its own remediation is not a red team."
+    },
+    {
+     "id": "I-07",
+     "summary": "zero unresolved Sev1/Sev2, remediation independently verified",
+     "status": "BLOCKED",
+     "blocker": "depends on I-02..I-06",
+     "note": "blocked on EB-4. Remediation verified by whoever performed it establishes nothing; the verification is the part that must be independent"
+    },
+    {
+     "id": "I-08",
+     "summary": "multi-operator beta, two-person signed release decision",
+     "status": "BLOCKED",
+     "blocker": "external operators and second approver",
+     "note": "blocked on EB-2 and EB-6. Needs the independent operators to run the beta and a second person to sign the release decision; a single approver is not a two-person decision however the artefact is worded"
+    }
+   ]
+  }
+ },
+ "prod_map": {
+  "PROD-01": {
+   "workstreams": [
+    "M"
+   ]
+  },
+  "PROD-02": {
+   "workstreams": [
+    "M"
+   ]
+  },
+  "PROD-03": {
+   "workstreams": [
+    "M"
+   ],
+   "note": "implementation itself is external (EB-5); M-03 is the enablement package"
+  },
+  "PROD-04": {
+   "workstreams": [
+    "C",
+    "I"
+   ]
+  },
+  "PROD-05": {
+   "workstreams": [
+    "B",
+    "C"
+   ]
+  },
+  "PROD-06": {
+   "workstreams": [
+    "B",
+    "C"
+   ]
+  },
+  "PROD-07": {
+   "workstreams": [
+    "B",
+    "G"
+   ]
+  },
+  "PROD-08": {
+   "workstreams": [
+    "C"
+   ]
+  },
+  "PROD-09": {
+   "workstreams": [
+    "F"
+   ]
+  },
+  "PROD-10": {
+   "workstreams": [
+    "E"
+   ]
+  },
+  "PROD-11": {
+   "workstreams": [
+    "E"
+   ]
+  },
+  "PROD-12": {
+   "workstreams": [
+    "G"
+   ]
+  },
+  "PROD-13": {
+   "workstreams": [
+    "E",
+    "G"
+   ]
+  },
+  "PROD-14": {
+   "workstreams": [
+    "G"
+   ]
+  },
+  "PROD-15": {
+   "workstreams": [
+    "D"
+   ]
+  },
+  "PROD-16": {
+   "workstreams": [
+    "D"
+   ]
+  },
+  "PROD-17": {
+   "workstreams": [
+    "A"
+   ]
+  },
+  "PROD-18": {
+   "workstreams": [
+    "A"
+   ]
+  },
+  "PROD-19": {
+   "workstreams": [
+    "B"
+   ]
+  },
+  "PROD-20": {
+   "workstreams": [
+    "G"
+   ]
+  },
+  "PROD-21": {
+   "workstreams": [
+    "B",
+    "E"
+   ]
+  },
+  "PROD-22": {
+   "workstreams": [
+    "F"
+   ]
+  },
+  "PROD-23": {
+   "workstreams": [
+    "F"
+   ]
+  },
+  "PROD-24": {
+   "workstreams": [
+    "F",
+    "G"
+   ]
+  },
+  "PROD-25": {
+   "workstreams": [
+    "H"
+   ]
+  },
+  "PROD-26": {
+   "workstreams": [
+    "H"
+   ]
+  },
+  "PROD-27": {
+   "workstreams": [
+    "H"
+   ]
+  },
+  "PROD-28": {
+   "workstreams": [
+    "M"
+   ]
+  },
+  "PROD-29": {
+   "workstreams": [
+    "I"
+   ]
+  },
+  "PROD-30": {
+   "workstreams": [
+    "I"
+   ]
+  }
+ }
+}

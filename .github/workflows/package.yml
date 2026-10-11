@@ -1,0 +1,63 @@
+name: evaluation-package
+
+on:
+  push:
+    paths:
+      - nomad
+      - PACKAGING.lock.json
+      - browser/**
+      - sdk/**
+      - protocol/**
+      - product/**
+      - scripts/check-package.py
+      - scripts/package-evaluation.py
+      - .github/workflows/package.yml
+  pull_request:
+    paths:
+      - nomad
+      - PACKAGING.lock.json
+      - browser/**
+      - sdk/**
+      - protocol/**
+      - product/**
+      - scripts/check-package.py
+      - scripts/package-evaluation.py
+      - .github/workflows/package.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - name: Check source pins, shell syntax and protocol documents
+        run: |
+          ./nomad check
+          ./nomad status
+          bash -n nomad
+          python3 protocol/scripts/check_docs.py
+      - name: Run the local demonstrations without a package proxy
+        run: |
+          ./nomad demo
+          ./nomad reader-demo
+          ./nomad test
+      - name: Build every complete SDK snapshot
+        run: |
+          for module in sdk/*; do
+            (cd "$module" && go build ./... && go vet ./...)
+          done
+      - name: Confirm the source can be handed over from a clean commit
+        run: |
+          ./nomad package
+          test -n "$(find dist -name 'nomad-evaluation-*.zip' -print -quit)"

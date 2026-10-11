@@ -1,0 +1,26 @@
+=== repository: Nomad-browser
+=== commit:     41631ae8382e6b00061194a17adb8036408c04e5
+=== branch:     claude/nomad-production-ready-dxv4ql
+=== worktree:   0 modified files
+=== toolchain:  go version go1.25.13 linux/amd64
+=== date:       2026-08-25T06:22:22Z
+
+--- go build ./... ---
+exit=0
+--- go vet ./... ---
+exit=0
+--- gofmt -l ---
+exit=0
+--- go test -race -count=1 ./... ---
+ok  	github.com/Jtensetti/nomad-browser	1.352s
+ok  	github.com/Jtensetti/nomad-browser/adapter	1.088s
+?   	github.com/Jtensetti/nomad-browser/cmd/nomad-browser-verify	[no test files]
+ok  	github.com/Jtensetti/nomad-browser/egress	1.013s
+ok  	github.com/Jtensetti/nomad-browser/localcache	1.022s
+ok  	github.com/Jtensetti/nomad-browser/planner	1.013s
+ok  	github.com/Jtensetti/nomad-browser/selector	1.057s
+ok  	github.com/Jtensetti/nomad-browser/update	1.052s
+exit=0
+--- govulncheck ./... ---
+No vulnerabilities found.
+exit=0

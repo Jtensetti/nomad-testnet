@@ -1,0 +1,192 @@
+name: timing campaign
+
+# The wall-clock timing campaigns: the two-world wire campaign, the
+# hostile-peer flood, and the airlock's sealing-duration measurements.
+#
+# They are not part of the per-push job. They take minutes under -race, and
+# more importantly they are statistical comparisons whose control spread is a
+# property of the host, so a busy shared runner makes them noisy in a way that
+# says nothing about the code. Running them on their own gives them a machine
+# to themselves and keeps the per-push job to checks that are deterministic.
+
+on:
+  # `schedule` and `workflow_dispatch` both fire only from the repository's
+  # default branch, so on a feature branch neither runs. `push` is the trigger
+  # that works from the branch the code is on, filtered to the packages these
+  # measurements are about: the job takes the better part of an hour and queues
+  # rather than cancelling, so running it on every push would cost more than it
+  # tells anyone.
+  push:
+    paths:
+      # The cadence these measurements are about is produced by the vendored
+      # fabric scheduler and queue, so a change there is exactly a change this
+      # campaign should re-measure. Leaving components out meant the queue fix
+      # this campaign exists to evaluate would not have fired it.
+      - "components/**"
+      - "live/node/**"
+      - "live/airlock/**"
+      - "live/capacity/**"
+      - "live/deposit/**"
+      - "live/entry/**"
+      - "cmd/nomad-entry/**"
+      - "scripts/two-world-analysis.py"
+      - ".github/workflows/timing-campaign.yml"
+  workflow_dispatch:
+  schedule:
+    # Once a day once this is on the default branch, so a regression surfaces
+    # without waiting for someone to ask.
+    - cron: '17 4 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  # Not cancelled, queued. These are wall-clock measurements whose control
+  # spread is a property of the host, so two overlapping runs contaminate each
+  # other -- and cancelling would let a manual dispatch destroy the day's only
+  # scheduled data point.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  campaign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NOMAD_TIMING_CAMPAIGN: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: {go-version: '1.25.x'}
+
+      # Without -race: these tests measure wall-clock timing, and the race
+      # detector's own overhead is exactly the kind of ambient cost that
+      # widens the control spread until nothing is decidable. Race coverage
+      # for these packages comes from the per-push job.
+      - name: Wire two-world campaign and hostile-peer flood
+        run: go test -count=1 -v -run 'TestWire|TestFlood|TestHostile' ./live/node/
+
+      # tcpdump is needed for the publication-path capture and is not in the
+      # runner image's default PATH-visible set on every generation.
+      # The publication-path capture needs tcpdump on the loopback interface.
+      # The capability goes on the binary rather than running the test as root:
+      # a root `go test` writes its build cache as root and the next step
+      # cannot read it.
+      - name: Install tcpdump and grant it capture capability
+        run: |
+          sudo apt-get update && sudo apt-get install -y tcpdump libcap2-bin
+          sudo setcap cap_net_raw,cap_net_admin=eip "$(command -v tcpdump)"
+
+      - name: Capacity measurement
+        run: go test -count=1 -v -run 'TestCapacityReport|TestTheRelayPathFits' ./live/capacity/
+
+      # The publication path as separate processes with a real capture. It runs
+      # here rather than in the per-push job because it holds two processes and
+      # a packet capture open for a quarter of a minute, and that load is
+      # enough to push the flood and cadence tests past their thresholds if it
+      # runs alongside them.
+      - name: Publication path across real processes
+        run: go test -count=1 -v -timeout 10m -run TestThePublicationPathAcrossRealProcesses ./cmd/nomad-entry/
+
+      - name: Airlock timing and permutation-uniformity measurements
+        run: |
+          go test -count=1 -v -timeout 30m \
+            -run 'TestSealDuration|TestConcurrentDeposit|TestPermutationIsUniform' \
+            ./live/airlock/
+
+      - name: Apply the preregistered rule to the campaign captures
+        if: always()
+        run: |
+          directory=runtime/evidence/wire-campaign
+          # A campaign that produced nothing is a broken run, not a clean one.
+          # Passing the gate because no capture exists is how an empty result
+          # becomes evidence of indistinguishability.
+          test -d "$directory" || { echo "no captures were produced"; exit 1; }
+          # The cell interval the rule judges against is read from the campaign
+          # itself rather than repeated here, so it cannot go stale and leave
+          # the rule measuring windows against an interval nothing emitted at.
+          interval=$(sed -n 's/^\tcampaignIntervalMillis = \([0-9]*\)$/\1/p' \
+            live/node/campaign_test.go)
+          if [ -z "$interval" ]; then
+            echo "could not read campaignIntervalMillis from the campaign;" \
+                 "the rule would judge against a guess" >&2
+            exit 1
+          fi
+          echo "judging against the campaign's own cell interval: ${interval}ms"
+          compared=0
+          findings=0
+          inconclusive=0
+          # Per round: a series file spanning several rounds carries the pauses
+          # during which the other worlds ran, so it is not the continuous
+          # stream the rule compares windows of.
+          for stressor in baseline cpu-starvation disk-pressure; do
+            for control in "$directory/$stressor-control-a"*-r*.txt; do
+              test -f "$control" || continue
+              # The campaign may retry, naming the second attempt's series
+              # "<stressor>-<world>-attempt2-r<N>". Take whatever follows
+              # "control-a" so a retry's rounds are compared against that
+              # retry's own controls rather than skipped.
+              name=$(basename "$control" .txt)
+              tail="${name#$stressor-control-a}"
+            for pair in "control-b:idle vs idle (control)" "active:idle vs active"; do
+              world="${pair%%:*}"
+              treatment="$directory/$stressor-$world$tail.txt"
+              test -f "$treatment" || continue
+              echo "== $stressor$tail: ${pair#*:} =="
+              # The default shell is bash -e, so the non-zero exit has to be
+              # caught here or the step aborts before the status is read and
+              # the remaining comparisons never run.
+              status=0
+              python3 scripts/two-world-analysis.py "$control" \
+                "$treatment" 1200 "$interval" || status=$?
+              compared=$((compared + 1))
+              # Exit 2 means the rule could not run -- unreadable captures, or
+              # a round too short to evaluate. That is a broken run rather than
+              # a verdict, and must not be reported as either a pass or a
+              # finding.
+              if [ "$status" -eq 2 ]; then
+                # Exiting here aborted before the remaining arms were compared,
+                # so one unmeasurable stressor hid every verdict after it. The
+                # first run of this workflow did exactly that: cpu-starvation
+                # produced too few cells to evaluate and the disk-pressure
+                # comparisons never ran. Counted and carried on instead; the
+                # run still fails, and now it fails saying everything it found.
+                echo "the rule could not run on $stressor$tail ($world)"
+                inconclusive=$((inconclusive + 1))
+                continue
+              fi
+              # 1 is a finding on emitted traffic, 3 on received traffic. Both
+              # are findings. Accumulating them without failing the step, which
+              # is what this did until 2026-08-21, makes the gate report green
+              # on a rejected run.
+              if [ "$status" -ne 0 ]; then
+                findings=$((findings + 1))
+              fi
+            done
+            done
+          done
+          if [ "$compared" -eq 0 ]; then
+            echo "no capture pairs were compared; the gate checked nothing"
+            exit 1
+          fi
+          echo "compared $compared pair(s)"
+          status=0
+          if [ "$inconclusive" -gt 0 ]; then
+            echo "$inconclusive comparison(s) could not be evaluated: a stressor" \
+                 "that stops the node produces too few cells to compare, which is" \
+                 "neither a pass nor a finding"
+            status=1
+          fi
+          if [ "$findings" -gt 0 ]; then
+            echo "$findings preregistered comparison(s) were rejected"
+            status=1
+          fi
+          exit "$status"
+
+      - name: Upload campaign captures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: timing-campaign-captures
+          path: runtime/evidence/wire-campaign/
+          if-no-files-found: warn
